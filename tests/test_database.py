@@ -1,12 +1,19 @@
 import tempfile
 import unittest
 from pathlib import Path
+import sqlite3
 
 from database import (
     CharacterAlreadyExistsError,
     CharacterNotFoundError,
     Database,
     InvalidHitPointsError,
+)
+from dice_visuals import (
+    DEFAULT_DICE_COLOR,
+    DEFAULT_DICE_EDGE_COLOR,
+    DEFAULT_DICE_NUMBER_COLOR,
+    InvalidDiceColorError,
 )
 from models import Stance
 
@@ -52,6 +59,78 @@ class DatabaseTests(unittest.TestCase):
             self.database.set_hp(123, 23)
         with self.assertRaises(CharacterNotFoundError):
             self.database.damage(999, 1)
+
+    def test_dice_color_is_a_user_preference_and_persists(self) -> None:
+        self.assertEqual(self.database.get_dice_color(999), DEFAULT_DICE_COLOR)
+
+        self.assertEqual(self.database.set_dice_color(999, "7a2eff"), "#7A2EFF")
+        reopened = Database(self.database_path)
+
+        self.assertEqual(reopened.get_dice_color(999), "#7A2EFF")
+        self.assertIsNone(reopened.get_character(999))
+
+    def test_invalid_dice_colors_are_rejected_without_changing_preference(self) -> None:
+        for color in ("purple", "#12345", "#GG00FF", "#1234567"):
+            with self.subTest(color=color):
+                with self.assertRaises(InvalidDiceColorError):
+                    self.database.set_dice_color(123, color)
+        self.assertEqual(self.database.get_dice_color(123), DEFAULT_DICE_COLOR)
+
+    def test_dice_edge_color_is_a_separate_user_preference(self) -> None:
+        self.assertEqual(
+            self.database.get_dice_edge_color(999), DEFAULT_DICE_EDGE_COLOR
+        )
+
+        self.database.set_dice_color(999, "7a2eff")
+        self.assertEqual(self.database.set_dice_edge_color(999, "ffd700"), "#FFD700")
+        reopened = Database(self.database_path)
+
+        self.assertEqual(reopened.get_dice_color(999), "#7A2EFF")
+        self.assertEqual(reopened.get_dice_edge_color(999), "#FFD700")
+        self.assertIsNone(reopened.get_character(999))
+
+    def test_dice_number_color_is_a_separate_user_preference(self) -> None:
+        self.assertEqual(
+            self.database.get_dice_number_color(999), DEFAULT_DICE_NUMBER_COLOR
+        )
+
+        self.database.set_dice_color(999, "7a2eff")
+        self.assertEqual(
+            self.database.set_dice_number_color(999, "f5f5f5"), "#F5F5F5"
+        )
+        reopened = Database(self.database_path)
+
+        self.assertEqual(reopened.get_dice_color(999), "#7A2EFF")
+        self.assertEqual(reopened.get_dice_number_color(999), "#F5F5F5")
+        self.assertIsNone(reopened.get_character(999))
+
+    def test_existing_preferences_table_gains_default_edge_color(self) -> None:
+        old_path = Path(self.temp_directory.name) / "old.db"
+        connection = sqlite3.connect(old_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE user_preferences (
+                    discord_user_id INTEGER PRIMARY KEY,
+                    dice_color TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO user_preferences VALUES (?, ?)", (42, "#7A2EFF")
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = Database(old_path)
+        migrated.initialize()
+
+        self.assertEqual(migrated.get_dice_color(42), "#7A2EFF")
+        self.assertEqual(migrated.get_dice_edge_color(42), DEFAULT_DICE_EDGE_COLOR)
+        self.assertEqual(
+            migrated.get_dice_number_color(42), DEFAULT_DICE_NUMBER_COLOR
+        )
 
 
 if __name__ == "__main__":

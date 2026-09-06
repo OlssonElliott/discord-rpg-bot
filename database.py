@@ -1,8 +1,16 @@
 """SQLite persistence for RPG characters."""
 
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 import sqlite3
 
+from dice_visuals import (
+    DEFAULT_DICE_COLOR,
+    DEFAULT_DICE_EDGE_COLOR,
+    DEFAULT_DICE_NUMBER_COLOR,
+    normalize_dice_color,
+)
 from models import Character, Stance
 
 
@@ -39,6 +47,34 @@ class Database:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    discord_user_id INTEGER PRIMARY KEY,
+                    dice_color TEXT NOT NULL,
+                    dice_edge_color TEXT NOT NULL DEFAULT '#303030',
+                    dice_number_color TEXT NOT NULL DEFAULT '#101010'
+                )
+                """
+            )
+            preference_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(user_preferences)")
+            }
+            if "dice_edge_color" not in preference_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE user_preferences
+                    ADD COLUMN dice_edge_color TEXT NOT NULL DEFAULT '#303030'
+                    """
+                )
+            if "dice_number_color" not in preference_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE user_preferences
+                    ADD COLUMN dice_number_color TEXT NOT NULL DEFAULT '#101010'
+                    """
+                )
 
     def create_character(self, discord_user_id: int, name: str, max_hp: int) -> Character:
         clean_name = name.strip()
@@ -76,6 +112,84 @@ class Database:
                 (discord_user_id,),
             ).fetchone()
         return self._to_character(row) if row else None
+
+    def get_dice_color(self, discord_user_id: int) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT dice_color
+                FROM user_preferences
+                WHERE discord_user_id = ?
+                """,
+                (discord_user_id,),
+            ).fetchone()
+        return row["dice_color"] if row else DEFAULT_DICE_COLOR
+
+    def set_dice_color(self, discord_user_id: int, color: str) -> str:
+        normalized_color = normalize_dice_color(color)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO user_preferences (discord_user_id, dice_color)
+                VALUES (?, ?)
+                ON CONFLICT(discord_user_id) DO UPDATE
+                SET dice_color = excluded.dice_color
+                """,
+                (discord_user_id, normalized_color),
+            )
+        return normalized_color
+
+    def get_dice_edge_color(self, discord_user_id: int) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT dice_edge_color
+                FROM user_preferences
+                WHERE discord_user_id = ?
+                """,
+                (discord_user_id,),
+            ).fetchone()
+        return row["dice_edge_color"] if row else DEFAULT_DICE_EDGE_COLOR
+
+    def set_dice_edge_color(self, discord_user_id: int, color: str) -> str:
+        normalized_color = normalize_dice_color(color)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO user_preferences (discord_user_id, dice_color, dice_edge_color)
+                VALUES (?, ?, ?)
+                ON CONFLICT(discord_user_id) DO UPDATE
+                SET dice_edge_color = excluded.dice_edge_color
+                """,
+                (discord_user_id, DEFAULT_DICE_COLOR, normalized_color),
+            )
+        return normalized_color
+
+    def get_dice_number_color(self, discord_user_id: int) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT dice_number_color
+                FROM user_preferences
+                WHERE discord_user_id = ?
+                """,
+                (discord_user_id,),
+            ).fetchone()
+        return row["dice_number_color"] if row else DEFAULT_DICE_NUMBER_COLOR
+
+    def set_dice_number_color(self, discord_user_id: int, color: str) -> str:
+        normalized_color = normalize_dice_color(color)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO user_preferences (discord_user_id, dice_color, dice_number_color)
+                VALUES (?, ?, ?)
+                ON CONFLICT(discord_user_id) DO UPDATE
+                SET dice_number_color = excluded.dice_number_color
+                """,
+                (discord_user_id, DEFAULT_DICE_COLOR, normalized_color),
+            )
+        return normalized_color
 
     def damage(self, discord_user_id: int, amount: int) -> Character:
         if amount <= 0:
@@ -125,10 +239,18 @@ class Database:
             raise CharacterNotFoundError("That Discord user does not have a character.")
         return character
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=5)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @staticmethod
     def _to_character(row: sqlite3.Row) -> Character:
