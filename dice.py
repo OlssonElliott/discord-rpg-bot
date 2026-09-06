@@ -13,6 +13,7 @@ _DICE_EXPRESSION = re.compile(
 MAX_DICE = 100
 MAX_SIDES = 10_000
 MAX_MODIFIER = 1_000_000
+ROLL_MODES = frozenset(("normal", "advantage", "disadvantage"))
 
 
 class DiceExpressionError(ValueError):
@@ -26,10 +27,16 @@ class DiceRoll:
     sides: int
     modifier: int
     results: tuple[int, ...]
+    kept_result: int | None = None
 
     @property
     def total(self) -> int:
-        return sum(self.results) + self.modifier
+        rolled_total = (
+            self.kept_result
+            if self.kept_result is not None
+            else sum(self.results)
+        )
+        return rolled_total + self.modifier
 
 
 def parse(expression: str) -> tuple[int, int, int, str]:
@@ -69,7 +76,24 @@ def parse(expression: str) -> tuple[int, int, int, str]:
     return count, sides, modifier, canonical
 
 
-def roll(expression: str) -> DiceRoll:
+def roll(expression: str, mode: str = "normal") -> DiceRoll:
     count, sides, modifier, canonical = parse(expression)
-    results = tuple(secrets.randbelow(sides) + 1 for _ in range(count))
-    return DiceRoll(canonical, count, sides, modifier, results)
+    normalized_mode = mode.strip().lower()
+    if normalized_mode not in ROLL_MODES:
+        raise DiceExpressionError(
+            "Roll mode must be normal, advantage, or disadvantage."
+        )
+    if normalized_mode != "normal" and (count != 1 or sides != 20):
+        raise DiceExpressionError(
+            "Advantage and disadvantage currently require a single d20 expression, "
+            "such as `1d20+4`."
+        )
+
+    actual_count = 2 if normalized_mode != "normal" else count
+    results = tuple(secrets.randbelow(sides) + 1 for _ in range(actual_count))
+    kept_result = None
+    if normalized_mode == "advantage":
+        kept_result = max(results)
+    elif normalized_mode == "disadvantage":
+        kept_result = min(results)
+    return DiceRoll(canonical, actual_count, sides, modifier, results, kept_result)

@@ -48,6 +48,7 @@ Your `.env` should resemble:
 DISCORD_TOKEN=your_real_token_here
 DM_ROLE_NAME=DM
 DATABASE_PATH=rpg_bot.db
+DICE_THEME=classic
 DISCORD_GUILD_ID=your_numeric_server_id
 ```
 
@@ -75,7 +76,11 @@ and survives restarts. The database and `.env` are ignored by Git.
 
 Player commands:
 
-- `/roll expression` — accepts forms such as `d20`, `1d20+4`, and `2d6-3`.
+- `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
+  `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
+- `/dicecolor [color]` — view or set a personal six-digit hex dice color.
+- `/diceedgecolor [color]` — view or set a personal dice edge color.
+- `/dicenumbercolor [color]` — view or set a personal dice number color.
 - `/status` — shows the calling user's character, HP, and stance.
 
 DM-role commands:
@@ -89,6 +94,145 @@ DM-role commands:
 Each Discord user ID can have one character. Damage stops at 0 HP, healing stops
 at maximum HP, and manual HP must be between those bounds. The allowed stances are
 `steady`, `bad_stance`, and `prone`.
+
+Dice body, edge, and number colors are stored separately from characters, so a DM
+without a character can use all three color commands. Discord suggests a small
+palette while typing, but any valid six-digit RGB hex color is accepted. Values
+such as `7a2eff` are normalized to `#7A2EFF`; the defaults are `#C89B3C` for the
+body, `#303030` for the edges, and `#101010` for the numbers.
+
+## Optional visual dice animations
+
+Single d4, d6, d8, d10, d12, and d20 rolls can use themed master animations.
+Each die type follows the same layout; for example:
+
+```text
+assets/dice/
+    d4/themes/cartoon/d4_1.gif ... d4_4.gif
+    d6/themes/cartoon/d6_1.gif ... d6_6.gif
+    d8/themes/cartoon/d8_1.gif ... d8_8.gif
+    d10/themes/cartoon/d10_1.gif ... d10_10.gif
+    d12/themes/cartoon/d12_1.gif ... d12_12.gif
+    d20/themes/cartoon/d20_1.gif ... d20_20.gif
+```
+
+Every master also has matching `_edges.gif` and `_numbers.gif` masks. Each
+animation finishes on the natural result in its filename and has a transparent
+background. The Python roller chooses the result first; the matching GIF is only
+a visual presentation of that result. `DICE_THEME` selects one global theme. If
+that theme or result is missing, Rollkeeper tries `classic`, then sends the normal
+instant result if no animation is available. Restart the bot after changing
+`DICE_THEME`.
+
+For supported dice, the bot tints neutral pixels while preserving shadows,
+restrained highlights, markings, transparency, and chromatic background elements.
+Bright neutral faces retain the selected body color instead of fading to white. The matching
+`_edges.gif` and `_numbers.gif` are synchronized masks that allow each player to
+tint the beveled divisions and face numbers independently. Older themes without
+these masks still work and retain their baked appearance. Generated GIFs are
+separated by theme, body, edge, and number color, for example
+`assets/dice/d20/cache/v2/cartoon/7A2EFF/FFD700/F5F5F5/d20_17.gif`. A newer master or
+mask automatically invalidates its generated cache. The settled frame is also
+cached as a transparent 160x160 PNG and displayed as the result embed's thumbnail.
+Rolls containing two to ten matching dice, such as `3d6`, reuse those tinted GIFs
+in one synchronized side-by-side animation. The final embed displays every result
+at the same size in one horizontal row and preserves the original roll order.
+These group animations and result images are cached as well. Larger pools continue
+to use the normal instant result so the Discord upload stays compact and the dice
+remain readable.
+
+For advantage or disadvantage, select the corresponding `mode` option on a single
+d20 expression such as `/roll expression:1d20+4 mode:Advantage`. Rollkeeper rolls
+two d20s, applies the modifier once, and keeps the higher or lower natural result.
+Both dice animate together with a green advantage glow or red disadvantage glow.
+The kept result is marked in the embed, while both result dice remain equally sized
+in the final row. Other expressions use Normal mode.
+
+### Generate all master animations
+
+The offline generator creates complete neutral master sets; Blender is only an
+asset-development dependency and is never imported or launched by the Discord bot.
+The default output is 384x384, 20 FPS, 29 rendered frames, and 2.3 seconds per GIF.
+The complete die rotates horizontally from left to right around a stable axis,
+without travelling, vertical bobbing, or bouncing. A continuous ease-out curve
+keeps faces, edges, and numbers moving as one object. The rotation settles into
+the exact result and the GIF holds it completely still for 0.9 seconds. GIFs are
+saved for a single playback so Discord cannot begin a second roll cycle after the
+readable result. The shared procedural models use broad bevels, matte grayscale faces, crisp
+high-contrast numbers, subtle per-face luminance variation, and directional
+grayscale lighting for a chunky illustrated look that remains suitable for
+tinting. The face tones rotate with the geometry so the body and numbers read as
+one moving object.
+
+Requirements:
+
+- The project's Python 3.12 environment with `requirements.txt` installed (Pillow
+  performs GIF encoding).
+- Blender 4.2 or newer. On Windows, download the current LTS installer from the
+  [official Blender download page](https://www.blender.org/download/), install it,
+  and either add Blender to `PATH` or pass the full path to `blender.exe`.
+
+From PowerShell at the repository root, generate every supported die for the
+cartoon theme with:
+
+```powershell
+python scripts\generate_d20_assets.py --theme cartoon --sides 4 6 8 10 12 20
+```
+
+Generate only a preview selection for one die type with:
+
+```powershell
+python scripts\generate_d20_assets.py --theme cartoon --sides 10 --results 1 5 10
+```
+
+Omitting `--sides` preserves the historical d20-only default. Omitting `--results`
+renders every face for each selected die. Existing theme GIFs cause the command to
+stop before Blender starts. Replace all supported cartoon files intentionally with:
+
+```powershell
+python scripts\generate_d20_assets.py --theme cartoon --sides 4 6 8 10 12 20 --overwrite
+```
+
+The generator searches `PATH` and normal `C:\Program Files\Blender Foundation\`
+install locations. If automatic discovery does not find Blender, run:
+
+```powershell
+python scripts\generate_d20_assets.py --theme cartoon `
+  --blender "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
+```
+
+To retain intermediate PNGs while checking the scene, add `--keep-frames
+build\d20-frames`. Otherwise they use a temporary folder and are removed
+automatically. New GIFs are encoded atomically.
+
+The old `assets/dice/d20/master/` directory remains supported for compatibility.
+Whenever the generator runs, legacy `d20_*.gif` files are copied into missing
+slots under `themes/classic/`; legacy files and existing classic files are never
+deleted or overwritten by this migration.
+
+Activate a generated theme in `.env`, then restart Rollkeeper:
+
+```dotenv
+DICE_THEME=cartoon
+```
+
+Theme names may contain lowercase letters, numbers, and single hyphens, such as
+`classic`, `chunky`, or `dark-fantasy`. Paths and malformed names are rejected.
+
+Each procedural solid has one modeled number per face, with opposing or most-opposed
+faces paired to sum to `sides + 1`. The d10 uses the conventional tall pentagonal
+trapezohedron shape. For result N, the generator maps that face's outward normal to
+the camera and its local display axis to screen-up. Blender then rotates the complete
+numbered geometry around the camera's vertical axis. Each run emits the neutral
+master plus synchronized edge and number masks.
+
+On a typical recent desktop, all 60 result animations should take roughly 8–25
+minutes to render; integrated or older hardware may take longer. At the defaults,
+expect approximately 0.2–1.2 MiB for each master-and-mask set depending on die type,
+Blender version, and image complexity. The generator prints measured time, duration,
+and file size when it finishes.
+Blender supports background command-line rendering as documented in the
+[official manual](https://docs.blender.org/manual/en/4.5/advanced/command_line/render.html).
 
 ## Verify locally
 
@@ -107,8 +251,12 @@ config.py             .env configuration
 database.py           SQLite character persistence
 models.py             character and stance domain types
 dice.py               bounded dice parser and roller
+dice_assets.py        safe themed asset and cache path resolution
+dice_visuals.py       dice color validation, GIF tinting, and generated cache
 checks.py             reusable DM-role permission check
 commands/player.py    /roll and /status
 commands/dm.py        DM character-management commands
+scripts/generate_d20_assets.py  offline multi-die Blender orchestration and GIF encoding
+scripts/render_d20_blender.py   procedural dice scenes and deterministic PNG rendering
 tests/                mechanics and persistence tests
 ```

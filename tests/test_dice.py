@@ -16,6 +16,29 @@ class DiceTests(unittest.TestCase):
         self.assertEqual(result.results, (16, 3))
         self.assertEqual(result.total, 23)
 
+    def test_advantage_and_disadvantage_keep_the_correct_d20(self) -> None:
+        with patch("dice.secrets.randbelow", side_effect=[5, 16]):
+            advantage = roll("1d20+4", mode="advantage")
+        self.assertEqual(advantage.results, (6, 17))
+        self.assertEqual(advantage.kept_result, 17)
+        self.assertEqual(advantage.total, 21)
+
+        with patch("dice.secrets.randbelow", side_effect=[5, 16]):
+            disadvantage = roll("1d20+4", mode="disadvantage")
+        self.assertEqual(disadvantage.results, (6, 17))
+        self.assertEqual(disadvantage.kept_result, 6)
+        self.assertEqual(disadvantage.total, 10)
+
+    def test_advantage_requires_one_d20(self) -> None:
+        for expression in ("2d20", "1d12", "3d6"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(DiceExpressionError):
+                    roll(expression, mode="advantage")
+
+    def test_unknown_roll_mode_is_rejected(self) -> None:
+        with self.assertRaises(DiceExpressionError):
+            roll("1d20", mode="lucky")
+
     def test_malformed_or_unsafe_expressions_are_rejected(self) -> None:
         for expression in (
             "20",
