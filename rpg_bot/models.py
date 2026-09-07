@@ -1,6 +1,6 @@
 """Small domain models shared by the database and Discord commands."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -21,3 +21,12 @@ class Character:
     hp: int
     max_hp: int
     stance: Stance
+    lineage: str | None = None
+    race: str | None = None
+    age: str | None = None
+    gender: str | None = None
+    attributes: dict[str, int] = field(default_factory=dict)
+    skills: dict[str, int] = field(default_factory=dict)
+    character_id: int | None = None
+    is_active: bool = True
+    is_archived: bool = False

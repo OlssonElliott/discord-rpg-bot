@@ -36,7 +36,7 @@ class DiceAssetLayout:
 
     def __init__(self, dice_directory: str | Path | None = None) -> None:
         if dice_directory is None:
-            dice_directory = Path(__file__).resolve().parent / "assets" / "dice"
+            dice_directory = Path(__file__).resolve().parent.parent / "assets" / "dice"
         self.dice_directory = Path(dice_directory)
 
     def die_directory(self, sides: int) -> Path:

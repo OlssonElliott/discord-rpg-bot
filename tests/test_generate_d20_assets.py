@@ -9,7 +9,7 @@ from scripts.generate_d20_assets import (
     parse_results,
     prepare_tintable_frames,
 )
-from dice_assets import DiceAssetLayout
+from rpg_bot.dice_assets import DiceAssetLayout
 from scripts.generate_d20_assets import (
     build_parser,
     ensure_outputs_available,

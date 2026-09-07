@@ -7,16 +7,17 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from checks import is_dm
-from database import Database
-from dice import DiceExpressionError, roll
-from dice_visuals import (
+from ..checks import is_dm
+from ..database import Database
+from ..dice import DiceExpressionError, roll
+from ..dice_audio import DiceSoundManager
+from ..dice_visuals import (
     D20AnimationRenderer,
     InvalidDiceColorError,
     MAX_VISUAL_DICE_COUNT,
     SUPPORTED_VISUAL_DICE,
 )
-from models import Character
+from ..models import Character
 
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +40,23 @@ COLOR_SUGGESTIONS = (
     ("Charcoal", "#303030"),
     ("Near Black", "#101010"),
 )
+
+
+def dice_glow_colors(
+    sides: int, results: tuple[int, ...], mode: str
+) -> tuple[str | None, ...]:
+    mode_glow = {
+        "advantage": ADVANTAGE_GLOW_COLOR,
+        "disadvantage": DISADVANTAGE_GLOW_COLOR,
+    }.get(mode)
+    return tuple(
+        ADVANTAGE_GLOW_COLOR
+        if sides == 20 and result == 20
+        else DISADVANTAGE_GLOW_COLOR
+        if sides == 20 and result == 1
+        else mode_glow
+        for result in results
+    )
 
 
 async def dice_color_autocomplete(
@@ -65,9 +83,11 @@ class PlayerCommands(commands.Cog):
         self,
         database: Database,
         animation_renderer: D20AnimationRenderer | None = None,
+        dice_sound_manager: DiceSoundManager | None = None,
     ) -> None:
         self.database = database
         self.animation_renderer = animation_renderer or D20AnimationRenderer()
+        self.dice_sound_manager = dice_sound_manager or DiceSoundManager()
 
     @app_commands.command(name="roll", description="Roll dice for your character.")
     @app_commands.describe(
@@ -90,7 +110,7 @@ class PlayerCommands(commands.Cog):
         character = self.database.get_character(interaction.user.id)
         if character is None and not is_dm(interaction):
             await interaction.response.send_message(
-                "You do not have a character yet. Ask your DM to use `/createcharacter`.",
+                "You do not have a character yet. Use `/character create`.",
                 ephemeral=True,
             )
             return
@@ -163,10 +183,10 @@ class PlayerCommands(commands.Cog):
         color = self.database.get_dice_color(interaction.user.id)
         edge_color = self.database.get_dice_edge_color(interaction.user.id)
         number_color = self.database.get_dice_number_color(interaction.user.id)
+        glow_colors = dice_glow_colors(result.sides, result.results, mode)
         try:
             if result.count == 1:
-                animation = await asyncio.to_thread(
-                    self.animation_renderer.render,
+                render_arguments = (
                     result.results[0],
                     color,
                     master_assets[0],
@@ -174,11 +194,17 @@ class PlayerCommands(commands.Cog):
                     number_color,
                     result.sides,
                 )
+                if glow_colors[0] is None:
+                    animation = await asyncio.to_thread(
+                        self.animation_renderer.render, *render_arguments
+                    )
+                else:
+                    animation = await asyncio.to_thread(
+                        self.animation_renderer.render,
+                        *render_arguments,
+                        glow_color=glow_colors[0],
+                    )
             else:
-                glow_color = {
-                    "advantage": ADVANTAGE_GLOW_COLOR,
-                    "disadvantage": DISADVANTAGE_GLOW_COLOR,
-                }.get(mode)
                 animation = await asyncio.to_thread(
                     self.animation_renderer.render_many,
                     result.results,
@@ -188,7 +214,7 @@ class PlayerCommands(commands.Cog):
                     number_color,
                     result.sides,
                     kept_index,
-                    glow_color,
+                    glow_colors=glow_colors,
                 )
         except Exception:
             LOGGER.warning("Could not process dice animation", exc_info=True)
@@ -197,6 +223,7 @@ class PlayerCommands(commands.Cog):
             await interaction.edit_original_response(embed=embed)
             return
 
+        voice_client = await self.dice_sound_manager.prepare(interaction)
         animation_file: discord.File | None = None
         result_slug = "-".join(str(value) for value in result.results)
         try:
@@ -212,6 +239,10 @@ class PlayerCommands(commands.Cog):
                 ),
                 embed=None,
                 attachments=[animation_file],
+            )
+            self.dice_sound_manager.play_spin(
+                voice_client,
+                animation.duration_seconds,
             )
         except (discord.HTTPException, OSError):
             LOGGER.warning("Could not send generated dice animation", exc_info=True)
@@ -237,6 +268,15 @@ class PlayerCommands(commands.Cog):
             result_image_file = discord.File(
                 animation.result_image_path,
                 filename=result_filename,
+            )
+            # Queue the finish sound before the HTTP edit so Discord's voice
+            # buffer and message update happen in parallel. Starting it after
+            # the edit makes settle audibly trail the visual transition.
+            self.dice_sound_manager.play_result(
+                voice_client,
+                result.sides,
+                result.results,
+                result.kept_result,
             )
             await interaction.edit_original_response(
                 content=None,
@@ -341,7 +381,7 @@ class PlayerCommands(commands.Cog):
         character = self.database.get_character(interaction.user.id)
         if character is None:
             await interaction.response.send_message(
-                "You do not have a character yet. Ask your DM to use `/createcharacter`.",
+                "You do not have a character yet. Use `/character create`.",
                 ephemeral=True,
             )
             return
@@ -353,5 +393,6 @@ async def setup(bot: commands.Bot) -> None:
         PlayerCommands(
             bot.database,
             D20AnimationRenderer(theme=bot.config.dice_theme),
+            DiceSoundManager(),
         )
     )

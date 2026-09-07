@@ -3,19 +3,19 @@ import unittest
 from pathlib import Path
 import sqlite3
 
-from database import (
+from rpg_bot.database import (
     CharacterAlreadyExistsError,
     CharacterNotFoundError,
     Database,
     InvalidHitPointsError,
 )
-from dice_visuals import (
+from rpg_bot.dice_visuals import (
     DEFAULT_DICE_COLOR,
     DEFAULT_DICE_EDGE_COLOR,
     DEFAULT_DICE_NUMBER_COLOR,
     InvalidDiceColorError,
 )
-from models import Stance
+from rpg_bot.models import Stance
 
 
 class DatabaseTests(unittest.TestCase):
@@ -52,13 +52,51 @@ class DatabaseTests(unittest.TestCase):
     def test_invalid_operations_are_rejected(self) -> None:
         self.database.create_character(123, "Olof", 22)
         with self.assertRaises(CharacterAlreadyExistsError):
-            self.database.create_character(123, "Other", 10)
+            self.database.create_character(123, "olof", 10)
         with self.assertRaises(ValueError):
             self.database.create_character(456, "x" * 101, 10)
         with self.assertRaises(InvalidHitPointsError):
             self.database.set_hp(123, 23)
         with self.assertRaises(CharacterNotFoundError):
             self.database.damage(999, 1)
+
+    def test_user_can_select_between_multiple_characters(self) -> None:
+        first = self.database.create_character(123, "Olof", 22)
+        second = self.database.create_character(123, "Aria", 12)
+
+        self.assertFalse(self.database.get_character_by_id(123, first.character_id).is_active)
+        self.assertTrue(second.is_active)
+        self.assertEqual(
+            [character.name for character in self.database.list_characters(123)],
+            ["Aria", "Olof"],
+        )
+
+        selected = self.database.select_character(123, first.character_id)
+
+        self.assertEqual(selected.name, "Olof")
+        self.assertEqual(self.database.get_character(123).character_id, first.character_id)
+
+    def test_archiving_keeps_data_but_removes_character_from_selection(self) -> None:
+        first = self.database.create_character(123, "Olof", 22)
+        second = self.database.create_character(123, "Aria", 12)
+
+        archived = self.database.archive_character(123, second.character_id)
+
+        self.assertTrue(archived.is_archived)
+        self.assertFalse(archived.is_active)
+        self.assertEqual(
+            [character.name for character in self.database.list_characters(123)],
+            ["Olof"],
+        )
+        self.assertEqual(self.database.get_character(123).character_id, first.character_id)
+        self.assertIsNone(self.database.get_character_by_id(123, second.character_id))
+        self.assertIsNotNone(
+            self.database.get_character_by_id(
+                123, second.character_id, include_archived=True
+            )
+        )
+        with self.assertRaises(CharacterNotFoundError):
+            self.database.select_character(123, second.character_id)
 
     def test_dice_color_is_a_user_preference_and_persists(self) -> None:
         self.assertEqual(self.database.get_dice_color(999), DEFAULT_DICE_COLOR)
@@ -131,6 +169,56 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(
             migrated.get_dice_number_color(42), DEFAULT_DICE_NUMBER_COLOR
         )
+
+    def test_existing_character_table_gains_creation_columns(self) -> None:
+        old_path = Path(self.temp_directory.name) / "old-characters.db"
+        connection = sqlite3.connect(old_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE characters (
+                    discord_user_id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    hp INTEGER NOT NULL,
+                    max_hp INTEGER NOT NULL,
+                    stance TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO characters VALUES (?, ?, ?, ?, ?)",
+                (42, "Legacy", 8, 10, "steady"),
+            )
+            connection.execute(
+                """
+                CREATE TABLE character_skills (
+                    discord_user_id INTEGER NOT NULL,
+                    skill TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    PRIMARY KEY (discord_user_id, skill)
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO character_skills VALUES (?, ?, ?)",
+                (42, "Survival", 1),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = Database(old_path)
+        migrated.initialize()
+        character = migrated.get_character(42)
+
+        self.assertIsNotNone(character)
+        assert character is not None
+        self.assertEqual(character.name, "Legacy")
+        self.assertIsNone(character.lineage)
+        self.assertEqual(character.attributes, {})
+        self.assertEqual(character.skills, {"Survival": 1})
+        self.assertIsNotNone(character.character_id)
+        self.assertTrue(character.is_active)
 
 
 if __name__ == "__main__":
