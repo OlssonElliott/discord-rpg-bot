@@ -13,6 +13,7 @@ class Config:
     discord_token: str
     dm_role_name: str = "DM"
     database_path: str = "rpg_bot.db"
+    character_media_path: str = "data/characters"
     discord_guild_id: int | None = None
     dice_theme: str = DEFAULT_DICE_THEME
 
@@ -38,6 +39,10 @@ class Config:
             discord_token=token,
             dm_role_name=os.getenv("DM_ROLE_NAME", "DM").strip() or "DM",
             database_path=os.getenv("DATABASE_PATH", "rpg_bot.db").strip() or "rpg_bot.db",
+            character_media_path=(
+                os.getenv("CHARACTER_MEDIA_PATH", "data/characters").strip()
+                or "data/characters"
+            ),
             discord_guild_id=guild_id,
             dice_theme=os.getenv("DICE_THEME", DEFAULT_DICE_THEME),
         )

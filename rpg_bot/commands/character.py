@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 
 import discord
@@ -13,10 +14,17 @@ from ..character_creation import (
     CharacterCreationValidationError,
     CreationStep,
 )
-from ..character_creation.rules import ATTRIBUTES, STANDARD_ARRAY
+from ..character_creation.rules import ATTRIBUTES, STANDARD_ARRAY, apply_modifiers
 from ..character_creation.service import CharacterCreationService
 from ..database import CharacterAlreadyExistsError, CharacterNotFoundError, Database
 from ..models import Character
+from ..portraits import (
+    CharacterPortraitStore,
+    InvalidPortraitError,
+    MAX_PORTRAIT_BYTES,
+    default_portrait_key,
+    is_default_portrait_key,
+)
 
 
 def creation_prompt(flow: CharacterCreationFlow) -> str:
@@ -62,10 +70,24 @@ def attribute_prompt(assignments: Mapping[str, int]) -> str:
     )
 
 
-def bonus_prompt(points: Mapping[str, int]) -> str:
+def bonus_prompt(flow: CharacterCreationFlow, points: Mapping[str, int]) -> str:
     total = sum(points.values())
-    allocation = " · ".join(
-        f"{attribute} **+{points.get(attribute, 0)}**" for attribute in ATTRIBUTES
+    if flow.state.base_attributes and flow.state.race and flow.state.age:
+        current_scores = apply_modifiers(
+            flow.state.base_attributes,
+            points,
+            flow.state.race,
+            flow.state.age,
+        )
+    else:
+        current_scores = {
+            attribute: flow.state.base_attributes.get(attribute, 0)
+            for attribute in ATTRIBUTES
+        }
+    allocation = "\n".join(
+        f"• {attribute}: **{current_scores[attribute]}** "
+        f"(bonus +{points.get(attribute, 0)})"
+        for attribute in ATTRIBUTES
     )
     return (
         f"{creation_prompt_for_step(CreationStep.BONUS_POINTS)}\n"
@@ -87,6 +109,22 @@ class OwnedView(discord.ui.View):
             ephemeral=True,
         )
         return False
+
+
+class BackButton(discord.ui.Button):
+    def __init__(self, owner_view: OwnedView, *, row: int = 1) -> None:
+        self.owner_view = owner_view
+        super().__init__(
+            label="Back",
+            style=discord.ButtonStyle.secondary,
+            emoji="↩️",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.owner_view.cog.back_component(
+            interaction, self.owner_view.user_id
+        )
 
 
 class ChoiceSelect(discord.ui.Select):
@@ -118,6 +156,8 @@ class ChoiceView(OwnedView):
     ) -> None:
         super().__init__(cog, user_id)
         self.add_item(ChoiceSelect(cog, user_id, choices, placeholder))
+        if cog.sessions[user_id].current_step is not CreationStep.LINEAGE:
+            self.add_item(BackButton(self))
 
 
 class NameModal(discord.ui.Modal, title="Choose your character name"):
@@ -151,6 +191,7 @@ class NameView(OwnedView):
     def __init__(self, cog: CharacterCommands, user_id: int) -> None:
         super().__init__(cog, user_id)
         self.add_item(NameButton(cog, user_id))
+        self.add_item(BackButton(self))
 
 
 class AttributeNumberButton(discord.ui.Button):
@@ -303,6 +344,7 @@ class AttributeView(OwnedView):
         self.add_item(AttributeLinkSelect(self))
         self.add_item(ResetAttributesButton(self))
         self.add_item(ConfirmAttributesButton(self))
+        self.add_item(BackButton(self, row=3))
 
 
 class BonusButton(discord.ui.Button):
@@ -336,8 +378,15 @@ class BonusButton(discord.ui.Button):
             points[self.attribute] = updated
         else:
             points.pop(self.attribute, None)
-        view = BonusView(self.bonus_view.cog, self.bonus_view.user_id, points)
-        await interaction.response.edit_message(content=bonus_prompt(points), view=view)
+        view = BonusView(
+            self.bonus_view.cog,
+            self.bonus_view.user_id,
+            self.bonus_view.flow,
+            points,
+        )
+        await interaction.response.edit_message(
+            content=bonus_prompt(self.bonus_view.flow, points), view=view
+        )
 
 
 class ConfirmBonusButton(discord.ui.Button):
@@ -363,15 +412,18 @@ class BonusView(OwnedView):
         self,
         cog: CharacterCommands,
         user_id: int,
+        flow: CharacterCreationFlow,
         points: Mapping[str, int] | None = None,
     ) -> None:
         super().__init__(cog, user_id)
+        self.flow = flow
         self.points = dict(points or {})
         for index, attribute in enumerate(ATTRIBUTES):
             row = index // 2
             self.add_item(BonusButton(self, attribute, 1, row))
             self.add_item(BonusButton(self, attribute, -1, row))
         self.add_item(ConfirmBonusButton(self))
+        self.add_item(BackButton(self, row=3))
 
 
 class SkillSelect(discord.ui.Select):
@@ -397,6 +449,7 @@ class SkillView(OwnedView):
     ) -> None:
         super().__init__(cog, user_id)
         self.add_item(SkillSelect(cog, user_id, choices))
+        self.add_item(BackButton(self))
 
 
 def management_prompt(
@@ -410,8 +463,9 @@ def management_prompt(
         if character.character_id == selected_id:
             markers.append("selected")
         suffix = f" — {', '.join(markers)}" if markers else ""
-        lines.append(f"• {character.name}{suffix}")
-    lines.append("Choose a character, then activate or archive it.")
+        portrait = " 🖼️" if getattr(character, "portrait_key", None) else ""
+        lines.append(f"• {character.name}{portrait}{suffix}")
+    lines.append("Choose a character, then activate, unequip, or archive it.")
     return "\n".join(lines)
 
 
@@ -494,6 +548,40 @@ class ActivateCharacterButton(discord.ui.Button):
         )
 
 
+class UnequipCharacterButton(discord.ui.Button):
+    def __init__(self, manage_view: CharacterManageView) -> None:
+        self.manage_view = manage_view
+        super().__init__(
+            label="Unequip active",
+            style=discord.ButtonStyle.secondary,
+            disabled=not any(
+                character.is_active for character in manage_view.characters
+            ),
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manage_view.cog.database.deactivate_character(
+            self.manage_view.user_id
+        )
+        characters = self.manage_view.cog.database.list_characters(
+            self.manage_view.user_id
+        )
+        view = CharacterManageView(
+            self.manage_view.cog,
+            self.manage_view.user_id,
+            characters,
+            self.manage_view.selected_id,
+        )
+        await interaction.response.edit_message(
+            content=(
+                "No character is currently active.\n"
+                f"{management_prompt(characters, self.manage_view.selected_id)}"
+            ),
+            view=view,
+        )
+
+
 class ArchiveCharacterButton(discord.ui.Button):
     def __init__(self, manage_view: CharacterManageView) -> None:
         self.manage_view = manage_view
@@ -519,6 +607,107 @@ class ArchiveCharacterButton(discord.ui.Button):
                 "Its database record will be kept."
             ),
             view=ArchiveConfirmationView(self.manage_view, selected),
+        )
+
+
+class RemovePortraitButton(discord.ui.Button):
+    def __init__(self, manage_view: CharacterManageView) -> None:
+        self.manage_view = manage_view
+        selected = next(
+            (
+                character
+                for character in manage_view.characters
+                if character.character_id == manage_view.selected_id
+            ),
+            None,
+        )
+        super().__init__(
+            label="Remove portrait",
+            style=discord.ButtonStyle.secondary,
+            disabled=(
+                selected is None
+                or not getattr(selected, "portrait_key", None)
+                or is_default_portrait_key(getattr(selected, "portrait_key", None))
+            ),
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        selected = next(
+            (
+                character
+                for character in self.manage_view.characters
+                if character.character_id == self.manage_view.selected_id
+            ),
+            None,
+        )
+        if selected is None or not selected.portrait_key:
+            return
+        updated = self.manage_view.cog.restore_default_portrait(
+            self.manage_view.user_id, selected
+        )
+        characters = self.manage_view.cog.database.list_characters(
+            self.manage_view.user_id
+        )
+        view = CharacterManageView(
+            self.manage_view.cog,
+            self.manage_view.user_id,
+            characters,
+            updated.character_id,
+        )
+        await interaction.response.edit_message(
+            content=(
+                f"Restored **{updated.name}**'s default portrait.\n"
+                f"{management_prompt(characters, updated.character_id)}"
+            ),
+            view=view,
+        )
+
+
+class PortraitPreviewView(OwnedView):
+    def __init__(
+        self,
+        cog: CharacterCommands,
+        user_id: int,
+        character_id: int,
+        character_name: str,
+        portrait_key: str,
+    ) -> None:
+        super().__init__(cog, user_id)
+        self.character_id = character_id
+        self.character_name = character_name
+        self.portrait_key = portrait_key
+        if is_default_portrait_key(portrait_key):
+            self.remove.disabled = True
+            self.remove.label = "Using default portrait"
+
+    @discord.ui.button(
+        label="Remove portrait",
+        style=discord.ButtonStyle.danger,
+        emoji="🗑️",
+    )
+    async def remove(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        del button
+        try:
+            character = self.cog.database.get_character_by_id(
+                self.user_id, self.character_id
+            )
+            if character is None:
+                raise CharacterNotFoundError("That character is not selectable.")
+            self.cog.restore_default_portrait(self.user_id, character)
+        except CharacterNotFoundError as error:
+            await interaction.response.edit_message(
+                content=str(error), embed=None, attachments=[], view=None
+            )
+            return
+        self.cog.portrait_store.remove(self.portrait_key)
+        await interaction.response.edit_message(
+            content=f"Restored **{self.character_name}**'s default portrait.",
+            embed=None,
+            attachments=[],
+            view=None,
         )
 
 
@@ -604,7 +793,9 @@ class CharacterManageView(OwnedView):
         self.selected_id = selected_id
         self.add_item(CharacterSelect(self, characters))
         self.add_item(ActivateCharacterButton(self))
+        self.add_item(UnequipCharacterButton(self))
         self.add_item(ArchiveCharacterButton(self))
+        self.add_item(RemovePortraitButton(self))
 
 
 def creation_view(
@@ -623,7 +814,7 @@ def creation_view(
     if step is CreationStep.ATTRIBUTES:
         return AttributeView(cog, user_id)
     if step is CreationStep.BONUS_POINTS:
-        return BonusView(cog, user_id)
+        return BonusView(cog, user_id, flow)
     if step is CreationStep.SKILLS:
         return SkillView(cog, user_id, flow.valid_choices())
     raise ValueError(f"No component view for {step.value}.")
@@ -632,10 +823,26 @@ def creation_view(
 class CharacterCommands(commands.GroupCog, group_name="character"):
     """Tracks transient flows per Discord user; only results are persisted."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        portrait_store: CharacterPortraitStore | None = None,
+    ) -> None:
         self.database = database
+        self.portrait_store = portrait_store or CharacterPortraitStore()
         self.service = CharacterCreationService(database)
         self.sessions: dict[int, CharacterCreationFlow] = {}
+
+    def restore_default_portrait(
+        self, user_id: int, character: Character
+    ) -> Character:
+        key = default_portrait_key(character.race, character.gender)
+        updated = self.database.set_character_portrait(
+            user_id, character.character_id, key
+        )
+        if character.portrait_key != key:
+            self.portrait_store.remove(character.portrait_key)
+        return updated
 
     @app_commands.command(name="create", description="Start creating your character.")
     async def create(self, interaction: discord.Interaction) -> None:
@@ -665,6 +872,178 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             ephemeral=True,
         )
 
+    @app_commands.command(
+        name="portrait", description="View, upload, or remove your active portrait."
+    )
+    @app_commands.describe(
+        image="Optional PNG, JPEG, or WebP image (maximum 5 MB)",
+        remove="Remove the current portrait",
+    )
+    async def portrait(
+        self,
+        interaction: discord.Interaction,
+        image: discord.Attachment | None = None,
+        remove: bool = False,
+    ) -> None:
+        character = self.database.get_character(interaction.user.id)
+        if character is None or character.character_id is None:
+            await interaction.response.send_message(
+                "You do not have an active character. Use `/character manage` first.",
+                ephemeral=True,
+            )
+            return
+        if remove:
+            if image is not None:
+                await interaction.response.send_message(
+                    "Choose either an image to upload or `remove: True`, not both.",
+                    ephemeral=True,
+                )
+                return
+            if not character.portrait_key:
+                await interaction.response.send_message(
+                    f"**{character.name}** does not have a portrait.", ephemeral=True
+                )
+                return
+            if is_default_portrait_key(character.portrait_key):
+                await interaction.response.send_message(
+                    f"**{character.name}** is already using the default portrait.",
+                    ephemeral=True,
+                )
+                return
+            self.restore_default_portrait(interaction.user.id, character)
+            await interaction.response.send_message(
+                f"Restored **{character.name}**'s default portrait.", ephemeral=True
+            )
+            return
+        if image is None:
+            if not character.portrait_key:
+                await interaction.response.send_message(
+                    f"**{character.name}** does not have a portrait. "
+                    "Run `/character portrait` again and attach an image to add one.",
+                    ephemeral=True,
+                )
+                return
+            view = PortraitPreviewView(
+                self,
+                interaction.user.id,
+                character.character_id,
+                character.name,
+                character.portrait_key,
+            )
+            portrait_path = self.portrait_store.path_for(character.portrait_key)
+            if portrait_path is None:
+                await interaction.response.send_message(
+                    "The stored portrait file is unavailable. You can remove its record below.",
+                    view=view,
+                    ephemeral=True,
+                )
+                return
+            portrait_filename = f"portrait{portrait_path.suffix.lower()}"
+            portrait_file = discord.File(portrait_path, filename=portrait_filename)
+            embed = discord.Embed(
+                title=f"{character.name}'s portrait",
+                description="Attach a new image to `/character portrait` to replace it.",
+                colour=discord.Colour.blurple(),
+            )
+            embed.set_image(url=f"attachment://{portrait_filename}")
+            try:
+                await interaction.response.send_message(
+                    embed=embed,
+                    file=portrait_file,
+                    view=view,
+                    ephemeral=True,
+                )
+            finally:
+                portrait_file.close()
+            return
+        if image.size > MAX_PORTRAIT_BYTES:
+            await interaction.response.send_message(
+                "Portraits may be at most 5 MB.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            content = await image.read()
+            key = await asyncio.to_thread(
+                self.portrait_store.save, character.character_id, content
+            )
+            try:
+                updated = self.database.set_character_portrait(
+                    interaction.user.id, character.character_id, key
+                )
+            except Exception:
+                self.portrait_store.remove(key)
+                raise
+            if character.portrait_key and character.portrait_key != key:
+                self.portrait_store.remove(character.portrait_key)
+        except InvalidPortraitError as error:
+            await interaction.edit_original_response(content=str(error))
+            return
+        except (discord.HTTPException, OSError):
+            await interaction.edit_original_response(
+                content="The portrait could not be downloaded or saved. Please try again."
+            )
+            return
+
+        portrait_path = self.portrait_store.path_for(updated.portrait_key)
+        if portrait_path is None:
+            await interaction.edit_original_response(
+                content=f"Updated **{updated.name}**'s portrait."
+            )
+            return
+        portrait_filename = f"portrait{portrait_path.suffix.lower()}"
+        portrait_file = discord.File(portrait_path, filename=portrait_filename)
+        embed = discord.Embed(
+            title=f"{updated.name}'s portrait",
+            description="Portrait updated. It will now appear on rolls and `/status`.",
+            colour=discord.Colour.blurple(),
+        )
+        embed.set_image(url=f"attachment://{portrait_filename}")
+        view = PortraitPreviewView(
+            self,
+            interaction.user.id,
+            updated.character_id,
+            updated.name,
+            updated.portrait_key,
+        )
+        try:
+            await interaction.edit_original_response(
+                content=None,
+                embed=embed,
+                attachments=[portrait_file],
+                view=view,
+            )
+        finally:
+            portrait_file.close()
+
+    @app_commands.command(
+        name="removeportrait", description="Remove your active character's portrait."
+    )
+    async def remove_portrait(self, interaction: discord.Interaction) -> None:
+        character = self.database.get_character(interaction.user.id)
+        if character is None or character.character_id is None:
+            await interaction.response.send_message(
+                "You do not have an active character. Use `/character manage` first.",
+                ephemeral=True,
+            )
+            return
+        if not character.portrait_key:
+            await interaction.response.send_message(
+                f"**{character.name}** does not have a portrait.", ephemeral=True
+            )
+            return
+        if is_default_portrait_key(character.portrait_key):
+            await interaction.response.send_message(
+                f"**{character.name}** is already using the default portrait.",
+                ephemeral=True,
+            )
+            return
+        self.restore_default_portrait(interaction.user.id, character)
+        await interaction.response.send_message(
+            f"Restored **{character.name}**'s default portrait.", ephemeral=True
+        )
+
     async def submit_component(
         self, interaction: discord.Interaction, user_id: int, value: object
     ) -> None:
@@ -688,7 +1067,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             prompt = (
                 attribute_prompt({})
                 if next_step is CreationStep.ATTRIBUTES
-                else bonus_prompt({})
+                else bonus_prompt(flow, {})
                 if next_step is CreationStep.BONUS_POINTS
                 else creation_prompt(flow)
             )
@@ -716,6 +1095,29 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             view=None,
         )
 
+    async def back_component(
+        self, interaction: discord.Interaction, user_id: int
+    ) -> None:
+        flow = self.sessions.get(user_id)
+        if flow is None or interaction.user.id != user_id:
+            await interaction.response.edit_message(
+                content="This character creation session is no longer active.",
+                view=None,
+            )
+            return
+        step = flow.go_back()
+        prompt = (
+            attribute_prompt({})
+            if step is CreationStep.ATTRIBUTES
+            else bonus_prompt(flow, {})
+            if step is CreationStep.BONUS_POINTS
+            else creation_prompt(flow)
+        )
+        await interaction.response.edit_message(
+            content=prompt,
+            view=creation_view(self, user_id, flow),
+        )
+
     @app_commands.command(name="cancel", description="Cancel character creation.")
     async def cancel(self, interaction: discord.Interaction) -> None:
         removed = self.sessions.pop(interaction.user.id, None)
@@ -728,4 +1130,15 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(CharacterCommands(bot.database))
+    await bot.add_cog(
+        CharacterCommands(
+            bot.database,
+            CharacterPortraitStore(
+                getattr(
+                    getattr(bot, "config", None),
+                    "character_media_path",
+                    "data/characters",
+                )
+            ),
+        )
+    )

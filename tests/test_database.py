@@ -76,6 +76,11 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(selected.name, "Olof")
         self.assertEqual(self.database.get_character(123).character_id, first.character_id)
 
+        self.database.deactivate_character(123)
+
+        self.assertIsNone(self.database.get_character(123))
+        self.assertEqual(len(self.database.list_characters(123)), 2)
+
     def test_archiving_keeps_data_but_removes_character_from_selection(self) -> None:
         first = self.database.create_character(123, "Olof", 22)
         second = self.database.create_character(123, "Aria", 12)
@@ -97,6 +102,37 @@ class DatabaseTests(unittest.TestCase):
         )
         with self.assertRaises(CharacterNotFoundError):
             self.database.select_character(123, second.character_id)
+
+    def test_character_portrait_can_be_set_replaced_and_removed(self) -> None:
+        created = self.database.create_character(123, "Olof", 22)
+
+        updated = self.database.set_character_portrait(
+            123, created.character_id, f"{created.character_id}/portrait.webp"
+        )
+        self.assertEqual(
+            updated.portrait_key, f"{created.character_id}/portrait.webp"
+        )
+        self.assertEqual(
+            self.database.get_character(123).portrait_key,
+            f"{created.character_id}/portrait.webp",
+        )
+
+        removed = self.database.set_character_portrait(123, created.character_id, None)
+        self.assertIsNone(removed.portrait_key)
+
+        with self.assertRaises(CharacterNotFoundError):
+            self.database.set_character_portrait(999, created.character_id, "bad")
+
+    def test_new_character_gets_default_portrait_from_race_and_gender(self) -> None:
+        gendered = self.database.create_character(
+            123, "Aria", 11, race="Elf", gender="Female"
+        )
+        shared = self.database.create_character(
+            456, "Grak", 14, race="Orc", gender="Male"
+        )
+
+        self.assertEqual(gendered.portrait_key, "default/elf_female.png")
+        self.assertEqual(shared.portrait_key, "default/orc.png")
 
     def test_dice_color_is_a_user_preference_and_persists(self) -> None:
         self.assertEqual(self.database.get_dice_color(999), DEFAULT_DICE_COLOR)
@@ -219,6 +255,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(character.skills, {"Survival": 1})
         self.assertIsNotNone(character.character_id)
         self.assertTrue(character.is_active)
+        self.assertIsNone(character.portrait_key)
 
 
 if __name__ == "__main__":

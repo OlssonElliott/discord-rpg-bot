@@ -12,6 +12,7 @@ from .dice_visuals import (
     normalize_dice_color,
 )
 from .models import Character, Stance
+from .portraits import default_portrait_key
 
 
 class CharacterAlreadyExistsError(ValueError):
@@ -87,6 +88,7 @@ class Database:
                 vitality INTEGER,
                 insight INTEGER,
                 personality INTEGER,
+                portrait_key TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
                 is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))
             )
@@ -127,6 +129,7 @@ class Database:
                 "vitality": "ALTER TABLE characters ADD COLUMN vitality INTEGER",
                 "insight": "ALTER TABLE characters ADD COLUMN insight INTEGER",
                 "personality": "ALTER TABLE characters ADD COLUMN personality INTEGER",
+                "portrait_key": "ALTER TABLE characters ADD COLUMN portrait_key TEXT",
             }
             for column, statement in profile_migrations.items():
                 if column not in columns:
@@ -151,11 +154,13 @@ class Database:
                         discord_user_id, name, hp, max_hp, stance,
                         lineage, race, age, gender,
                         strength, dexterity, arcana, vitality, insight, personality,
+                        portrait_key,
                         is_active, is_archived
                     )
                     SELECT discord_user_id, name, hp, max_hp, stance,
                            lineage, race, age, gender,
                            strength, dexterity, arcana, vitality, insight, personality,
+                           portrait_key,
                            1, 0
                     FROM characters_legacy
                     """
@@ -213,6 +218,7 @@ class Database:
         gender: str | None = None,
         attributes: Mapping[str, int] | None = None,
         skills: Mapping[str, int] | None = None,
+        portrait_key: str | None = None,
     ) -> Character:
         clean_name = name.strip()
         if not clean_name:
@@ -221,6 +227,8 @@ class Database:
             raise ValueError("Character name cannot be longer than 100 characters.")
         if max_hp <= 0:
             raise InvalidHitPointsError("Maximum HP must be greater than 0.")
+        if portrait_key is None:
+            portrait_key = default_portrait_key(race, gender)
 
         try:
             with self._connect() as connection:
@@ -237,9 +245,9 @@ class Database:
                         discord_user_id, name, hp, max_hp, stance,
                         lineage, race, age, gender,
                         strength, dexterity, arcana, vitality, insight, personality,
-                        is_active, is_archived
+                        portrait_key, is_active, is_archived
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
                     """,
                     (
                         discord_user_id,
@@ -259,6 +267,7 @@ class Database:
                             "Insight",
                             "Personality",
                         )),
+                        portrait_key,
                     ),
                 )
                 character_id = cursor.lastrowid
@@ -289,7 +298,7 @@ class Database:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived
+                       is_active, is_archived, portrait_key
                 FROM characters
                 WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
                 """,
@@ -311,7 +320,7 @@ class Database:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived
+                       is_active, is_archived, portrait_key
                 FROM characters
                 WHERE discord_user_id = ? AND id = ? {archived_clause}
                 """,
@@ -326,7 +335,7 @@ class Database:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived
+                       is_active, is_archived, portrait_key
                 FROM characters
                 WHERE discord_user_id = ? AND is_archived = 0
                 ORDER BY is_active DESC, id ASC
@@ -357,6 +366,35 @@ class Database:
         character = self.get_character(discord_user_id)
         if character is None:
             raise RuntimeError("Selected character could not be loaded.")
+        return character
+
+    def deactivate_character(self, discord_user_id: int) -> None:
+        """Leave a Discord user without an equipped/active character."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE characters SET is_active = 0
+                WHERE discord_user_id = ? AND is_archived = 0
+                """,
+                (discord_user_id,),
+            )
+
+    def set_character_portrait(
+        self, discord_user_id: int, character_id: int, portrait_key: str | None
+    ) -> Character:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE characters SET portrait_key = ?
+                WHERE id = ? AND discord_user_id = ? AND is_archived = 0
+                """,
+                (portrait_key, character_id, discord_user_id),
+            )
+            if cursor.rowcount == 0:
+                raise CharacterNotFoundError("That character is not selectable.")
+        character = self.get_character_by_id(discord_user_id, character_id)
+        if character is None:
+            raise RuntimeError("Updated character could not be loaded.")
         return character
 
     def archive_character(self, discord_user_id: int, character_id: int) -> Character:
@@ -591,4 +629,5 @@ class Database:
             character_id=row["id"],
             is_active=bool(row["is_active"]),
             is_archived=bool(row["is_archived"]),
+            portrait_key=row["portrait_key"],
         )

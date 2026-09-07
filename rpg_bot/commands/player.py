@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -18,6 +19,10 @@ from ..dice_visuals import (
     SUPPORTED_VISUAL_DICE,
 )
 from ..models import Character
+from ..portraits import (
+    CharacterPortraitStore,
+    DEFAULT_DM_PORTRAIT_KEY,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -78,16 +83,39 @@ def character_status_embed(character: Character) -> discord.Embed:
     return embed
 
 
+def apply_character_identity(
+    embed: discord.Embed,
+    character: Character | None,
+    portrait_store: CharacterPortraitStore,
+) -> Path | None:
+    if character is None:
+        path = portrait_store.path_for(DEFAULT_DM_PORTRAIT_KEY)
+        name = "Dungeon Master"
+    else:
+        path = portrait_store.path_for(character.portrait_key)
+        name = character.name
+    embed.set_author(name=name)
+    if path is not None:
+        embed.set_thumbnail(url=f"attachment://{portrait_attachment_name(path)}")
+    return path
+
+
+def portrait_attachment_name(path: Path) -> str:
+    return f"character_portrait{path.suffix.lower()}"
+
+
 class PlayerCommands(commands.Cog):
     def __init__(
         self,
         database: Database,
         animation_renderer: D20AnimationRenderer | None = None,
         dice_sound_manager: DiceSoundManager | None = None,
+        portrait_store: CharacterPortraitStore | None = None,
     ) -> None:
         self.database = database
         self.animation_renderer = animation_renderer or D20AnimationRenderer()
         self.dice_sound_manager = dice_sound_manager or DiceSoundManager()
+        self.portrait_store = portrait_store or CharacterPortraitStore()
 
     @app_commands.command(name="roll", description="Roll dice for your character.")
     @app_commands.describe(
@@ -110,7 +138,8 @@ class PlayerCommands(commands.Cog):
         character = self.database.get_character(interaction.user.id)
         if character is None and not is_dm(interaction):
             await interaction.response.send_message(
-                "You do not have a character yet. Use `/character create`.",
+                "You do not have an active character. Use `/character manage` "
+                "to equip one or `/character create` to make one.",
                 ephemeral=True,
             )
             return
@@ -136,7 +165,7 @@ class PlayerCommands(commands.Cog):
             "disadvantage": discord.Colour(0xE74C3C),
         }.get(mode, discord.Colour.gold())
         embed = discord.Embed(
-            title=f"{character.name} — Dice Roll" if character else "DM Roll",
+            title=None if character else "DM Roll",
             colour=embed_color,
         )
         embed.add_field(name="Expression", value=f"`{result.expression}`", inline=False)
@@ -164,11 +193,23 @@ class PlayerCommands(commands.Cog):
             embed.add_field(
                 name="Stance", value=character.stance.display_name, inline=True
             )
+        portrait_path = apply_character_identity(embed, character, self.portrait_store)
         if (
             result.sides not in SUPPORTED_VISUAL_DICE
             or result.count > MAX_VISUAL_DICE_COUNT
         ):
-            await interaction.response.send_message(embed=embed)
+            if portrait_path is None:
+                await interaction.response.send_message(embed=embed)
+            else:
+                portrait_file = discord.File(
+                    portrait_path, filename=portrait_attachment_name(portrait_path)
+                )
+                try:
+                    await interaction.response.send_message(
+                        embed=embed, file=portrait_file
+                    )
+                finally:
+                    portrait_file.close()
             return
 
         master_assets = tuple(
@@ -176,7 +217,18 @@ class PlayerCommands(commands.Cog):
             for value in result.results
         )
         if any(asset is None for asset in master_assets):
-            await interaction.response.send_message(embed=embed)
+            if portrait_path is None:
+                await interaction.response.send_message(embed=embed)
+            else:
+                portrait_file = discord.File(
+                    portrait_path, filename=portrait_attachment_name(portrait_path)
+                )
+                try:
+                    await interaction.response.send_message(
+                        embed=embed, file=portrait_file
+                    )
+                finally:
+                    portrait_file.close()
             return
 
         await interaction.response.defer(thinking=True)
@@ -220,7 +272,21 @@ class PlayerCommands(commands.Cog):
             LOGGER.warning("Could not process dice animation", exc_info=True)
             animation = None
         if animation is None:
-            await interaction.edit_original_response(embed=embed)
+            portrait_file = (
+                discord.File(
+                    portrait_path, filename=portrait_attachment_name(portrait_path)
+                )
+                if portrait_path is not None
+                else None
+            )
+            try:
+                await interaction.edit_original_response(
+                    embed=embed,
+                    attachments=[portrait_file] if portrait_file is not None else [],
+                )
+            finally:
+                if portrait_file is not None:
+                    portrait_file.close()
             return
 
         voice_client = await self.dice_sound_manager.prepare(interaction)
@@ -246,7 +312,24 @@ class PlayerCommands(commands.Cog):
             )
         except (discord.HTTPException, OSError):
             LOGGER.warning("Could not send generated dice animation", exc_info=True)
-            await interaction.edit_original_response(content=None, embed=embed, attachments=[])
+            fallback_portrait = (
+                discord.File(
+                    portrait_path, filename=portrait_attachment_name(portrait_path)
+                )
+                if portrait_path is not None
+                else None
+            )
+            try:
+                await interaction.edit_original_response(
+                    content=None,
+                    embed=embed,
+                    attachments=(
+                        [fallback_portrait] if fallback_portrait is not None else []
+                    ),
+                )
+            finally:
+                if fallback_portrait is not None:
+                    fallback_portrait.close()
             return
         finally:
             if animation_file is not None:
@@ -259,16 +342,18 @@ class PlayerCommands(commands.Cog):
             else f"d{result.sides}_{result_slug}_results.png"
         )
         result_embed = embed.copy()
-        if result.count == 1:
-            result_embed.set_thumbnail(url=f"attachment://{result_filename}")
-        else:
-            result_embed.set_image(url=f"attachment://{result_filename}")
+        result_embed.set_image(url=f"attachment://{result_filename}")
         result_image_file: discord.File | None = None
+        portrait_file: discord.File | None = None
         try:
             result_image_file = discord.File(
                 animation.result_image_path,
                 filename=result_filename,
             )
+            if portrait_path is not None:
+                portrait_file = discord.File(
+                    portrait_path, filename=portrait_attachment_name(portrait_path)
+                )
             # Queue the finish sound before the HTTP edit so Discord's voice
             # buffer and message update happen in parallel. Starting it after
             # the edit makes settle audibly trail the visual transition.
@@ -281,16 +366,37 @@ class PlayerCommands(commands.Cog):
             await interaction.edit_original_response(
                 content=None,
                 embed=result_embed,
-                attachments=[result_image_file],
+                attachments=[
+                    file
+                    for file in (result_image_file, portrait_file)
+                    if file is not None
+                ],
             )
         except (discord.HTTPException, OSError):
             LOGGER.warning("Could not send dice result thumbnail", exc_info=True)
-            await interaction.edit_original_response(
-                content=None, embed=embed, attachments=[]
+            fallback_portrait = (
+                discord.File(
+                    portrait_path, filename=portrait_attachment_name(portrait_path)
+                )
+                if portrait_path is not None
+                else None
             )
+            try:
+                await interaction.edit_original_response(
+                    content=None,
+                    embed=embed,
+                    attachments=(
+                        [fallback_portrait] if fallback_portrait is not None else []
+                    ),
+                )
+            finally:
+                if fallback_portrait is not None:
+                    fallback_portrait.close()
         finally:
             if result_image_file is not None:
                 result_image_file.close()
+            if portrait_file is not None:
+                portrait_file.close()
 
     @app_commands.command(
         name="dicecolor", description="View or change your animated dice color."
@@ -381,11 +487,25 @@ class PlayerCommands(commands.Cog):
         character = self.database.get_character(interaction.user.id)
         if character is None:
             await interaction.response.send_message(
-                "You do not have a character yet. Use `/character create`.",
+                "You do not have an active character. Use `/character manage` "
+                "to equip one or `/character create` to make one.",
                 ephemeral=True,
             )
             return
-        await interaction.response.send_message(embed=character_status_embed(character))
+        embed = character_status_embed(character)
+        portrait_path = self.portrait_store.path_for(character.portrait_key)
+        if portrait_path is None:
+            await interaction.response.send_message(embed=embed)
+            return
+        filename = portrait_attachment_name(portrait_path)
+        embed.set_thumbnail(url=f"attachment://{filename}")
+        portrait_file = discord.File(
+            portrait_path, filename=filename
+        )
+        try:
+            await interaction.response.send_message(embed=embed, file=portrait_file)
+        finally:
+            portrait_file.close()
 
 
 async def setup(bot: commands.Bot) -> None:
@@ -394,5 +514,8 @@ async def setup(bot: commands.Bot) -> None:
             bot.database,
             D20AnimationRenderer(theme=bot.config.dice_theme),
             DiceSoundManager(),
+            CharacterPortraitStore(
+                getattr(bot.config, "character_media_path", "data/characters")
+            ),
         )
     )

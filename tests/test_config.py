@@ -12,6 +12,9 @@ class ConfigTests(unittest.TestCase):
             os.environ, {"DISCORD_TOKEN": "token"}, clear=True
         ):
             self.assertEqual(Config.from_env().dice_theme, "classic")
+            self.assertEqual(
+                Config.from_env().character_media_path, "data/characters"
+            )
 
         with patch("rpg_bot.config.load_dotenv"), patch.dict(
             os.environ,
@@ -28,6 +31,16 @@ class ConfigTests(unittest.TestCase):
         ):
             with self.assertRaises(InvalidDiceThemeError):
                 Config.from_env()
+
+    def test_character_media_path_can_be_configured(self) -> None:
+        with patch("rpg_bot.config.load_dotenv"), patch.dict(
+            os.environ,
+            {"DISCORD_TOKEN": "token", "CHARACTER_MEDIA_PATH": "var/portraits"},
+            clear=True,
+        ):
+            self.assertEqual(
+                Config.from_env().character_media_path, "var/portraits"
+            )
 
 
 if __name__ == "__main__":

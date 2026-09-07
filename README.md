@@ -1,7 +1,7 @@
 # Lightweight Discord RPG Bot
 
-A small mechanical assistant for a human-run tabletop RPG campaign. It stores one
-character per Discord user, rolls dice, displays character status, and gives the
+A small mechanical assistant for a human-run tabletop RPG campaign. It stores multiple
+characters per Discord user, rolls dice, displays character status, and gives the
 DM a few character-management commands. Storytelling and rulings remain with the
 human DM.
 
@@ -48,6 +48,7 @@ Your `.env` should resemble:
 DISCORD_TOKEN=your_real_token_here
 DM_ROLE_NAME=DM
 DATABASE_PATH=rpg_bot.db
+CHARACTER_MEDIA_PATH=data/characters
 DICE_THEME=classic
 DISCORD_GUILD_ID=your_numeric_server_id
 ```
@@ -78,6 +79,9 @@ Player commands:
 
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
+- `/character portrait [image] [remove]` — view the active portrait, attach a file
+  to replace it, or use `remove: True` to remove it directly.
+- `/character removeportrait` — remove the active character's portrait.
 - `/character cancel` — discard the active creation session.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
   `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
@@ -93,19 +97,31 @@ DM-role commands:
 - `/stance user stance`
 - `/sethp user hp`
 
-Each Discord user ID can have one character. Damage stops at 0 HP, healing stops
-at maximum HP, and manual HP must be between those bounds. The allowed stances are
+Each Discord user ID can have multiple characters and one active character at a time.
+Damage stops at 0 HP, healing stops at maximum HP, and manual HP must be between
+those bounds. The allowed stances are
 `steady`, `bad_stance`, and `prone`.
 
 Character creation uses private dropdowns, a name modal, number-to-attribute linking
-for the standard array, and `+`/`−` buttons for bonus points. It validates
+for the standard array, and `+`/`−` buttons for bonus points. Every step has back
+navigation, and the bonus step previews scores with race and age modifiers. It validates
 lineage, race, age, gender, attributes, and two starting skill trees.
 Finished characters are stored against the calling Discord user, who may own more
 than one while using one active character at a time. A newly created character becomes
-active automatically. Archiving removes a character from Discord selection without
-deleting its database record. Final Vitality becomes starting and maximum HP. Active,
+active automatically. `/character manage` can also unequip the active character, which
+is useful for generic DM rolls. Archiving removes a character from Discord selection
+without deleting its database record. Final Vitality becomes starting and maximum HP. Active,
 incomplete creation sessions are held in memory and need to be restarted after a bot
 restart.
+
+Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
+cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below
+`CHARACTER_MEDIA_PATH` (default `data/characters`). Portraits appear on dice rolls
+and `/status`. The upload confirmation and `/character manage` both provide a
+button for removing a custom portrait; archiving keeps it with the archived record.
+New characters use the bundled race portrait (and the male/female variant where
+available) until the player uploads one. Removing a custom portrait restores that
+default automatically.
 
 Dice body, edge, and number colors are stored separately from characters, so a DM
 without a character can use all three color commands. Discord suggests a small

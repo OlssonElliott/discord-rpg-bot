@@ -1,6 +1,11 @@
 import unittest
+from io import BytesIO
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+
+from PIL import Image
 
 from rpg_bot.character_creation import CharacterCreationFlow, CreationStep
 from rpg_bot.commands.character import (
@@ -9,19 +14,25 @@ from rpg_bot.commands.character import (
     AttributeView,
     ArchiveCharacterButton,
     ArchiveConfirmationView,
+    BackButton,
     BonusButton,
     BonusView,
     CharacterCommands,
     CharacterManageView,
     ChoiceView,
+    ConfirmAttributesButton,
     NameView,
+    PortraitPreviewView,
     SkillView,
+    UnequipCharacterButton,
     attribute_prompt,
     bonus_prompt,
     creation_prompt,
     creation_view,
     setup,
 )
+from rpg_bot.models import Character, Stance
+from rpg_bot.portraits import CharacterPortraitStore
 
 
 def interaction_for(user_id: int) -> SimpleNamespace:
@@ -31,7 +42,9 @@ def interaction_for(user_id: int) -> SimpleNamespace:
             send_message=AsyncMock(),
             edit_message=AsyncMock(),
             send_modal=AsyncMock(),
+            defer=AsyncMock(),
         ),
+        edit_original_response=AsyncMock(),
     )
 
 
@@ -75,6 +88,125 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             interaction.response.send_message.await_args.kwargs["view"], ChoiceView
         )
+
+    async def test_portrait_upload_updates_active_character_and_shows_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = CharacterPortraitStore(directory)
+            character = Character(7, "Olof", 12, 12, Stance.STEADY, character_id=3)
+            database = Mock()
+            database.get_character.return_value = character
+            database.get_character_by_id.return_value = character
+            database.set_character_portrait.side_effect = lambda user_id, char_id, key: Character(
+                user_id,
+                "Olof",
+                12,
+                12,
+                Stance.STEADY,
+                character_id=char_id,
+                portrait_key=key,
+            )
+            output = BytesIO()
+            Image.new("RGB", (320, 180), "blue").save(output, format="PNG")
+            attachment = SimpleNamespace(
+                size=len(output.getvalue()), read=AsyncMock(return_value=output.getvalue())
+            )
+            interaction = interaction_for(7)
+            cog = CharacterCommands(database, store)
+
+            await cog.portrait.callback(cog.portrait.binding, interaction, attachment)
+
+            interaction.response.defer.assert_awaited_once_with(
+                ephemeral=True, thinking=True
+            )
+            key = database.set_character_portrait.call_args.args[2]
+            self.assertTrue((Path(directory) / key).is_file())
+            call = interaction.edit_original_response.await_args
+            self.assertEqual(call.kwargs["embed"].image.url, "attachment://portrait.webp")
+            self.assertEqual(call.kwargs["attachments"][0].filename, "portrait.webp")
+            self.assertIsInstance(call.kwargs["view"], PortraitPreviewView)
+
+            remove_interaction = interaction_for(7)
+            await call.kwargs["view"].children[0].callback(remove_interaction)
+
+            self.assertEqual(
+                database.set_character_portrait.call_args.args,
+                (7, 3, None),
+            )
+            self.assertFalse((Path(directory) / key).exists())
+            self.assertIsNone(
+                remove_interaction.response.edit_message.await_args.kwargs["view"]
+            )
+
+    async def test_portrait_without_upload_shows_existing_image_and_remove_button(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = CharacterPortraitStore(directory)
+            output = BytesIO()
+            Image.new("RGB", (128, 128), "green").save(output, format="PNG")
+            key = store.save(3, output.getvalue())
+            character = Character(
+                7,
+                "Olof",
+                12,
+                12,
+                Stance.STEADY,
+                character_id=3,
+                portrait_key=key,
+            )
+            database = Mock()
+            database.get_character.return_value = character
+            database.get_character_by_id.return_value = character
+            database.set_character_portrait.return_value = Character(
+                7, "Olof", 12, 12, Stance.STEADY, character_id=3
+            )
+            interaction = interaction_for(7)
+            cog = CharacterCommands(database, store)
+
+            await cog.portrait.callback(cog.portrait.binding, interaction)
+
+            call = interaction.response.send_message.await_args
+            self.assertEqual(call.kwargs["embed"].image.url, "attachment://portrait.webp")
+            self.assertIsInstance(call.kwargs["view"], PortraitPreviewView)
+            self.assertTrue(call.kwargs["ephemeral"])
+
+            remove_interaction = interaction_for(7)
+            await call.kwargs["view"].children[0].callback(remove_interaction)
+
+            database.set_character_portrait.assert_called_once_with(7, 3, None)
+            self.assertFalse((Path(directory) / key).exists())
+
+    async def test_portrait_remove_option_deletes_existing_portrait_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = CharacterPortraitStore(directory)
+            output = BytesIO()
+            Image.new("RGB", (128, 128), "red").save(output, format="PNG")
+            key = store.save(3, output.getvalue())
+            database = Mock()
+            database.get_character.return_value = Character(
+                7,
+                "Olof",
+                12,
+                12,
+                Stance.STEADY,
+                race="Human",
+                gender="Male",
+                character_id=3,
+                portrait_key=key,
+            )
+            interaction = interaction_for(7)
+            cog = CharacterCommands(database, store)
+
+            await cog.portrait.callback(
+                cog.portrait.binding, interaction, None, True
+            )
+
+            database.set_character_portrait.assert_called_once_with(
+                7, 3, "default/human_male.png"
+            )
+            self.assertFalse((Path(directory) / key).exists())
+            self.assertIn(
+                "Restored",
+                interaction.response.send_message.await_args.args[0],
+            )
 
     async def test_manage_lists_only_selectable_characters(self) -> None:
         first = SimpleNamespace(
@@ -174,7 +306,7 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         attributes = creation_view(cog, 7, flow)
         self.assertIsInstance(attributes, AttributeView)
         self.assertEqual(attributes.assignments, {})
-        self.assertEqual(len(attributes.children), 9)
+        self.assertEqual(len(attributes.children), 10)
         self.assertEqual(
             [
                 item.value
@@ -183,12 +315,17 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
             ],
             [14, 13, 12, 11, 10, 9],
         )
-        self.assertTrue(attributes.children[-1].disabled)
+        confirm = next(
+            item
+            for item in attributes.children
+            if isinstance(item, ConfirmAttributesButton)
+        )
+        self.assertTrue(confirm.disabled)
 
         flow.state.step = CreationStep.BONUS_POINTS
         bonus = creation_view(cog, 7, flow)
         self.assertIsInstance(bonus, BonusView)
-        self.assertEqual(len(bonus.children), 13)
+        self.assertEqual(len(bonus.children), 14)
 
         flow.state.step = CreationStep.SKILLS
         skills = creation_view(cog, 7, flow)
@@ -199,7 +336,8 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_bonus_buttons_update_points_and_enable_confirmation_at_two(self) -> None:
         cog = CharacterCommands(Mock())
         interaction = interaction_for(7)
-        view = BonusView(cog, 7)
+        flow = CharacterCreationFlow()
+        view = BonusView(cog, 7, flow)
         strength_plus = next(
             item
             for item in view.children
@@ -230,6 +368,83 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
                 for item in completed_view.children
                 if isinstance(item, BonusButton) and item.delta == 1
             )
+        )
+
+    async def test_back_button_returns_to_previous_choice_group(self) -> None:
+        cog = CharacterCommands(Mock())
+        flow = CharacterCreationFlow()
+        cog.sessions[7] = flow
+        flow.submit("Fey")
+        flow.submit("Elf")
+        interaction = interaction_for(7)
+        view = creation_view(cog, 7, flow)
+        back = next(item for item in view.children if isinstance(item, BackButton))
+
+        await back.callback(interaction)
+
+        self.assertEqual(flow.current_step, CreationStep.RACE)
+        self.assertIsNone(flow.state.race)
+        call = interaction.response.edit_message.await_args
+        self.assertIn("Choose a race", call.kwargs["content"])
+        self.assertEqual(
+            [option.value for option in call.kwargs["view"].children[0].options],
+            ["Elf", "Dryad", "Faun"],
+        )
+
+    def test_bonus_prompt_shows_current_scores_with_all_modifiers(self) -> None:
+        flow = CharacterCreationFlow()
+        for answer in (
+            "Commonfolk",
+            "Human",
+            "Prime",
+            "Female",
+            "Aria",
+            {
+                "Strength": 14,
+                "Dexterity": 13,
+                "Arcana": 12,
+                "Vitality": 11,
+                "Insight": 10,
+                "Personality": 9,
+            },
+        ):
+            flow.submit(answer)
+
+        prompt = bonus_prompt(flow, {"Strength": 1})
+
+        self.assertIn("Strength: **15** (bonus +1)", prompt)
+        self.assertIn("Insight: **11** (bonus +0)", prompt)
+        self.assertIn("Personality: **11** (bonus +0)", prompt)
+        self.assertIn("Remaining: **1**", prompt)
+
+    async def test_unequip_button_clears_active_character(self) -> None:
+        character = SimpleNamespace(
+            character_id=1, name="Olof", is_active=True, is_archived=False
+        )
+        database = Mock()
+        database.list_characters.return_value = [
+            SimpleNamespace(
+                character_id=1,
+                name="Olof",
+                is_active=False,
+                is_archived=False,
+            )
+        ]
+        cog = CharacterCommands(database)
+        view = CharacterManageView(cog, 7, [character], selected_id=1)
+        unequip = next(
+            item
+            for item in view.children
+            if isinstance(item, UnequipCharacterButton)
+        )
+        interaction = interaction_for(7)
+
+        await unequip.callback(interaction)
+
+        database.deactivate_character.assert_called_once_with(7)
+        self.assertIn(
+            "No character is currently active",
+            interaction.response.edit_message.await_args.kwargs["content"],
         )
 
     async def test_attribute_numbers_can_be_linked_and_relinked(self) -> None:
@@ -353,7 +568,8 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(attribute_prompt({})), 350)
         self.assertIn("**14** → Not assigned", attribute_prompt({}))
         self.assertIn("Select a number button", attribute_prompt({}))
-        self.assertIn("Remaining: **2**", bonus_prompt({}))
+        flow = CharacterCreationFlow()
+        self.assertIn("Remaining: **2**", bonus_prompt(flow, {}))
 
 
 if __name__ == "__main__":
