@@ -6,9 +6,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from checks import DMRoleRequired
-from config import Config
-from database import Database
+from .checks import DMRoleRequired
+from .config import Config
+from .database import Database
 
 
 LOGGER = logging.getLogger(__name__)
@@ -22,8 +22,9 @@ class RPGBot(commands.Bot):
         self.database = database
 
     async def setup_hook(self) -> None:
-        await self.load_extension("commands.player")
-        await self.load_extension("commands.dm")
+        await self.load_extension("rpg_bot.commands.player")
+        await self.load_extension("rpg_bot.commands.dm")
+        await self.load_extension("rpg_bot.commands.character")
 
         if self.config.discord_guild_id is not None:
             guild = discord.Object(id=self.config.discord_guild_id)

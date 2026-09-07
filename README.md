@@ -33,9 +33,9 @@ copy the environment file with `cp .env.example .env`.
 4. Open **Installation**, make sure **Guild Install** is enabled under Installation
    Contexts, and choose **Discord Provided Link**. Under the Guild Install default
    settings, include the `bot` and `applications.commands` scopes. The only bot
-   permission needed for this milestone is **Send Messages**; **Embed Links**
-   should also be allowed so responses render as intended. The older portal UI
-   exposes the equivalent settings under **OAuth2 > URL Generator**.
+   permissions needed are **Send Messages**, **Embed Links**, **Connect**, and
+   **Speak**. The voice permissions allow the optional dice sounds. The older
+   portal UI exposes the equivalent settings under **OAuth2 > URL Generator**.
 5. Use the generated install link, choose your server, and authorize the bot.
 6. In Discord, enable **Developer Mode** under **User Settings > Advanced**,
    right-click the server, and select **Copy Server ID**. Put it in `.env` as
@@ -61,7 +61,7 @@ matching is case-sensitive.
 With the virtual environment active:
 
 ```powershell
-python bot.py
+python -m rpg_bot
 ```
 
 The console logs successful login and command synchronization. With
@@ -76,6 +76,9 @@ and survives restarts. The database and `.env` are ignored by Git.
 
 Player commands:
 
+- `/character create` — start a private, step-by-step character creation session.
+- `/character manage` — choose an active character or archive one from Discord.
+- `/character cancel` — discard the active creation session.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
   `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
 - `/dicecolor [color]` — view or set a personal six-digit hex dice color.
@@ -85,7 +88,6 @@ Player commands:
 
 DM-role commands:
 
-- `/createcharacter user name max_hp`
 - `/damage user amount`
 - `/heal user amount`
 - `/stance user stance`
@@ -94,6 +96,16 @@ DM-role commands:
 Each Discord user ID can have one character. Damage stops at 0 HP, healing stops
 at maximum HP, and manual HP must be between those bounds. The allowed stances are
 `steady`, `bad_stance`, and `prone`.
+
+Character creation uses private dropdowns, a name modal, number-to-attribute linking
+for the standard array, and `+`/`−` buttons for bonus points. It validates
+lineage, race, age, gender, attributes, and two starting skill trees.
+Finished characters are stored against the calling Discord user, who may own more
+than one while using one active character at a time. A newly created character becomes
+active automatically. Archiving removes a character from Discord selection without
+deleting its database record. Final Vitality becomes starting and maximum HP. Active,
+incomplete creation sessions are held in memory and need to be restarted after a bot
+restart.
 
 Dice body, edge, and number colors are stored separately from characters, so a DM
 without a character can use all three color commands. Discord suggests a small
@@ -147,6 +159,24 @@ two d20s, applies the modifier once, and keeps the higher or lower natural resul
 Both dice animate together with a green advantage glow or red disadvantage glow.
 The kept result is marked in the embed, while both result dice remain equally sized
 in the final row. Other expressions use Normal mode.
+
+### Dice sounds in voice
+
+When the player who invokes `/roll` is in a voice channel, Rollkeeper joins that
+channel for the first visual roll and stays connected until the bot shuts down or
+is disconnected. Later roll sounds play only when the roller is in that same voice
+channel. Players can mute Rollkeeper or set its volume individually in Discord.
+
+The sound sequence consists of a 1.4-second spin followed by a separate landing
+sound. A kept natural 1 or natural 20 on a d20 adds its own short sting. For
+ordinary d20 pools, natural 20 takes precedence if both special results occur. If
+the player is not in voice, the bot is already connected elsewhere, another roll
+sound is playing, assets are missing, or voice permissions are unavailable, the
+visual roll continues silently.
+
+Rollkeeper only plays finished 48 kHz stereo PCM WAV assets committed under
+`assets/audio/dice/`. It does not generate or synthesize sounds at runtime or via
+a repository tool.
 
 ### Generate all master animations
 
@@ -246,16 +276,20 @@ python -m unittest discover -s tests -v
 ## Project structure
 
 ```text
-bot.py                startup, synchronization, and top-level error logging
-config.py             .env configuration
-database.py           SQLite character persistence
-models.py             character and stance domain types
-dice.py               bounded dice parser and roller
-dice_assets.py        safe themed asset and cache path resolution
-dice_visuals.py       dice color validation, GIF tinting, and generated cache
-checks.py             reusable DM-role permission check
-commands/player.py    /roll and /status
-commands/dm.py        DM character-management commands
+rpg_bot/__main__.py             startup, synchronization, and top-level error logging
+rpg_bot/config.py               .env configuration
+rpg_bot/database.py             SQLite character persistence
+rpg_bot/models.py               character and stance domain types
+rpg_bot/dice.py                 bounded dice parser and roller
+rpg_bot/dice_audio.py           voice connection and sequential dice sound playback
+rpg_bot/dice_assets.py          safe themed asset and cache path resolution
+rpg_bot/dice_visuals.py         dice color validation, GIF tinting, and generated cache
+rpg_bot/checks.py               reusable DM-role permission check
+rpg_bot/commands/player.py      /roll and /status
+rpg_bot/commands/dm.py          DM character-management commands
+rpg_bot/commands/character.py   /character creation command group and user sessions
+rpg_bot/character_creation/     UI-independent rules, state machine, and persistence service
+docs/END_GOAL.md                long-term product vision
 scripts/generate_d20_assets.py  offline multi-die Blender orchestration and GIF encoding
 scripts/render_d20_blender.py   procedural dice scenes and deterministic PNG rendering
 tests/                mechanics and persistence tests

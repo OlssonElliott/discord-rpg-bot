@@ -9,7 +9,7 @@ import threading
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps, ImageSequence
 
-from dice_assets import (
+from .dice_assets import (
     DEFAULT_DICE_THEME,
     DiceAsset,
     DiceAssetLayout,
@@ -25,9 +25,10 @@ DEFAULT_DICE_NUMBER_COLOR = "#101010"
 SUPPORTED_VISUAL_DICE = frozenset((4, 6, 8, 10, 12, 20))
 MAX_VISUAL_DICE_COUNT = 10
 RESULT_IMAGE_SIZE = 160
-GROUP_RESULT_TILE_SIZE = 144
+GROUP_RESULT_TILE_SIZE = 160
 MULTI_ANIMATION_MAX_WIDTH = 640
-DICE_GROUP_CACHE_VERSION = "v11"
+DICE_GROUP_CACHE_VERSION = "v13"
+DISCORD_DARK_MATTE = (43, 45, 49)
 _HEX_COLOR = re.compile(r"#?(?P<rgb>[0-9a-fA-F]{6})")
 
 
@@ -65,7 +66,9 @@ class D20AnimationRenderer:
         theme: str = DEFAULT_DICE_THEME,
     ) -> None:
         if assets_directory is None:
-            assets_directory = Path(__file__).resolve().parent / "assets" / "dice" / "d20"
+            assets_directory = (
+                Path(__file__).resolve().parent.parent / "assets" / "dice" / "d20"
+            )
         self.assets_directory = Path(assets_directory)
         self.theme = normalize_dice_theme(theme)
         self.layout = DiceAssetLayout(self.assets_directory.parent)
@@ -149,6 +152,7 @@ class D20AnimationRenderer:
         edge_color: str = DEFAULT_DICE_EDGE_COLOR,
         number_color: str = DEFAULT_DICE_NUMBER_COLOR,
         sides: int = 20,
+        glow_color: str | None = None,
     ) -> RenderedDiceAnimation | None:
         """Return a cached/tinted animation, or ``None`` when no master is available."""
         if sides not in SUPPORTED_VISUAL_DICE:
@@ -161,6 +165,9 @@ class D20AnimationRenderer:
         normalized_color = normalize_dice_color(color)
         normalized_edge_color = normalize_dice_color(edge_color)
         normalized_number_color = normalize_dice_color(number_color)
+        normalized_glow_color = (
+            normalize_dice_color(glow_color) if glow_color is not None else None
+        )
         resolved_asset = master_asset or self.resolve_master(natural_result, sides)
         if resolved_asset is None:
             return None
@@ -188,6 +195,11 @@ class D20AnimationRenderer:
             normalized_edge_color,
             normalized_number_color,
         )
+        if normalized_glow_color is not None:
+            glow_slug = normalized_glow_color.removeprefix("#")
+            cache_path = cache_path.with_name(
+                f"{cache_path.stem}_glow_v4_{glow_slug}.gif"
+            )
         result_image_path = cache_path.with_name(f"{cache_path.stem}_result.png")
         with self._generation_lock:
             newest_source_time = master_path.stat().st_mtime_ns
@@ -220,6 +232,7 @@ class D20AnimationRenderer:
                 normalized_number_color,
                 number_mask_path if number_mask_path.is_file() else None,
                 result_image_path,
+                normalized_glow_color,
             )
 
     def render_many(
@@ -232,6 +245,7 @@ class D20AnimationRenderer:
         sides: int = 20,
         primary_index: int | None = None,
         glow_color: str | None = None,
+        glow_colors: tuple[str | None, ...] | None = None,
     ) -> RenderedDiceAnimation | None:
         """Compose cached result animations into one synchronized horizontal roll."""
         if not 2 <= len(natural_results) <= MAX_VISUAL_DICE_COUNT:
@@ -249,8 +263,18 @@ class D20AnimationRenderer:
             and not 0 <= primary_index < len(natural_results)
         ):
             raise ValueError("The highlighted die index is outside the result group.")
-        normalized_glow_color = (
-            normalize_dice_color(glow_color) if glow_color is not None else None
+        if glow_colors is not None and len(glow_colors) != len(natural_results):
+            raise ValueError("Each visual die must have one glow color entry.")
+        normalized_glow_colors = (
+            tuple(
+                normalize_dice_color(color) if color is not None else None
+                for color in glow_colors
+            )
+            if glow_colors is not None
+            else tuple(
+                normalize_dice_color(glow_color) if glow_color is not None else None
+                for _ in natural_results
+            )
         )
 
         if master_assets is None:
@@ -283,7 +307,9 @@ class D20AnimationRenderer:
             animations.append(animation)
 
         signature_text = "|".join(str(animation.path) for animation in animations)
-        signature_text += f"|primary={primary_index}|glow={normalized_glow_color}"
+        signature_text += (
+            f"|primary={primary_index}|glows={normalized_glow_colors}"
+        )
         signature = hashlib.sha256(signature_text.encode("utf-8")).hexdigest()[:10]
         result_slug = "-".join(str(result) for result in natural_results)
         group_directory = (
@@ -317,7 +343,7 @@ class D20AnimationRenderer:
                 cache_path,
                 result_image_path,
                 primary_index,
-                normalized_glow_color,
+                normalized_glow_colors,
             )
 
     def _warn_once(self, key: str, message: str, *args: object) -> None:
@@ -333,7 +359,7 @@ class D20AnimationRenderer:
         cache_path: Path,
         result_image_path: Path,
         primary_index: int | None,
-        glow_color: str | None,
+        glow_colors: tuple[str | None, ...],
     ) -> RenderedDiceAnimation | None:
         temporary_path = cache_path.with_suffix(".tmp.gif")
         temporary_result_path = result_image_path.with_name(
@@ -349,10 +375,12 @@ class D20AnimationRenderer:
             glow_sequences: list[list[Image.Image] | None] = []
             duration_sequences: list[list[int]] = []
             prepared_by_path: dict[
-                Path, tuple[list[Image.Image], list[int], list[Image.Image] | None]
+                tuple[Path, str | None],
+                tuple[list[Image.Image], list[int], list[Image.Image] | None],
             ] = {}
-            for animation in animations:
-                prepared = prepared_by_path.get(animation.path)
+            for animation, die_glow_color in zip(animations, glow_colors):
+                prepared_key = (animation.path, die_glow_color)
+                prepared = prepared_by_path.get(prepared_key)
                 if prepared is None:
                     frames, durations = self._load_animation(animation.path)
                     if not frames:
@@ -373,16 +401,16 @@ class D20AnimationRenderer:
                             [
                                 self._glow_image(
                                     frame,
-                                    glow_color,
-                                    max(2, tile_size // 48),
+                                    die_glow_color,
+                                    max(3, tile_size // 32),
                                 )
                                 for frame in prepared_frames
                             ]
-                            if glow_color is not None
+                            if die_glow_color is not None
                             else None
                         ),
                     )
-                    prepared_by_path[animation.path] = prepared
+                    prepared_by_path[prepared_key] = prepared
                 prepared_frames, durations, prepared_glows = prepared
                 sequences.append(prepared_frames)
                 duration_sequences.append(durations)
@@ -432,7 +460,7 @@ class D20AnimationRenderer:
             self._save_group_result_image(
                 [animation.result_image_path for animation in animations],
                 temporary_result_path,
-                glow_color,
+                glow_colors,
             )
             temporary_path.replace(cache_path)
             temporary_result_path.replace(result_image_path)
@@ -460,7 +488,9 @@ class D20AnimationRenderer:
 
     @staticmethod
     def _save_group_result_image(
-        paths: list[Path], output_path: Path, glow_color: str | None = None
+        paths: list[Path],
+        output_path: Path,
+        glow_colors: tuple[str | None, ...] | None = None,
     ) -> None:
         images: list[Image.Image] = []
         for path in paths:
@@ -484,19 +514,19 @@ class D20AnimationRenderer:
                     ),
                 )
             )
-        if glow_color is not None:
-            combined_alpha = Image.new("L", canvas.size)
-            for die, position in placements:
+        if glow_colors is None:
+            glow_colors = tuple(None for _ in placements)
+        for (die, position), die_glow_color in zip(placements, glow_colors):
+            if die_glow_color is not None:
                 placed_alpha = Image.new("L", canvas.size)
                 placed_alpha.paste(die.getchannel("A"), position)
-                combined_alpha = ImageChops.lighter(combined_alpha, placed_alpha)
-            canvas.alpha_composite(
-                D20AnimationRenderer._glow_from_alpha(
-                    combined_alpha,
-                    glow_color,
-                    radius=3,
+                canvas.alpha_composite(
+                    D20AnimationRenderer._glow_from_alpha(
+                        placed_alpha,
+                        die_glow_color,
+                        radius=5,
+                    )
                 )
-            )
         for die, position in placements:
             canvas.alpha_composite(die, position)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -516,7 +546,23 @@ class D20AnimationRenderer:
                 lambda value: min(255, round(value * 2.15))
             )
         )
-        return D20AnimationRenderer._dither_transparency(glow)
+        return D20AnimationRenderer._flatten_glow_for_gif(glow)
+
+    @staticmethod
+    def _flatten_glow_for_gif(glow: Image.Image) -> Image.Image:
+        """Bake soft alpha against Discord's dark canvas for smooth GIF glow.
+
+        GIF only supports fully transparent or fully opaque palette entries.
+        Dithering translucent pixels creates a visibly noisy halo in motion, so
+        retain the smooth RGB gradient and use transparency only at its edge.
+        """
+        alpha = glow.getchannel("A")
+        flattened = Image.new(
+            "RGBA", glow.size, (*DISCORD_DARK_MATTE, 255)
+        )
+        flattened.alpha_composite(glow)
+        flattened.putalpha(alpha.point(lambda value: 255 if value >= 3 else 0))
+        return flattened
 
     @staticmethod
     def _glow_from_alpha(
@@ -540,16 +586,6 @@ class D20AnimationRenderer:
         return soft
 
     @staticmethod
-    def _dither_transparency(image: Image.Image) -> Image.Image:
-        """Approximate soft alpha with binary transparency supported by GIF."""
-        binary_alpha = image.getchannel("A").convert(
-            "1", dither=Image.Dither.FLOYDSTEINBERG
-        ).convert("L")
-        dithered = image.copy()
-        dithered.putalpha(binary_alpha)
-        return dithered
-
-    @staticmethod
     def _fit_visible_die(image: Image.Image, size: int) -> Image.Image:
         box = image.getchannel("A").getbbox()
         if box is None:
@@ -568,6 +604,7 @@ class D20AnimationRenderer:
         number_color: str,
         number_mask_path: Path | None,
         result_image_path: Path,
+        glow_color: str | None,
     ) -> RenderedDiceAnimation | None:
         temporary_path = cache_path.with_suffix(".tmp.gif")
         temporary_result_path = result_image_path.with_name(
@@ -580,6 +617,7 @@ class D20AnimationRenderer:
             with Image.open(master_path) as source:
                 frames: list[Image.Image] = []
                 durations: list[int] = []
+                settled_frame: Image.Image | None = None
                 default_duration = int(source.info.get("duration", 100) or 100)
 
                 for index, frame in enumerate(ImageSequence.Iterator(source)):
@@ -593,19 +631,23 @@ class D20AnimationRenderer:
                         if number_masks
                         else None
                     )
+                    tinted_frame = self._tint_frame(
+                        frame.convert("RGBA"),
+                        color,
+                        edge_color,
+                        edge_mask,
+                        number_color,
+                        number_mask,
+                    )
+                    settled_frame = tinted_frame
                     frames.append(
-                        self._tint_frame(
-                            frame.convert("RGBA"),
-                            color,
-                            edge_color,
-                            edge_mask,
-                            number_color,
-                            number_mask,
-                        )
+                        self._add_glow(tinted_frame, glow_color)
+                        if glow_color is not None
+                        else tinted_frame
                     )
                     durations.append(int(frame.info.get("duration", default_duration) or 100))
 
-            if not frames:
+            if not frames or settled_frame is None:
                 return None
 
             frames[0].save(
@@ -617,7 +659,9 @@ class D20AnimationRenderer:
                 disposal=2,
                 optimize=False,
             )
-            self._save_result_image(frames[-1], temporary_result_path)
+            self._save_result_image(
+                settled_frame, temporary_result_path, glow_color
+            )
             temporary_path.replace(cache_path)
             temporary_result_path.replace(result_image_path)
             return RenderedDiceAnimation(
@@ -630,25 +674,44 @@ class D20AnimationRenderer:
             return None
 
     @staticmethod
-    def _save_result_image(frame: Image.Image, path: Path) -> None:
+    def _save_result_image(
+        frame: Image.Image, path: Path, glow_color: str | None = None
+    ) -> None:
         """Save a compact transparent crop of the animation's settled frame."""
         box = frame.getchannel("A").getbbox()
         if box is None:
             raise ValueError("The settled dice frame is fully transparent.")
 
         die = frame.crop(box)
-        inner_size = RESULT_IMAGE_SIZE - 16
+        inner_size = RESULT_IMAGE_SIZE - (34 if glow_color is not None else 16)
         die.thumbnail((inner_size, inner_size), Image.Resampling.LANCZOS)
         thumbnail = Image.new("RGBA", (RESULT_IMAGE_SIZE, RESULT_IMAGE_SIZE))
-        thumbnail.alpha_composite(
-            die,
-            (
-                (RESULT_IMAGE_SIZE - die.width) // 2,
-                (RESULT_IMAGE_SIZE - die.height) // 2,
-            ),
+        position = (
+            (RESULT_IMAGE_SIZE - die.width) // 2,
+            (RESULT_IMAGE_SIZE - die.height) // 2,
         )
+        if glow_color is not None:
+            placed_alpha = Image.new("L", thumbnail.size)
+            placed_alpha.paste(die.getchannel("A"), position)
+            thumbnail.alpha_composite(
+                D20AnimationRenderer._glow_from_alpha(
+                    placed_alpha, glow_color, radius=5
+                )
+            )
+        thumbnail.alpha_composite(die, position)
         path.parent.mkdir(parents=True, exist_ok=True)
         thumbnail.save(path, format="PNG", optimize=True)
+
+    @staticmethod
+    def _add_glow(frame: Image.Image, color: str) -> Image.Image:
+        glowing = Image.new("RGBA", frame.size)
+        glowing.alpha_composite(
+            D20AnimationRenderer._glow_image(
+                frame, color, radius=max(3, min(frame.size) // 32)
+            )
+        )
+        glowing.alpha_composite(frame)
+        return glowing
 
     @staticmethod
     def _tint_frame(

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from dice_visuals import (
+from rpg_bot.dice_visuals import (
     D20AnimationRenderer,
     InvalidDiceColorError,
     normalize_dice_color,
@@ -84,6 +84,21 @@ class DiceVisualTests(unittest.TestCase):
             self.assertEqual(cached.result_image_path, generated.result_image_path)
             self.assertEqual(cached.path.stat().st_mtime_ns, modified_time)
             self.assertAlmostEqual(cached.duration_seconds, 0.5)
+
+    def test_single_die_glow_is_rendered_and_has_its_own_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            assets = Path(directory) / "d20"
+            self.create_master(assets / "themes" / "classic" / "d20_20.gif")
+            renderer = D20AnimationRenderer(assets, theme="classic")
+
+            plain = renderer.render(20, "#7A2EFF")
+            glowing = renderer.render(20, "#7A2EFF", glow_color="#2ECC71")
+
+            self.assertNotEqual(plain.path, glowing.path)
+            self.assertIn("glow_v4_2ECC71", glowing.path.name)
+            with Image.open(glowing.result_image_path) as result_image:
+                rgba = result_image.convert("RGBA")
+                self.assertGreater(rgba.getchannel("A").getbbox()[2], 0)
 
     def test_selected_theme_resolves_its_asset_and_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -166,7 +181,7 @@ class DiceVisualTests(unittest.TestCase):
                 self.assertEqual(animation.n_frames, 2)
                 self.assertNotIn("loop", animation.info)
             with Image.open(generated.result_image_path) as result_image:
-                self.assertEqual(result_image.size, (432, 160))
+                self.assertEqual(result_image.size, (480, 160))
 
             modified_time = generated.path.stat().st_mtime_ns
             cached = renderer.render_many(
@@ -194,9 +209,29 @@ class DiceVisualTests(unittest.TestCase):
             )
 
             with Image.open(output) as group:
-                self.assertEqual(group.size, (288, 160))
-                self.assertEqual(group.getpixel((72, 80))[:3], (255, 0, 0))
-                self.assertEqual(group.getpixel((216, 80))[:3], (0, 0, 255))
+                self.assertEqual(group.size, (320, 160))
+                self.assertEqual(group.getpixel((80, 80))[:3], (255, 0, 0))
+                self.assertEqual(group.getpixel((240, 80))[:3], (0, 0, 255))
+
+    def test_group_result_glow_is_applied_only_to_selected_dice(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_directory = Path(directory)
+            first = output_directory / "first.png"
+            second = output_directory / "second.png"
+            output = output_directory / "group.png"
+            Image.new("RGBA", (20, 20), (255, 255, 255, 255)).save(first)
+            Image.new("RGBA", (20, 20), (255, 255, 255, 255)).save(second)
+
+            D20AnimationRenderer._save_group_result_image(
+                [first, second], output, (None, "#E74C3C")
+            )
+
+            with Image.open(output) as group:
+                alpha = group.convert("RGBA").getchannel("A")
+                plain_box = alpha.crop((0, 0, 160, 160)).getbbox()
+                glowing_box = alpha.crop((160, 0, 320, 160)).getbbox()
+                self.assertGreater(glowing_box[2] - glowing_box[0], plain_box[2] - plain_box[0])
+                self.assertGreater(glowing_box[3] - glowing_box[1], plain_box[3] - plain_box[1])
 
     def test_glow_uses_the_requested_color_behind_the_die(self) -> None:
         die = Image.new("RGBA", (20, 20))
@@ -215,6 +250,10 @@ class DiceVisualTests(unittest.TestCase):
 
         gif_glow = D20AnimationRenderer._glow_image(die, "#2ECC71", radius=3)
         self.assertLessEqual(set(gif_glow.getchannel("A").getdata()), {0, 255})
+        visible_colors = {
+            pixel[:3] for pixel in gif_glow.getdata() if pixel[3] == 255
+        }
+        self.assertGreater(len(visible_colors), 2)
 
     def test_edge_mask_applies_a_separate_tint(self) -> None:
         source = Image.new("RGBA", (3, 1), (128, 128, 128, 255))
@@ -275,7 +314,7 @@ class DiceVisualTests(unittest.TestCase):
             self.create_master(classic)
             renderer = D20AnimationRenderer(assets, theme="cartoon")
 
-            with self.assertLogs("dice_visuals", level="WARNING"):
+            with self.assertLogs("rpg_bot.dice_visuals", level="WARNING"):
                 resolved = renderer.resolve_master(17)
 
             self.assertEqual(resolved.path, classic)
@@ -306,7 +345,7 @@ class DiceVisualTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             renderer = D20AnimationRenderer(Path(directory) / "d20", theme="cartoon")
 
-            with self.assertLogs("dice_visuals", level="WARNING"):
+            with self.assertLogs("rpg_bot.dice_visuals", level="WARNING"):
                 self.assertIsNone(renderer.render(17, "#7A2EFF"))
             self.assertFalse(renderer.cache_directory.exists())
 

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dice_assets import (
+from rpg_bot.dice_assets import (
     DiceAsset,
     DiceAssetLayout,
     InvalidDiceThemeError,

@@ -4,11 +4,16 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from commands.player import PlayerCommands, dice_color_autocomplete, setup
-from dice import DiceRoll
-from dice_assets import DiceAsset
-from dice_visuals import InvalidDiceColorError, RenderedDiceAnimation
-from models import Character, Stance
+from rpg_bot.commands.player import (
+    PlayerCommands,
+    dice_glow_colors,
+    dice_color_autocomplete,
+    setup,
+)
+from rpg_bot.dice import DiceRoll
+from rpg_bot.dice_assets import DiceAsset
+from rpg_bot.dice_visuals import InvalidDiceColorError, RenderedDiceAnimation
+from rpg_bot.models import Character, Stance
 
 
 class FakeMember:
@@ -27,6 +32,17 @@ def interaction_for(user: FakeMember) -> SimpleNamespace:
 
 
 class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
+    def test_critical_glow_is_assigned_per_die(self) -> None:
+        self.assertEqual(
+            dice_glow_colors(20, (15, 6, 1, 20), "normal"),
+            (None, None, "#E74C3C", "#2ECC71"),
+        )
+        self.assertEqual(
+            dice_glow_colors(20, (1, 17), "advantage"),
+            ("#E74C3C", "#2ECC71"),
+        )
+        self.assertEqual(dice_glow_colors(6, (1,), "normal"), (None,))
+
     async def invoke_roll(self, database: Mock, interaction: SimpleNamespace) -> None:
         command = PlayerCommands(database).roll_command
         await command.callback(command.binding, interaction, "2d6+3")
@@ -61,7 +77,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         cog = bot.add_cog.await_args.args[0]
         self.assertEqual(cog.animation_renderer.theme, "cartoon")
 
-    @patch("checks.discord.Member", FakeMember)
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
     async def test_player_without_character_cannot_roll(self) -> None:
         database = Mock()
         database.get_character.return_value = None
@@ -70,12 +86,12 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke_roll(database, interaction)
 
         interaction.response.send_message.assert_awaited_once_with(
-            "You do not have a character yet. Ask your DM to use `/createcharacter`.",
+            "You do not have a character yet. Use `/character create`.",
             ephemeral=True,
         )
 
-    @patch("checks.discord.Member", FakeMember)
-    @patch("commands.player.roll", return_value=DiceRoll("2d6+3", 2, 6, 3, (2, 5)))
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("2d6+3", 2, 6, 3, (2, 5)))
     async def test_dm_without_character_gets_generic_roll_embed(self, _: Mock) -> None:
         database = Mock()
         database.get_character.return_value = None
@@ -95,8 +111,8 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    @patch("checks.discord.Member", FakeMember)
-    @patch("commands.player.roll", return_value=DiceRoll("2d6+3", 2, 6, 3, (2, 5)))
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("2d6+3", 2, 6, 3, (2, 5)))
     async def test_dm_with_character_keeps_character_roll_embed(self, _: Mock) -> None:
         database = Mock()
         database.get_character.return_value = Character(
@@ -190,9 +206,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([choice.value for choice in choices], ["#7A2EFF"])
         self.assertIn("Royal Purple", choices[0].name)
 
-    @patch("checks.discord.Member", FakeMember)
-    @patch("commands.player.asyncio.sleep", new_callable=AsyncMock)
-    @patch("commands.player.roll", return_value=DiceRoll("1d20+4", 1, 20, 4, (17,)))
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d20+4", 1, 20, 4, (17,)))
     async def test_single_d20_animation_is_replaced_by_result_embed(
         self, _: Mock, sleep: AsyncMock
     ) -> None:
@@ -246,9 +262,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "d20_17_result.png",
         )
 
-    @patch("checks.discord.Member", FakeMember)
-    @patch("commands.player.asyncio.sleep", new_callable=AsyncMock)
-    @patch("commands.player.roll", return_value=DiceRoll("1d6+2", 1, 6, 2, (4,)))
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d6+2", 1, 6, 2, (4,)))
     async def test_single_supported_non_d20_uses_visual_animation(
         self, _: Mock, sleep: AsyncMock
     ) -> None:
@@ -298,9 +314,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "d6_4_result.png",
         )
 
-    @patch("checks.discord.Member", FakeMember)
-    @patch("commands.player.asyncio.sleep", new_callable=AsyncMock)
-    @patch("commands.player.roll", return_value=DiceRoll("3d6+2", 3, 6, 2, (2, 5, 1)))
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("3d6+2", 3, 6, 2, (2, 5, 1)))
     async def test_multiple_dice_use_a_group_animation_and_result_strip(
         self, _: Mock, sleep: AsyncMock
     ) -> None:
@@ -334,7 +350,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             renderer.render_many.return_value = RenderedDiceAnimation(
                 generated_path, 1.25, result_image_path
             )
-            command = PlayerCommands(database, renderer).roll_command
+            sound_manager = Mock()
+            sound_manager.prepare = AsyncMock(return_value="voice-client")
+            command = PlayerCommands(database, renderer, sound_manager).roll_command
 
             await command.callback(command.binding, interaction, "3d6+2")
 
@@ -354,7 +372,12 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "#101010",
             6,
             None,
-            None,
+            glow_colors=(None, None, None),
+        )
+        sound_manager.prepare.assert_awaited_once_with(interaction)
+        sound_manager.play_spin.assert_called_once_with("voice-client", 1.25)
+        sound_manager.play_result.assert_called_once_with(
+            "voice-client", 6, (2, 5, 1), None
         )
         sleep.assert_awaited_once_with(1.2)
         self.assertEqual(interaction.edit_original_response.await_count, 2)
@@ -373,10 +396,10 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "d6_2-5-1_results.png",
         )
 
-    @patch("checks.discord.Member", FakeMember)
-    @patch("commands.player.asyncio.sleep", new_callable=AsyncMock)
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
     @patch(
-        "commands.player.roll",
+        "rpg_bot.commands.player.roll",
         return_value=DiceRoll("1d20+4", 2, 20, 4, (6, 17), kept_result=17),
     )
     async def test_advantage_glows_green_and_highlights_the_kept_die(
@@ -412,7 +435,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             renderer.render_many.return_value = RenderedDiceAnimation(
                 generated_path, 1.25, result_image_path
             )
-            command = PlayerCommands(database, renderer).roll_command
+            sound_manager = Mock()
+            sound_manager.prepare = AsyncMock(return_value="voice-client")
+            command = PlayerCommands(database, renderer, sound_manager).roll_command
 
             await command.callback(
                 command.binding,
@@ -422,6 +447,11 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             )
 
         mocked_roll.assert_called_once_with("1d20+4", mode="advantage")
+        sound_manager.prepare.assert_awaited_once_with(interaction)
+        sound_manager.play_spin.assert_called_once_with("voice-client", 1.25)
+        sound_manager.play_result.assert_called_once_with(
+            "voice-client", 20, (6, 17), 17
+        )
         renderer.render_many.assert_called_once_with(
             (6, 17),
             "#7A2EFF",
@@ -430,7 +460,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "#101010",
             20,
             1,
-            "#2ECC71",
+            glow_colors=("#2ECC71", "#2ECC71"),
         )
         sleep.assert_awaited_once_with(1.2)
         animation_call = interaction.edit_original_response.await_args_list[0]

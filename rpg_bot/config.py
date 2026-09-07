@@ -5,7 +5,7 @@ import os
 
 from dotenv import load_dotenv
 
-from dice_assets import DEFAULT_DICE_THEME, normalize_dice_theme
+from .dice_assets import DEFAULT_DICE_THEME, normalize_dice_theme
 
 
 @dataclass(frozen=True, slots=True)

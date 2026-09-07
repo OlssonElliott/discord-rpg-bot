@@ -4,14 +4,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from checks import dm_only
-from database import (
-    CharacterAlreadyExistsError,
+from ..checks import dm_only
+from ..database import (
     CharacterNotFoundError,
     Database,
     InvalidHitPointsError,
 )
-from models import Character, Stance
+from ..models import Character, Stance
 
 
 def result_embed(title: str, character: Character) -> discord.Embed:
@@ -29,25 +28,6 @@ async def send_error(interaction: discord.Interaction, error: ValueError) -> Non
 class DMCommands(commands.Cog):
     def __init__(self, database: Database) -> None:
         self.database = database
-
-    @app_commands.command(name="createcharacter", description="Create a character for a user.")
-    @app_commands.describe(user="Discord user", name="Character name", max_hp="Maximum HP")
-    @dm_only()
-    async def create_character(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        name: str,
-        max_hp: int,
-    ) -> None:
-        try:
-            character = self.database.create_character(user.id, name, max_hp)
-        except (CharacterAlreadyExistsError, InvalidHitPointsError, ValueError) as error:
-            await send_error(interaction, error)
-            return
-        await interaction.response.send_message(
-            embed=result_embed(f"Created {character.name}", character)
-        )
 
     @app_commands.command(name="damage", description="Damage a user's character.")
     @app_commands.describe(user="Discord user", amount="Amount of damage")
