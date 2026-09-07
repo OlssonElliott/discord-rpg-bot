@@ -49,6 +49,14 @@ class CharacterPortraitStore:
         self.default_root = Path(default_root)
 
     def save(self, character_id: int, content: bytes) -> str:
+        return self._save(f"{character_id}/portrait-{uuid4().hex}.webp", content)
+
+    def save_dm(self, discord_user_id: int, content: bytes) -> str:
+        return self._save(
+            f"dm/{discord_user_id}/portrait-{uuid4().hex}.webp", content
+        )
+
+    def _save(self, key: str, content: bytes) -> str:
         if len(content) > MAX_PORTRAIT_BYTES:
             raise InvalidPortraitError("Portraits may be at most 5 MB.")
         if not content:
@@ -79,7 +87,6 @@ class CharacterPortraitStore:
                 "Discord could not read that image. Use a valid PNG, JPEG, or WebP file."
             ) from error
 
-        key = f"{character_id}/portrait-{uuid4().hex}.webp"
         target = self.root / key
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
@@ -99,7 +106,9 @@ class CharacterPortraitStore:
             path = self.default_root / filename
             return path if path.is_file() else None
         if key is None or not re.fullmatch(
-            r"[1-9][0-9]*/portrait(?:-[0-9a-f]{32})?\.webp", key
+            r"(?:[1-9][0-9]*|dm/[1-9][0-9]*)/"
+            r"portrait(?:-[0-9a-f]{32})?\.webp",
+            key,
         ):
             return None
         path = self.root / Path(key)

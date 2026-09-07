@@ -97,6 +97,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_dm_without_character_gets_generic_roll_embed(self, _: Mock) -> None:
         database = Mock()
         database.get_character.return_value = None
+        database.get_dm_portrait.return_value = None
         interaction = interaction_for(FakeMember(2, ["Dungeon Master"]))
 
         await self.invoke_roll(database, interaction)
@@ -119,6 +120,29 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
                 ("Modifier", "+3"),
                 ("Total", "**10**"),
             ],
+        )
+
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d100", 1, 100, 0, (42,)))
+    async def test_dm_without_character_roll_uses_custom_dm_portrait(self, _: Mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            portrait_path = Path(directory) / "dm" / "2" / "portrait.webp"
+            portrait_path.parent.mkdir(parents=True)
+            portrait_path.write_bytes(b"portrait")
+            store = CharacterPortraitStore(directory)
+            database = Mock()
+            database.get_character.return_value = None
+            database.get_dm_portrait.return_value = "dm/2/portrait.webp"
+            interaction = interaction_for(FakeMember(2, ["Dungeon Master"]))
+            command = PlayerCommands(database, portrait_store=store).roll_command
+
+            await command.callback(command.binding, interaction, "1d100")
+
+        call = interaction.response.send_message.await_args
+        self.assertEqual(call.kwargs["file"].filename, "character_portrait.webp")
+        self.assertEqual(
+            call.kwargs["embed"].thumbnail.url,
+            "attachment://character_portrait.webp",
         )
 
     @patch("rpg_bot.checks.discord.Member", FakeMember)

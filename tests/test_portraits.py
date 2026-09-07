@@ -68,6 +68,19 @@ class CharacterPortraitStoreTests(unittest.TestCase):
                 self.assertEqual(portrait.format, "WEBP")
                 self.assertEqual(portrait.size, (256, 256))
 
+    def test_dm_portrait_is_stored_separately_and_can_be_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = CharacterPortraitStore(directory)
+            output = BytesIO()
+            Image.new("RGB", (100, 140), "purple").save(output, format="PNG")
+
+            key = store.save_dm(42, output.getvalue())
+
+            self.assertRegex(key, r"^dm/42/portrait-[0-9a-f]{32}\.webp$")
+            self.assertIsNotNone(store.path_for(key))
+            store.remove(key)
+            self.assertIsNone(store.path_for(key))
+
     def test_invalid_or_oversized_upload_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = CharacterPortraitStore(directory)

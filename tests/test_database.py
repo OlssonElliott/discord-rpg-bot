@@ -143,6 +143,17 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(reopened.get_dice_color(999), "#7A2EFF")
         self.assertIsNone(reopened.get_character(999))
 
+    def test_dm_portrait_is_a_user_preference_and_can_be_removed(self) -> None:
+        self.assertIsNone(self.database.get_dm_portrait(999))
+
+        key = "dm/999/portrait-0123456789abcdef0123456789abcdef.webp"
+        self.assertEqual(self.database.set_dm_portrait(999, key), key)
+        reopened = Database(self.database_path)
+        self.assertEqual(reopened.get_dm_portrait(999), key)
+
+        self.assertIsNone(reopened.set_dm_portrait(999, None))
+        self.assertIsNone(self.database.get_dm_portrait(999))
+
     def test_invalid_dice_colors_are_rejected_without_changing_preference(self) -> None:
         for color in ("purple", "#12345", "#GG00FF", "#1234567"):
             with self.subTest(color=color):
@@ -205,6 +216,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(
             migrated.get_dice_number_color(42), DEFAULT_DICE_NUMBER_COLOR
         )
+        self.assertIsNone(migrated.get_dm_portrait(42))
 
     def test_existing_character_table_gains_creation_columns(self) -> None:
         old_path = Path(self.temp_directory.name) / "old-characters.db"

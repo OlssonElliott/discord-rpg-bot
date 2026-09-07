@@ -80,7 +80,8 @@ Player commands:
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
 - `/character portrait [image] [remove]` — view the active portrait, attach a file
-  to replace it, or use `remove: True` to remove it directly.
+  to replace it, or use `remove: True` to remove it directly. A DM with no active
+  character manages their personal Dungeon Master portrait instead.
 - `/character removeportrait` — remove the active character's portrait.
 - `/character cancel` — discard the active creation session.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
@@ -122,6 +123,9 @@ button for removing a custom portrait; archiving keeps it with the archived reco
 New characters use the bundled race portrait (and the male/female variant where
 available) until the player uploads one. Removing a custom portrait restores that
 default automatically.
+DMs without an active character can upload a personal portrait through the same
+command. It appears on their DM rolls, and removing it restores the bundled Dungeon
+Master portrait.
 
 Dice body, edge, and number colors are stored separately from characters, so a DM
 without a character can use all three color commands. Discord suggests a small

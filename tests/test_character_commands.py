@@ -3,7 +3,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image
 
@@ -23,6 +23,7 @@ from rpg_bot.commands.character import (
     ConfirmAttributesButton,
     NameView,
     PortraitPreviewView,
+    DMPortraitPreviewView,
     SkillView,
     UnequipCharacterButton,
     attribute_prompt,
@@ -38,6 +39,7 @@ from rpg_bot.portraits import CharacterPortraitStore
 def interaction_for(user_id: int) -> SimpleNamespace:
     return SimpleNamespace(
         user=SimpleNamespace(id=user_id),
+        client=SimpleNamespace(config=SimpleNamespace(dm_role_name="Dungeon Master")),
         response=SimpleNamespace(
             send_message=AsyncMock(),
             edit_message=AsyncMock(),
@@ -207,6 +209,38 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
                 "Restored",
                 interaction.response.send_message.await_args.args[0],
             )
+
+    @patch("rpg_bot.commands.character.is_dm", return_value=True)
+    async def test_dm_without_active_character_can_upload_and_remove_portrait(
+        self, _: Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = CharacterPortraitStore(directory)
+            database = Mock()
+            database.get_character.return_value = None
+            database.get_dm_portrait.return_value = None
+            output = BytesIO()
+            Image.new("RGB", (180, 120), "purple").save(output, format="PNG")
+            attachment = SimpleNamespace(
+                size=len(output.getvalue()),
+                read=AsyncMock(return_value=output.getvalue()),
+            )
+            interaction = interaction_for(7)
+            cog = CharacterCommands(database, store)
+
+            await cog.portrait.callback(cog.portrait.binding, interaction, attachment)
+
+            key = database.set_dm_portrait.call_args.args[1]
+            self.assertRegex(key, r"^dm/7/portrait-[0-9a-f]{32}\.webp$")
+            self.assertTrue((Path(directory) / key).is_file())
+            view = interaction.edit_original_response.await_args.kwargs["view"]
+            self.assertIsInstance(view, DMPortraitPreviewView)
+
+            remove_interaction = interaction_for(7)
+            await view.children[0].callback(remove_interaction)
+
+            self.assertEqual(database.set_dm_portrait.call_args.args, (7, None))
+            self.assertFalse((Path(directory) / key).exists())
 
     async def test_manage_lists_only_selectable_characters(self) -> None:
         first = SimpleNamespace(

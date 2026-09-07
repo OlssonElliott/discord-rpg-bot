@@ -42,7 +42,8 @@ class Database:
                     discord_user_id INTEGER PRIMARY KEY,
                     dice_color TEXT NOT NULL,
                     dice_edge_color TEXT NOT NULL DEFAULT '#303030',
-                    dice_number_color TEXT NOT NULL DEFAULT '#101010'
+                    dice_number_color TEXT NOT NULL DEFAULT '#101010',
+                    dm_portrait_key TEXT
                 )
                 """
             )
@@ -63,6 +64,10 @@ class Database:
                     ALTER TABLE user_preferences
                     ADD COLUMN dice_number_color TEXT NOT NULL DEFAULT '#101010'
                     """
+                )
+            if "dm_portrait_key" not in preference_columns:
+                connection.execute(
+                    "ALTER TABLE user_preferences ADD COLUMN dm_portrait_key TEXT"
                 )
 
     @staticmethod
@@ -444,6 +449,35 @@ class Database:
                 (discord_user_id,),
             ).fetchone()
         return row["dice_color"] if row else DEFAULT_DICE_COLOR
+
+    def get_dm_portrait(self, discord_user_id: int) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT dm_portrait_key
+                FROM user_preferences
+                WHERE discord_user_id = ?
+                """,
+                (discord_user_id,),
+            ).fetchone()
+        return row["dm_portrait_key"] if row else None
+
+    def set_dm_portrait(
+        self, discord_user_id: int, portrait_key: str | None
+    ) -> str | None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO user_preferences (
+                    discord_user_id, dice_color, dm_portrait_key
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(discord_user_id) DO UPDATE
+                SET dm_portrait_key = excluded.dm_portrait_key
+                """,
+                (discord_user_id, DEFAULT_DICE_COLOR, portrait_key),
+            )
+        return portrait_key
 
     def set_dice_color(self, discord_user_id: int, color: str) -> str:
         normalized_color = normalize_dice_color(color)

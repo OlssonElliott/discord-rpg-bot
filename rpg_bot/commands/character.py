@@ -16,10 +16,12 @@ from ..character_creation import (
 )
 from ..character_creation.rules import ATTRIBUTES, STANDARD_ARRAY, apply_modifiers
 from ..character_creation.service import CharacterCreationService
+from ..checks import is_dm
 from ..database import CharacterAlreadyExistsError, CharacterNotFoundError, Database
 from ..models import Character
 from ..portraits import (
     CharacterPortraitStore,
+    DEFAULT_DM_PORTRAIT_KEY,
     InvalidPortraitError,
     MAX_PORTRAIT_BYTES,
     default_portrait_key,
@@ -711,6 +713,38 @@ class PortraitPreviewView(OwnedView):
         )
 
 
+class DMPortraitPreviewView(OwnedView):
+    def __init__(
+        self,
+        cog: CharacterCommands,
+        user_id: int,
+        portrait_key: str | None,
+    ) -> None:
+        super().__init__(cog, user_id)
+        self.portrait_key = portrait_key
+        if portrait_key is None:
+            self.remove.disabled = True
+            self.remove.label = "Using default portrait"
+
+    @discord.ui.button(
+        label="Remove portrait",
+        style=discord.ButtonStyle.danger,
+        emoji="🗑️",
+    )
+    async def remove(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        del button
+        self.cog.database.set_dm_portrait(self.user_id, None)
+        self.cog.portrait_store.remove(self.portrait_key)
+        await interaction.response.edit_message(
+            content="Restored your default Dungeon Master portrait.",
+            embed=None,
+            attachments=[],
+            view=None,
+        )
+
+
 class ConfirmArchiveButton(discord.ui.Button):
     def __init__(
         self, manage_view: CharacterManageView, character: Character
@@ -844,6 +878,118 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             self.portrait_store.remove(character.portrait_key)
         return updated
 
+    async def _dm_portrait(
+        self,
+        interaction: discord.Interaction,
+        image: discord.Attachment | None,
+        remove: bool,
+    ) -> None:
+        user_id = interaction.user.id
+        stored_key = self.database.get_dm_portrait(user_id)
+        current_key = stored_key if isinstance(stored_key, str) else None
+
+        if remove:
+            if image is not None:
+                await interaction.response.send_message(
+                    "Choose either an image to upload or `remove: True`, not both.",
+                    ephemeral=True,
+                )
+                return
+            if current_key is None:
+                await interaction.response.send_message(
+                    "You are already using the default Dungeon Master portrait.",
+                    ephemeral=True,
+                )
+                return
+            self.database.set_dm_portrait(user_id, None)
+            self.portrait_store.remove(current_key)
+            await interaction.response.send_message(
+                "Restored your default Dungeon Master portrait.", ephemeral=True
+            )
+            return
+
+        if image is None:
+            display_key = current_key or DEFAULT_DM_PORTRAIT_KEY
+            portrait_path = self.portrait_store.path_for(display_key)
+            view = DMPortraitPreviewView(self, user_id, current_key)
+            if portrait_path is None:
+                await interaction.response.send_message(
+                    "The stored Dungeon Master portrait is unavailable.",
+                    view=view,
+                    ephemeral=True,
+                )
+                return
+            portrait_filename = f"portrait{portrait_path.suffix.lower()}"
+            portrait_file = discord.File(portrait_path, filename=portrait_filename)
+            embed = discord.Embed(
+                title="Dungeon Master portrait",
+                description=(
+                    "Attach a new image to `/character portrait` to replace it."
+                ),
+                colour=discord.Colour.blurple(),
+            )
+            embed.set_image(url=f"attachment://{portrait_filename}")
+            try:
+                await interaction.response.send_message(
+                    embed=embed,
+                    file=portrait_file,
+                    view=view,
+                    ephemeral=True,
+                )
+            finally:
+                portrait_file.close()
+            return
+
+        if image.size > MAX_PORTRAIT_BYTES:
+            await interaction.response.send_message(
+                "Portraits may be at most 5 MB.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            content = await image.read()
+            key = await asyncio.to_thread(self.portrait_store.save_dm, user_id, content)
+            try:
+                self.database.set_dm_portrait(user_id, key)
+            except Exception:
+                self.portrait_store.remove(key)
+                raise
+            if current_key != key:
+                self.portrait_store.remove(current_key)
+        except InvalidPortraitError as error:
+            await interaction.edit_original_response(content=str(error))
+            return
+        except (discord.HTTPException, OSError):
+            await interaction.edit_original_response(
+                content="The portrait could not be downloaded or saved. Please try again."
+            )
+            return
+
+        portrait_path = self.portrait_store.path_for(key)
+        if portrait_path is None:
+            await interaction.edit_original_response(
+                content="Updated your Dungeon Master portrait."
+            )
+            return
+        portrait_filename = f"portrait{portrait_path.suffix.lower()}"
+        portrait_file = discord.File(portrait_path, filename=portrait_filename)
+        embed = discord.Embed(
+            title="Dungeon Master portrait",
+            description="Portrait updated. It will now appear on your DM rolls.",
+            colour=discord.Colour.blurple(),
+        )
+        embed.set_image(url=f"attachment://{portrait_filename}")
+        try:
+            await interaction.edit_original_response(
+                content=None,
+                embed=embed,
+                attachments=[portrait_file],
+                view=DMPortraitPreviewView(self, user_id, key),
+            )
+        finally:
+            portrait_file.close()
+
     @app_commands.command(name="create", description="Start creating your character.")
     async def create(self, interaction: discord.Interaction) -> None:
         user_id = interaction.user.id
@@ -887,6 +1033,9 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
     ) -> None:
         character = self.database.get_character(interaction.user.id)
         if character is None or character.character_id is None:
+            if is_dm(interaction):
+                await self._dm_portrait(interaction, image, remove)
+                return
             await interaction.response.send_message(
                 "You do not have an active character. Use `/character manage` first.",
                 ephemeral=True,
@@ -1023,6 +1172,9 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
     async def remove_portrait(self, interaction: discord.Interaction) -> None:
         character = self.database.get_character(interaction.user.id)
         if character is None or character.character_id is None:
+            if is_dm(interaction):
+                await self._dm_portrait(interaction, None, True)
+                return
             await interaction.response.send_message(
                 "You do not have an active character. Use `/character manage` first.",
                 ephemeral=True,

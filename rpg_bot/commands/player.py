@@ -87,9 +87,12 @@ def apply_character_identity(
     embed: discord.Embed,
     character: Character | None,
     portrait_store: CharacterPortraitStore,
+    dm_portrait_key: str | None = None,
 ) -> Path | None:
     if character is None:
-        path = portrait_store.path_for(DEFAULT_DM_PORTRAIT_KEY)
+        path = portrait_store.path_for(dm_portrait_key)
+        if path is None:
+            path = portrait_store.path_for(DEFAULT_DM_PORTRAIT_KEY)
         name = "Dungeon Master"
     else:
         path = portrait_store.path_for(character.portrait_key)
@@ -193,7 +196,14 @@ class PlayerCommands(commands.Cog):
             embed.add_field(
                 name="Stance", value=character.stance.display_name, inline=True
             )
-        portrait_path = apply_character_identity(embed, character, self.portrait_store)
+        dm_portrait_key = None
+        if character is None:
+            stored_dm_portrait = self.database.get_dm_portrait(interaction.user.id)
+            if isinstance(stored_dm_portrait, str):
+                dm_portrait_key = stored_dm_portrait
+        portrait_path = apply_character_identity(
+            embed, character, self.portrait_store, dm_portrait_key
+        )
         if (
             result.sides not in SUPPORTED_VISUAL_DICE
             or result.count > MAX_VISUAL_DICE_COUNT
