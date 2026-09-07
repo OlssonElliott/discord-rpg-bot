@@ -14,6 +14,7 @@ from rpg_bot.dice import DiceRoll
 from rpg_bot.dice_assets import DiceAsset
 from rpg_bot.dice_visuals import InvalidDiceColorError, RenderedDiceAnimation
 from rpg_bot.models import Character, Stance
+from rpg_bot.portraits import CharacterPortraitStore
 
 
 class FakeMember:
@@ -86,7 +87,8 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke_roll(database, interaction)
 
         interaction.response.send_message.assert_awaited_once_with(
-            "You do not have a character yet. Use `/character create`.",
+            "You do not have an active character. Use `/character manage` "
+            "to equip one or `/character create` to make one.",
             ephemeral=True,
         )
 
@@ -99,8 +101,16 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
 
         await self.invoke_roll(database, interaction)
 
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        call = interaction.response.send_message.await_args
+        embed = call.kwargs["embed"]
         self.assertEqual(embed.title, "DM Roll")
+        self.assertEqual(
+            embed.thumbnail.url, "attachment://character_portrait.png"
+        )
+        self.assertEqual(
+            call.kwargs["file"].filename,
+            "character_portrait.png",
+        )
         self.assertEqual(
             [(field.name, field.value) for field in embed.fields],
             [
@@ -127,10 +137,69 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke_roll(database, interaction)
 
         embed = interaction.response.send_message.await_args.kwargs["embed"]
-        self.assertEqual(embed.title, "Merlin — Dice Roll")
+        self.assertIsNone(embed.title)
+        self.assertEqual(embed.author.name, "Merlin")
         self.assertEqual(
             [(field.name, field.value) for field in embed.fields[-2:]],
             [("HP", "8/12"), ("Stance", "Prone")],
+        )
+
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d100", 1, 100, 0, (42,)))
+    async def test_portrait_is_attached_to_instant_character_roll(self, _: Mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            portrait_path = Path(directory) / "9" / "portrait.webp"
+            portrait_path.parent.mkdir()
+            portrait_path.write_bytes(b"portrait")
+            store = CharacterPortraitStore(directory)
+            database = Mock()
+            database.get_character.return_value = Character(
+                discord_user_id=3,
+                name="Olof",
+                hp=12,
+                max_hp=12,
+                stance=Stance.STEADY,
+                character_id=9,
+                portrait_key="9/portrait.webp",
+            )
+            interaction = interaction_for(FakeMember(3, ["Player"]))
+            command = PlayerCommands(database, portrait_store=store).roll_command
+
+            await command.callback(command.binding, interaction, "1d100")
+
+        call = interaction.response.send_message.await_args
+        self.assertEqual(call.kwargs["file"].filename, "character_portrait.webp")
+        self.assertEqual(
+            call.kwargs["embed"].thumbnail.url,
+            "attachment://character_portrait.webp",
+        )
+        self.assertEqual(call.kwargs["embed"].author.name, "Olof")
+
+    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d100", 1, 100, 0, (42,)))
+    async def test_default_race_portrait_is_attached_to_roll(self, _: Mock) -> None:
+        database = Mock()
+        database.get_character.return_value = Character(
+            discord_user_id=3,
+            name="Aria",
+            hp=11,
+            max_hp=11,
+            stance=Stance.STEADY,
+            race="Human",
+            gender="Female",
+            character_id=10,
+            portrait_key="default/human_female.png",
+        )
+        interaction = interaction_for(FakeMember(3, ["Player"]))
+        command = PlayerCommands(database).roll_command
+
+        await command.callback(command.binding, interaction, "1d100")
+
+        call = interaction.response.send_message.await_args
+        self.assertEqual(call.kwargs["file"].filename, "character_portrait.png")
+        self.assertEqual(
+            call.kwargs["embed"].thumbnail.url,
+            "attachment://character_portrait.png",
         )
 
     async def test_dice_color_can_be_viewed_or_updated_without_a_character(self) -> None:
@@ -253,7 +322,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         final_call = interaction.edit_original_response.await_args_list[-1]
         self.assertEqual(final_call.kwargs["embed"].fields[3].value, "**21**")
         self.assertEqual(
-            final_call.kwargs["embed"].thumbnail.url,
+            final_call.kwargs["embed"].image.url,
             "attachment://d20_17_result.png",
         )
         self.assertEqual(len(final_call.kwargs["attachments"]), 1)
@@ -306,7 +375,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited_once_with(1.2)
         final_call = interaction.edit_original_response.await_args_list[-1]
         self.assertEqual(
-            final_call.kwargs["embed"].thumbnail.url,
+            final_call.kwargs["embed"].image.url,
             "attachment://d6_4_result.png",
         )
         self.assertEqual(

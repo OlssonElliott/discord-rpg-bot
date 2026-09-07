@@ -211,6 +211,20 @@ class CharacterCreationFlowTests(unittest.TestCase):
         self.assertEqual(flow.valid_choices(), LINEAGES)
         self.assertIsNone(flow.result)
 
+    def test_back_navigation_discards_dependent_choices(self) -> None:
+        flow = CharacterCreationFlow()
+        flow.submit("Fey")
+        flow.submit("Elf")
+        self.assertEqual(flow.current_step, CreationStep.AGE)
+
+        self.assertEqual(flow.go_back(), CreationStep.RACE)
+        self.assertEqual(flow.state.lineage, "Fey")
+        self.assertIsNone(flow.state.race)
+        self.assertEqual(flow.valid_choices(), RACES_BY_LINEAGE["Fey"])
+
+        self.assertEqual(flow.go_back(), CreationStep.LINEAGE)
+        self.assertIsNone(flow.state.lineage)
+
     def test_valid_choices_reflect_race_and_gender_restrictions(self) -> None:
         flow = CharacterCreationFlow()
         flow.submit("Fey")
@@ -234,6 +248,7 @@ class CharacterCreationPersistenceTests(unittest.TestCase):
             self.assertEqual(character.max_hp, result.final_attributes["Vitality"])
             self.assertEqual(character.lineage, "Commonfolk")
             self.assertEqual(character.race, "Human")
+            self.assertEqual(character.portrait_key, "default/human_female.png")
             self.assertEqual(character.attributes, result.final_attributes)
             self.assertEqual(character.skills, {"Melee": 1, "Survival": 1})
             self.assertEqual(database.get_character(42), character)

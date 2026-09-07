@@ -30,3 +30,4 @@ class Character:
     character_id: int | None = None
     is_active: bool = True
     is_archived: bool = False
+    portrait_key: str | None = None

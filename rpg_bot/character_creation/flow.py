@@ -44,6 +44,39 @@ class CharacterCreationFlow:
     def reset(self) -> None:
         self.state = CharacterCreationState()
 
+    def go_back(self) -> CreationStep:
+        """Return to the previous step and discard choices that depend on it."""
+        state = self.state
+        if state.step is CreationStep.LINEAGE:
+            return state.step
+        if state.step is CreationStep.RACE:
+            state.lineage = None
+            state.step = CreationStep.LINEAGE
+        elif state.step is CreationStep.AGE:
+            state.race = None
+            state.step = CreationStep.RACE
+        elif state.step is CreationStep.GENDER:
+            state.age = None
+            state.step = CreationStep.AGE
+        elif state.step is CreationStep.NAME:
+            state.gender = None
+            state.step = CreationStep.GENDER
+        elif state.step is CreationStep.ATTRIBUTES:
+            state.name = None
+            state.step = CreationStep.NAME
+        elif state.step is CreationStep.BONUS_POINTS:
+            state.base_attributes.clear()
+            state.step = CreationStep.ATTRIBUTES
+        elif state.step is CreationStep.SKILLS:
+            state.bonus_points.clear()
+            state.final_attributes.clear()
+            state.step = CreationStep.BONUS_POINTS
+        else:
+            state.skills = None
+            state.result = None
+            state.step = CreationStep.SKILLS
+        return state.step
+
     def valid_choices(self) -> tuple[str, ...]:
         if self.current_step is CreationStep.LINEAGE:
             return LINEAGES

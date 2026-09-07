@@ -2,6 +2,7 @@
 
 from ..database import Database
 from ..models import Character
+from ..portraits import default_portrait_key
 from .models import CharacterCreationResult
 
 
@@ -25,4 +26,5 @@ class CharacterCreationService:
             gender=result.gender,
             attributes=result.final_attributes,
             skills=result.skill_ranks,
+            portrait_key=default_portrait_key(result.race, result.gender),
         )
