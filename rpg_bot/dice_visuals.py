@@ -1,16 +1,21 @@
 """Tint and cache neutral dice GIFs without changing their animation."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import logging
+import os
 from pathlib import Path
 import re
+import shutil
 import threading
+import time
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps, ImageSequence
 
 from .dice_assets import (
     DEFAULT_DICE_THEME,
+    DICE_CACHE_VERSION,
     DiceAsset,
     DiceAssetLayout,
     normalize_dice_theme,
@@ -28,7 +33,11 @@ RESULT_IMAGE_SIZE = 160
 GROUP_RESULT_TILE_SIZE = 160
 MULTI_ANIMATION_MAX_WIDTH = 640
 DICE_GROUP_CACHE_VERSION = "v13"
+CACHE_RETENTION_DAYS = 90
+CACHE_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
+CACHE_USAGE_WRITE_INTERVAL_SECONDS = 24 * 60 * 60
 DISCORD_DARK_MATTE = (43, 45, 49)
+_CACHE_USAGE_FILENAME = ".last_used"
 _HEX_COLOR = re.compile(r"#?(?P<rgb>[0-9a-fA-F]{6})")
 
 
@@ -44,6 +53,42 @@ def normalize_dice_color(color: str) -> str:
             "Use a six-digit hexadecimal color such as `#7A2EFF`."
         )
     return f"#{match.group('rgb').upper()}"
+
+
+@lru_cache(maxsize=1)
+def _neutral_mask_lut() -> tuple[int, ...]:
+    """Map near-neutral chroma values to an opaque selection mask."""
+    return tuple(255 if difference <= 18 else 0 for difference in range(256))
+
+
+@lru_cache(maxsize=1)
+def _opaque_mask_lut() -> tuple[int, ...]:
+    """Select every pixel that was visible in the source frame."""
+    return tuple(0 if alpha == 0 else 255 for alpha in range(256))
+
+
+@lru_cache(maxsize=256)
+def _tint_luts(
+    color: str, preserve_body_color: bool
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """Build the same shading curves as the original pixel renderer once per color."""
+    target = tuple(int(color[index : index + 2], 16) for index in (1, 3, 5))
+    channels: list[tuple[int, ...]] = []
+    for target_channel in target:
+        values: list[int] = []
+        for luminance in range(256):
+            if preserve_body_color:
+                shade = 0.25 + 0.75 * luminance / 255
+                highlight = round(luminance * 0.08)
+                value = min(255, round(target_channel * shade + highlight))
+            elif luminance <= 128:
+                value = round(target_channel * luminance / 128)
+            else:
+                amount = (luminance - 128) / 127
+                value = round(target_channel + (255 - target_channel) * amount)
+            values.append(value)
+        channels.append(tuple(values))
+    return channels[0], channels[1], channels[2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +120,9 @@ class D20AnimationRenderer:
         self.master_directory = self.layout.theme_directory(20, self.theme)
         self.cache_directory = self.assets_directory / "cache"
         self._generation_lock = threading.Lock()
+        self._duration_cache: dict[Path, tuple[int, int, float]] = {}
         self._logged_warnings: set[str] = set()
+        self._last_cache_cleanup = 0.0
 
     def resolve_master(
         self, natural_result: int, sides: int = 20
@@ -86,7 +133,6 @@ class D20AnimationRenderer:
             raise ValueError(
                 f"A natural d{sides} result must be between 1 and {sides}."
             )
-
         candidates = self.layout.master_candidates(sides, natural_result, self.theme)
         selected = candidates[0]
         if selected.path.is_file():
@@ -144,6 +190,115 @@ class D20AnimationRenderer:
         )
         return None
 
+    def cleanup_expired_cache(self, now: float | None = None) -> int:
+        """Remove color-set caches that have not been used for 90 days.
+
+        Existing cache directories without a usage marker receive a fresh retention
+        period on the first cleanup after this feature is deployed.
+        """
+        current_time = time.time() if now is None else now
+        cutoff = current_time - CACHE_RETENTION_DAYS * 24 * 60 * 60
+        removed = 0
+        with self._generation_lock:
+            for sides in SUPPORTED_VISUAL_DICE:
+                cache_root = (
+                    self.layout.die_directory(sides)
+                    / "cache"
+                    / DICE_CACHE_VERSION
+                )
+                if not cache_root.is_dir():
+                    continue
+                resolved_root = cache_root.resolve()
+                for color_directory in cache_root.glob("*/*/*/*"):
+                    if not color_directory.is_dir():
+                        continue
+                    resolved_directory = color_directory.resolve()
+                    if not resolved_directory.is_relative_to(resolved_root):
+                        continue
+                    marker = color_directory / _CACHE_USAGE_FILENAME
+                    if not marker.exists():
+                        self._write_usage_marker(marker, current_time)
+                        continue
+                    try:
+                        last_used = marker.stat().st_mtime
+                    except OSError:
+                        continue
+                    if last_used >= cutoff:
+                        continue
+                    try:
+                        shutil.rmtree(color_directory)
+                    except OSError:
+                        LOGGER.warning(
+                            "Could not remove expired dice cache %s",
+                            color_directory,
+                            exc_info=True,
+                        )
+                        continue
+                    removed += 1
+                    for cached_path in tuple(self._duration_cache):
+                        if cached_path.is_relative_to(color_directory):
+                            self._duration_cache.pop(cached_path, None)
+        return removed
+
+    def _maybe_cleanup_cache(self) -> None:
+        current_time = time.time()
+        if (
+            current_time - self._last_cache_cleanup
+            < CACHE_CLEANUP_INTERVAL_SECONDS
+        ):
+            return
+        self.cleanup_expired_cache(current_time)
+        self._last_cache_cleanup = current_time
+
+    def _mark_cache_used(self, cache_path: Path) -> None:
+        color_directory = self._color_cache_directory(cache_path)
+        if color_directory is None:
+            return
+        marker = color_directory / _CACHE_USAGE_FILENAME
+        current_time = time.time()
+        try:
+            if (
+                marker.is_file()
+                and current_time - marker.stat().st_mtime
+                < CACHE_USAGE_WRITE_INTERVAL_SECONDS
+            ):
+                return
+        except OSError:
+            pass
+        self._write_usage_marker(marker, current_time)
+
+    def _color_cache_directory(self, cache_path: Path) -> Path | None:
+        cache_root = next(
+            (
+                parent
+                for parent in cache_path.parents
+                if parent.name == DICE_CACHE_VERSION
+                and parent.parent.name == "cache"
+            ),
+            None,
+        )
+        if cache_root is None:
+            return None
+        try:
+            relative = cache_path.relative_to(cache_root)
+        except ValueError:
+            return None
+        if len(relative.parts) < 5:
+            return None
+        color_directory = cache_root.joinpath(*relative.parts[:4])
+        if not color_directory.resolve().is_relative_to(cache_root.resolve()):
+            return None
+        return color_directory
+
+    @staticmethod
+    def _write_usage_marker(marker: Path, timestamp: float) -> None:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch(exist_ok=True)
+            os.utime(marker, (timestamp, timestamp))
+        except OSError:
+            LOGGER.warning("Could not update dice cache usage marker %s", marker)
+
     def render(
         self,
         natural_result: int,
@@ -161,6 +316,7 @@ class D20AnimationRenderer:
             raise ValueError(
                 f"A natural d{sides} result must be between 1 and {sides}."
             )
+        self._maybe_cleanup_cache()
 
         normalized_color = normalize_dice_color(color)
         normalized_edge_color = normalize_dice_color(edge_color)
@@ -219,11 +375,12 @@ class D20AnimationRenderer:
             ):
                 duration = self._animation_duration(cache_path)
                 if duration is not None:
+                    self._mark_cache_used(cache_path)
                     return RenderedDiceAnimation(
                         cache_path, duration, result_image_path
                     )
 
-            return self._generate(
+            animation = self._generate(
                 master_path,
                 cache_path,
                 normalized_color,
@@ -234,6 +391,9 @@ class D20AnimationRenderer:
                 result_image_path,
                 normalized_glow_color,
             )
+            if animation is not None:
+                self._mark_cache_used(animation.path)
+            return animation
 
     def render_many(
         self,
@@ -334,10 +494,11 @@ class D20AnimationRenderer:
             ):
                 duration = self._animation_duration(cache_path)
                 if duration is not None:
+                    self._mark_cache_used(cache_path)
                     return RenderedDiceAnimation(
                         cache_path, duration, result_image_path
                     )
-            return self._generate_group(
+            animation = self._generate_group(
                 natural_results,
                 animations,
                 cache_path,
@@ -345,6 +506,9 @@ class D20AnimationRenderer:
                 primary_index,
                 normalized_glow_colors,
             )
+            if animation is not None:
+                self._mark_cache_used(animation.path)
+            return animation
 
     def _warn_once(self, key: str, message: str, *args: object) -> None:
         if key in self._logged_warnings:
@@ -728,18 +892,27 @@ class D20AnimationRenderer:
         background or decoration in a master asset is not accidentally recolored.
         Neutral master assets should use a transparent background.
         """
-        face_tinted = D20AnimationRenderer._tint_neutral(
-            frame, color, preserve_body_color=True
+        luminance, neutral_mask = D20AnimationRenderer._neutral_components(frame)
+        face_tinted = D20AnimationRenderer._tint_from_luminance(
+            frame,
+            luminance,
+            neutral_mask,
+            color,
+            preserve_body_color=True,
         )
         tinted = face_tinted
         if edge_color is not None and edge_mask is not None:
-            edge_tinted = D20AnimationRenderer._tint_neutral(frame, edge_color)
+            edge_tinted = D20AnimationRenderer._tint_from_luminance(
+                frame, luminance, neutral_mask, edge_color
+            )
             if edge_mask.size != frame.size:
                 edge_mask = edge_mask.resize(frame.size, Image.Resampling.BILINEAR)
             tinted = Image.composite(edge_tinted, tinted, edge_mask.convert("L"))
 
         if number_color is not None and number_mask is not None:
-            number_tinted = D20AnimationRenderer._tint_neutral(frame, number_color)
+            number_tinted = D20AnimationRenderer._tint_from_luminance(
+                frame, luminance, neutral_mask, number_color
+            )
             if number_mask.size != frame.size:
                 number_mask = number_mask.resize(frame.size, Image.Resampling.BILINEAR)
             tinted = Image.composite(
@@ -753,36 +926,43 @@ class D20AnimationRenderer:
         color: str,
         preserve_body_color: bool = False,
     ) -> Image.Image:
-        target = tuple(int(color[index : index + 2], 16) for index in (1, 3, 5))
-        tinted_pixels: list[tuple[int, int, int, int]] = []
+        luminance, neutral_mask = D20AnimationRenderer._neutral_components(frame)
+        return D20AnimationRenderer._tint_from_luminance(
+            frame,
+            luminance,
+            neutral_mask,
+            color,
+            preserve_body_color,
+        )
 
-        for red, green, blue, alpha in frame.getdata():
-            if alpha == 0 or max(red, green, blue) - min(red, green, blue) > 18:
-                tinted_pixels.append((red, green, blue, alpha))
-                continue
+    @staticmethod
+    def _neutral_components(frame: Image.Image) -> tuple[Image.Image, Image.Image]:
+        """Calculate reusable luminance and neutral-pixel masks in Pillow's C core."""
+        red, green, blue, alpha = frame.split()
+        brightest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+        darkest = ImageChops.darker(ImageChops.darker(red, green), blue)
+        chroma = ImageChops.subtract(brightest, darkest)
+        neutral_mask = chroma.point(_neutral_mask_lut())
+        opaque_mask = alpha.point(_opaque_mask_lut())
+        neutral_mask = ImageChops.multiply(neutral_mask, opaque_mask)
+        return frame.convert("RGB").convert("L"), neutral_mask
 
-            luminance = round(0.2126 * red + 0.7152 * green + 0.0722 * blue)
-            if preserve_body_color:
-                # Treat the brightest neutral surface as the chosen body color,
-                # with only a restrained neutral highlight. Mapping it to pure
-                # white makes well-lit masters appear white instead of colored.
-                shade = 0.25 + 0.75 * luminance / 255
-                highlight = round(luminance * 0.08)
-                channels = tuple(
-                    min(255, round(channel * shade + highlight))
-                    for channel in target
-                )
-            elif luminance <= 128:
-                channels = tuple(round(channel * luminance / 128) for channel in target)
-            else:
-                amount = (luminance - 128) / 127
-                channels = tuple(
-                    round(channel + (255 - channel) * amount) for channel in target
-                )
-            tinted_pixels.append((*channels, alpha))
-
-        tinted = Image.new("RGBA", frame.size)
-        tinted.putdata(tinted_pixels)
+    @staticmethod
+    def _tint_from_luminance(
+        frame: Image.Image,
+        luminance: Image.Image,
+        neutral_mask: Image.Image,
+        color: str,
+        preserve_body_color: bool = False,
+    ) -> Image.Image:
+        """Tint neutral pixels through channel lookup tables without Python pixel loops."""
+        channel_luts = _tint_luts(color, preserve_body_color)
+        red = luminance.point(channel_luts[0])
+        green = luminance.point(channel_luts[1])
+        blue = luminance.point(channel_luts[2])
+        recolored = Image.merge("RGBA", (red, green, blue, frame.getchannel("A")))
+        tinted = Image.composite(recolored, frame, neutral_mask)
+        tinted.info.clear()
         return tinted
 
     @staticmethod
@@ -801,15 +981,24 @@ class D20AnimationRenderer:
             return []
         return masks
 
-    @staticmethod
-    def _animation_duration(path: Path) -> float | None:
+    def _animation_duration(self, path: Path) -> float | None:
         try:
+            stat = path.stat()
+            cached = self._duration_cache.get(path)
+            if cached is not None and cached[:2] == (stat.st_mtime_ns, stat.st_size):
+                return cached[2]
             with Image.open(path) as image:
                 default_duration = int(image.info.get("duration", 100) or 100)
                 duration_ms = sum(
                     int(frame.info.get("duration", default_duration) or 100)
                     for frame in ImageSequence.Iterator(image)
                 )
-            return duration_ms / 1000
+            duration_seconds = duration_ms / 1000
+            self._duration_cache[path] = (
+                stat.st_mtime_ns,
+                stat.st_size,
+                duration_seconds,
+            )
+            return duration_seconds
         except (OSError, ValueError):
             return None
