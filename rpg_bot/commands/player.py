@@ -432,7 +432,7 @@ class PlayerCommands(commands.Cog):
             description=f"Your dice color is `{normalized_color}`.",
             colour=discord.Colour(int(normalized_color[1:], 16)),
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="diceedgecolor", description="View or change your dice edge color."
@@ -460,7 +460,7 @@ class PlayerCommands(commands.Cog):
             description=f"Your dice edge color is `{normalized_color}`.",
             colour=discord.Colour(int(normalized_color[1:], 16)),
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="dicenumbercolor", description="View or change your dice number color."
@@ -490,7 +490,7 @@ class PlayerCommands(commands.Cog):
             description=f"Your dice number color is `{normalized_color}`.",
             colour=discord.Colour(int(normalized_color[1:], 16)),
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="status", description="Show your character's current status.")
     async def status(self, interaction: discord.Interaction) -> None:

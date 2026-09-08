@@ -166,6 +166,9 @@ separated by theme, body, edge, and number color, for example
 `assets/dice/d20/cache/v2/cartoon/7A2EFF/FFD700/F5F5F5/d20_17.gif`. A newer master or
 mask automatically invalidates its generated cache. The settled frame is also
 cached as a transparent 160x160 PNG and displayed as the result embed's thumbnail.
+Each complete body/edge/number color cache is retained while it is used. A cache
+that has not been used for 90 days is removed by the bot's daily cleanup check;
+existing untracked caches receive a fresh 90-day period after upgrading.
 Rolls containing two to ten matching dice, such as `3d6`, reuse those tinted GIFs
 in one synchronized side-by-side animation. The final embed displays every result
 at the same size in one horizontal row and preserves the original roll order.
