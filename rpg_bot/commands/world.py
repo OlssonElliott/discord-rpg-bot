@@ -62,6 +62,31 @@ class WorldCommands(commands.Cog):
     async def _error(self, interaction: discord.Interaction, error: ValueError) -> None:
         await interaction.response.send_message(str(error), ephemeral=True)
 
+    async def loose_item_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Suggest loose items in the active character's current room."""
+        try:
+            room = self.world.get_character_room(
+                self._active_character_id(interaction.user.id)
+            )
+        except (CharacterNotFoundError, WorldError):
+            return []
+        if room is None:
+            return []
+
+        query = current.casefold().strip()
+        return [
+            app_commands.Choice(
+                name=f"{stack.item.name} ({stack.quantity} here)"[:100],
+                value=stack.item.id,
+            )
+            for stack in room.loose_items
+            if not query
+            or query in stack.item.name.casefold()
+            or query in stack.item.id.casefold()
+        ][:25]
+
     @app_commands.command(name="room", description="Show your current room.")
     async def room(self, interaction: discord.Interaction) -> None:
         try:
@@ -89,6 +114,7 @@ class WorldCommands(commands.Cog):
 
     @app_commands.command(name="take", description="Take a loose item from the room.")
     @app_commands.describe(item="Item name or ID", quantity="Number to take")
+    @app_commands.autocomplete(item=loose_item_autocomplete)
     async def take(
         self, interaction: discord.Interaction, item: str, quantity: int = 1
     ) -> None:
