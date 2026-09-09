@@ -33,7 +33,7 @@ class InventoryService:
             raise InventoryError("Quantity must be greater than zero.")
         if not template.stackable and quantity != 1:
             raise InventoryError("Only consumables can be granted as a stack.")
-        inventory = self.database.get_inventory(character.character_id)
+        inventory = self.database.get_character_inventory(character.character_id)
         added_weight = template.weight * quantity
         if inventory.current_storage(self.catalog) + added_weight > inventory.total_storage:
             raise InventoryError("There is not enough regular inventory space.")
@@ -199,4 +199,4 @@ class InventoryService:
     def _inventory(self, character: Character) -> InventoryState:
         if character.character_id is None:
             raise InventoryError("The character has not been saved.")
-        return self.database.get_inventory(character.character_id)
+        return self.database.get_character_inventory(character.character_id)

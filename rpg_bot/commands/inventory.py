@@ -215,7 +215,7 @@ class InventoryView(InventoryOwnedView):
         except (InventoryError, ValueError) as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
-        inventory = self.service.database.get_inventory(self.character_id)
+        inventory = self.service.database.get_character_inventory(self.character_id)
         selected = (
             self.selected_id
             if any(item.instance_id == self.selected_id for item in inventory.items)
@@ -244,7 +244,7 @@ class InventoryView(InventoryOwnedView):
             await interaction.response.send_message("Select an item first.", ephemeral=True)
             return
         character = self.character()
-        inventory = self.service.database.get_inventory(self.character_id)
+        inventory = self.service.database.get_character_inventory(self.character_id)
         containers = [
             item
             for item in inventory.items
@@ -379,7 +379,7 @@ async def show_inventory(
     page: int = 0,
     edit: bool = False,
 ) -> None:
-    inventory = service.database.get_inventory(character.character_id)
+    inventory = service.database.get_character_inventory(character.character_id)
     embed = inventory_embed(character, inventory, service.catalog, selected_id)
     view = InventoryView(
         service,

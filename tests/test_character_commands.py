@@ -124,7 +124,7 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         database = Mock()
         database.get_character.return_value = character
-        database.get_inventory.return_value = InventoryState(3, 20, (), {})
+        database.get_character_inventory.return_value = InventoryState(3, 20, (), {})
         cog = CharacterCommands(database)
         interaction = interaction_for(7)
 
@@ -152,7 +152,7 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         published_message = SimpleNamespace(id=900, edit=AsyncMock())
         database = Mock()
         database.get_character_by_id.return_value = character
-        database.get_inventory.return_value = InventoryState(3, 20, (), {})
+        database.get_character_inventory.return_value = InventoryState(3, 20, (), {})
         database.get_character_sheet_message.side_effect = (None, 900)
         cog = CharacterCommands(database)
 

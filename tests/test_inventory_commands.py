@@ -56,7 +56,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         dagger_id = self.service.grant(self.character, "iron_dagger")
         self.service.move_to_container(self.character, dagger_id, backpack_id)
         self.service.equip(self.character, backpack_id)
-        inventory = self.database.get_inventory(self.character.character_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
 
         embed = inventory_embed(self.character, inventory, self.catalog)
 
@@ -83,7 +83,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             3,
         )
 
-        inventory = self.database.get_inventory(self.character.character_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
         self.assertEqual(inventory.items[0].quantity, 3)
         self.assertIn("Health Potion ×3", interaction.response.send_message.await_args.args[0])
         self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])

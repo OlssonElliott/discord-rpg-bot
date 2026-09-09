@@ -32,7 +32,7 @@ class InventoryTests(unittest.TestCase):
         first_id = self.service.grant(self.character, "health_potion", 2)
         second_id = self.service.grant(self.character, "health_potion", 3)
 
-        inventory = self.database.get_inventory(self.character.character_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
 
         self.assertEqual(first_id, second_id)
         self.assertEqual(len(inventory.items), 1)
@@ -40,11 +40,11 @@ class InventoryTests(unittest.TestCase):
 
     def test_equipment_counts_as_weight_but_not_regular_storage(self) -> None:
         axe_id = self.service.grant(self.character, "great_axe")
-        before = self.database.get_inventory(self.character.character_id)
+        before = self.database.get_character_inventory(self.character.character_id)
         self.assertEqual(before.current_storage(self.catalog), 4)
 
         slot = self.service.equip(self.character, axe_id)
-        equipped = self.database.get_inventory(self.character.character_id)
+        equipped = self.database.get_character_inventory(self.character.character_id)
 
         self.assertEqual(slot, EquipmentSlot.MAIN_HAND)
         self.assertEqual(equipped.current_storage(self.catalog), 0)
@@ -58,7 +58,7 @@ class InventoryTests(unittest.TestCase):
         self.service.move_to_container(self.character, satchel_id, backpack_id)
         self.service.move_to_container(self.character, dagger_id, satchel_id)
         self.service.equip(self.character, backpack_id)
-        inventory = self.database.get_inventory(self.character.character_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
 
         self.assertEqual(inventory.container_storage(satchel_id, self.catalog), 1)
         self.assertEqual(inventory.container_storage(backpack_id, self.catalog), 2)
@@ -81,7 +81,7 @@ class InventoryTests(unittest.TestCase):
         self.database.damage(7, 10)
 
         updated = self.service.use(self.database.get_character(7), potion_id)
-        inventory = self.database.get_inventory(self.character.character_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
 
         self.assertEqual(updated.hp, 10)
         self.assertEqual(inventory.item(potion_id).quantity, 1)
@@ -89,4 +89,3 @@ class InventoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

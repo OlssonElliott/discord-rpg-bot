@@ -73,6 +73,28 @@ about an hour to show global command changes.
 Stop the process with Ctrl+C. Character data is stored in `rpg_bot.db` by default
 and survives restarts. The database and `.env` are ignored by Git.
 
+## Run the DM location editor
+
+The local dashboard uses the same SQLite database and deterministic world service
+as Discord. Start its API from the repository root:
+
+```powershell
+python -m rpg_bot.dashboard_server --database rpg_bot.db
+```
+
+In a second terminal, start the React dashboard:
+
+```powershell
+Set-Location dashboard
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. Create or select an Area, add locations, drag them
+into place, and connect them by dragging from one node handle to another. Node
+positions are editor-only metadata; arrows are persisted directional gameplay
+exits. The API binds to localhost and is intended for the DM's local machine.
+
 ## Commands
 
 Player commands:
@@ -331,7 +353,12 @@ rpg_bot/commands/dm.py          DM character and item-management commands
 rpg_bot/commands/character.py   /character creation command group and user sessions
 rpg_bot/commands/inventory.py   private interactive inventory browser
 rpg_bot/character_creation/     UI-independent rules, state machine, and persistence service
+rpg_bot/world.py                area, room, entity, inventory, and graph domain types
+rpg_bot/world_service.py        deterministic world and editor application service
 assets/items/items.json         reusable item template catalog
+rpg_bot/dashboard_api.py        framework-neutral DM dashboard JSON API
+rpg_bot/dashboard_server.py     localhost API server for the React dashboard
+dashboard/                      React Flow visual location editor
 docs/END_GOAL.md                long-term product vision
 scripts/generate_d20_assets.py  offline multi-die Blender orchestration and GIF encoding
 scripts/render_d20_blender.py   procedural dice scenes and deterministic PNG rendering

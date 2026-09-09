@@ -31,3 +31,4 @@ class Character:
     is_active: bool = True
     is_archived: bool = False
     portrait_key: str | None = None
+    current_room_id: str | None = None

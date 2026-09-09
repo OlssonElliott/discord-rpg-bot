@@ -980,7 +980,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         portrait_path = self.portrait_store.path_for(character.portrait_key)
         embed = character_sheet_embed(character)
         if character.character_id is not None:
-            inventory = self.database.get_inventory(character.character_id)
+            inventory = self.database.get_character_inventory(character.character_id)
             equipment = []
             for slot in ("main_hand", "off_hand", "armor", "container"):
                 instance_id = next(
