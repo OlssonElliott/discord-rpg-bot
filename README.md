@@ -57,40 +57,30 @@ Create a role named exactly `DM` in **Server Settings > Roles**, then assign it 
 each Dungeon Master. To use another name, change `DM_ROLE_NAME` in `.env`. Role
 matching is case-sensitive.
 
-## Run the bot
+## Run the game
 
-With the virtual environment active:
+After installing both Python and dashboard dependencies, start the complete local
+development setup from the repository root:
 
 ```powershell
-python -m rpg_bot
+npm --prefix dashboard install
+npm run dev
 ```
 
+This one command starts the Discord bot, dashboard API, and web dashboard in the
+same terminal, then opens `http://localhost:3000`. Stop all processes with Ctrl+C.
 The console logs successful login and command synchronization. With
 `DISCORD_GUILD_ID` configured, commands are copied and synchronized to that server
 at startup. Without it, commands are registered globally; Discord may take up to
 about an hour to show global command changes.
 
-Stop the process with Ctrl+C. Character data is stored in `rpg_bot.db` by default
-and survives restarts. The database and `.env` are ignored by Git.
+Character data is stored in `rpg_bot.db` by default and survives restarts. The
+database and `.env` are ignored by Git.
 
 ## Run the DM location editor
 
 The local dashboard uses the same SQLite database and deterministic world service
-as Discord. Start its API from the repository root:
-
-```powershell
-python -m rpg_bot.dashboard_server --database rpg_bot.db
-```
-
-In a second terminal, start the React dashboard:
-
-```powershell
-Set-Location dashboard
-npm install
-npm run dev
-```
-
-Open `http://localhost:3000`. Create or select an Area, add locations, drag them
+as Discord and is included in `npm run dev`. Create or select an Area, add locations, drag them
 into place, and connect them by dragging from one node handle to another. Node
 positions are editor-only metadata; arrows are persisted directional gameplay
 exits. The API binds to localhost and is intended for the DM's local machine.
