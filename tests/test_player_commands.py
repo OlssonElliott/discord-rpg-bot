@@ -234,6 +234,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         view_interaction = interaction_for(FakeMember(2, ["Dungeon Master"]))
         await self.invoke_dice_color(database, view_interaction, None)
         view_embed = view_interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertTrue(
+            view_interaction.response.send_message.await_args.kwargs["ephemeral"]
+        )
         self.assertEqual(view_embed.title, "Your Dice Color")
         self.assertEqual(view_embed.description, "Your dice color is `#C89B3C`.")
 
@@ -241,6 +244,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke_dice_color(database, update_interaction, "7a2eff")
         database.set_dice_color.assert_called_once_with(3, "7a2eff")
         update_embed = update_interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertTrue(
+            update_interaction.response.send_message.await_args.kwargs["ephemeral"]
+        )
         self.assertEqual(update_embed.title, "Dice Color Updated")
         self.assertEqual(update_embed.colour.value, 0x7A2EFF)
 
@@ -265,6 +271,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         view_interaction = interaction_for(FakeMember(2, ["Dungeon Master"]))
         await self.invoke_dice_edge_color(database, view_interaction, None)
         view_embed = view_interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertTrue(
+            view_interaction.response.send_message.await_args.kwargs["ephemeral"]
+        )
         self.assertEqual(view_embed.title, "Your Dice Edge Color")
         self.assertEqual(view_embed.description, "Your dice edge color is `#303030`.")
 
@@ -272,6 +281,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke_dice_edge_color(database, update_interaction, "ffd700")
         database.set_dice_edge_color.assert_called_once_with(3, "ffd700")
         update_embed = update_interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertTrue(
+            update_interaction.response.send_message.await_args.kwargs["ephemeral"]
+        )
         self.assertEqual(update_embed.title, "Dice Edge Color Updated")
         self.assertEqual(update_embed.colour.value, 0xFFD700)
 
@@ -283,6 +295,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         view_interaction = interaction_for(FakeMember(2, ["Dungeon Master"]))
         await self.invoke_dice_number_color(database, view_interaction, None)
         view_embed = view_interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertTrue(
+            view_interaction.response.send_message.await_args.kwargs["ephemeral"]
+        )
         self.assertEqual(view_embed.title, "Your Dice Number Color")
         self.assertEqual(view_embed.description, "Your dice number color is `#101010`.")
 
@@ -290,6 +305,9 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.invoke_dice_number_color(database, update_interaction, "f5f5f5")
         database.set_dice_number_color.assert_called_once_with(3, "f5f5f5")
         update_embed = update_interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertTrue(
+            update_interaction.response.send_message.await_args.kwargs["ephemeral"]
+        )
         self.assertEqual(update_embed.title, "Dice Number Color Updated")
         self.assertEqual(update_embed.colour.value, 0xF5F5F5)
 

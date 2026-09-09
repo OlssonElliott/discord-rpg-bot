@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -84,6 +85,48 @@ class DiceVisualTests(unittest.TestCase):
             self.assertEqual(cached.result_image_path, generated.result_image_path)
             self.assertEqual(cached.path.stat().st_mtime_ns, modified_time)
             self.assertAlmostEqual(cached.duration_seconds, 0.5)
+
+    def test_unused_color_set_is_removed_after_ninety_days(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            assets = Path(directory) / "d20"
+            self.create_master(assets / "themes" / "classic" / "d20_17.gif")
+            renderer = D20AnimationRenderer(assets, theme="classic")
+
+            generated = renderer.render(17, "#7A2EFF")
+            color_directory = generated.path.parent
+            marker = color_directory / ".last_used"
+            self.assertTrue(marker.is_file())
+
+            removed = renderer.cleanup_expired_cache(
+                marker.stat().st_mtime + 91 * 24 * 60 * 60
+            )
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(color_directory.exists())
+
+    def test_existing_untracked_cache_gets_a_fresh_retention_period(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            assets = Path(directory) / "d20"
+            color_directory = (
+                assets
+                / "cache"
+                / "v2"
+                / "classic"
+                / "7A2EFF"
+                / "303030"
+                / "101010"
+            )
+            color_directory.mkdir(parents=True)
+            (color_directory / "d20_17.gif").write_bytes(b"existing")
+            renderer = D20AnimationRenderer(assets, theme="classic")
+            current_time = time.time()
+
+            removed = renderer.cleanup_expired_cache(current_time)
+
+            marker = color_directory / ".last_used"
+            self.assertEqual(removed, 0)
+            self.assertTrue(marker.is_file())
+            self.assertAlmostEqual(marker.stat().st_mtime, current_time, delta=1)
 
     def test_single_die_glow_is_rendered_and_has_its_own_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

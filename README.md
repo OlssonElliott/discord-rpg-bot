@@ -102,8 +102,8 @@ Player commands:
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
 - `/character sheet` — privately open the active character's full sheet, including
-  attribute scores and roll modifiers; **Publish here** creates or updates its
-  persistent sheet in the current channel.
+  attribute scores and roll modifiers; use **Publish here** to create or update the
+  character's persistent sheet in whichever channel the command was used.
 - `/character portrait [image] [remove]` — view the active portrait, attach a file
   to replace it, or use `remove: True` to remove it directly. A DM with no active
   character manages their personal Dungeon Master portrait instead.
@@ -145,10 +145,13 @@ incomplete creation sessions are held in memory and need to be restarted after a
 restart.
 
 Inventory ownership and equipment are stored in SQLite, while reusable item
-templates live in `assets/items/items.json`. Equipped items count toward carried
-weight but not regular storage. Consumables stack by quantity, containers can hold
-items and other containers, and cycle and capacity checks protect nested storage.
-The private character sheet links to the same interactive inventory view.
+templates live in `assets/items/items.json`. Item weight and regular inventory
+storage are separate measurements: equipped items still count toward carried
+weight but do not occupy regular storage. Consumables of the same type and location
+stack by quantity. Containers may contain other containers; their own weight and
+all nested contents recursively count against the parent container's capacity and
+the character's carried weight. Cycle checks prevent a container from being placed
+inside itself. The private character sheet links directly to the same inventory UI.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below
@@ -201,6 +204,9 @@ separated by theme, body, edge, and number color, for example
 `assets/dice/d20/cache/v2/cartoon/7A2EFF/FFD700/F5F5F5/d20_17.gif`. A newer master or
 mask automatically invalidates its generated cache. The settled frame is also
 cached as a transparent 160x160 PNG and displayed as the result embed's thumbnail.
+Each complete body/edge/number color cache is retained while it is used. A cache
+that has not been used for 90 days is removed by the bot's daily cleanup check;
+existing untracked caches receive a fresh 90-day period after upgrading.
 Rolls containing two to ten matching dice, such as `3d6`, reuse those tinted GIFs
 in one synchronized side-by-side animation. The final embed displays every result
 at the same size in one horizontal row and preserves the original roll order.
