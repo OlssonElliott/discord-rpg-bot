@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
 
 from .dice_visuals import (
     DEFAULT_DICE_COLOR,
@@ -12,6 +13,7 @@ from .dice_visuals import (
     normalize_dice_color,
 )
 from .models import Character, Stance
+from .inventory import EquipmentSlot, InventoryState, ItemInstance
 from .portraits import default_portrait_key
 
 
@@ -69,6 +71,56 @@ class Database:
                 connection.execute(
                     "ALTER TABLE user_preferences ADD COLUMN dm_portrait_key TEXT"
                 )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_sheet_messages (
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    character_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    PRIMARY KEY (guild_id, channel_id, character_id),
+                    FOREIGN KEY (character_id) REFERENCES characters(id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_inventories (
+                    character_id INTEGER PRIMARY KEY,
+                    total_storage INTEGER NOT NULL DEFAULT 20 CHECK (total_storage >= 0),
+                    FOREIGN KEY (character_id) REFERENCES characters(id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_items (
+                    instance_id TEXT PRIMARY KEY,
+                    character_id INTEGER NOT NULL,
+                    template_id TEXT NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+                    durability INTEGER,
+                    parent_container_id TEXT,
+                    FOREIGN KEY (character_id) REFERENCES characters(id),
+                    FOREIGN KEY (parent_container_id) REFERENCES character_items(instance_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_equipment (
+                    character_id INTEGER NOT NULL,
+                    slot TEXT NOT NULL CHECK (
+                        slot IN ('main_hand', 'off_hand', 'armor', 'container')
+                    ),
+                    item_instance_id TEXT NOT NULL,
+                    PRIMARY KEY (character_id, slot),
+                    UNIQUE (character_id, item_instance_id),
+                    FOREIGN KEY (character_id) REFERENCES characters(id),
+                    FOREIGN KEY (item_instance_id) REFERENCES character_items(instance_id)
+                )
+                """
+            )
 
     @staticmethod
     def _create_character_tables(connection: sqlite3.Connection) -> None:
@@ -383,6 +435,226 @@ class Database:
                 """,
                 (discord_user_id,),
             )
+
+    def get_character_sheet_message(
+        self, guild_id: int, channel_id: int, character_id: int
+    ) -> int | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT message_id FROM character_sheet_messages
+                WHERE guild_id = ? AND channel_id = ? AND character_id = ?
+                """,
+                (guild_id, channel_id, character_id),
+            ).fetchone()
+        return row["message_id"] if row else None
+
+    def set_character_sheet_message(
+        self,
+        guild_id: int,
+        channel_id: int,
+        character_id: int,
+        message_id: int,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO character_sheet_messages (
+                    guild_id, channel_id, character_id, message_id
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (guild_id, channel_id, character_id)
+                DO UPDATE SET message_id = excluded.message_id
+                """,
+                (guild_id, channel_id, character_id, message_id),
+            )
+
+    def get_inventory(self, character_id: int, total_storage: int = 20) -> InventoryState:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO character_inventories (character_id, total_storage)
+                VALUES (?, ?)
+                """,
+                (character_id, total_storage),
+            )
+            inventory_row = connection.execute(
+                "SELECT total_storage FROM character_inventories WHERE character_id = ?",
+                (character_id,),
+            ).fetchone()
+            item_rows = connection.execute(
+                """
+                SELECT instance_id, character_id, template_id, quantity,
+                       durability, parent_container_id
+                FROM character_items WHERE character_id = ?
+                ORDER BY rowid
+                """,
+                (character_id,),
+            ).fetchall()
+            equipment_rows = connection.execute(
+                """
+                SELECT slot, item_instance_id FROM character_equipment
+                WHERE character_id = ?
+                """,
+                (character_id,),
+            ).fetchall()
+        return InventoryState(
+            character_id=character_id,
+            total_storage=inventory_row["total_storage"],
+            items=tuple(
+                ItemInstance(
+                    instance_id=row["instance_id"],
+                    character_id=row["character_id"],
+                    template_id=row["template_id"],
+                    quantity=row["quantity"],
+                    durability=row["durability"],
+                    parent_container_id=row["parent_container_id"],
+                )
+                for row in item_rows
+            ),
+            equipment={
+                EquipmentSlot(row["slot"]): row["item_instance_id"]
+                for row in equipment_rows
+            },
+        )
+
+    def add_inventory_item(
+        self,
+        character_id: int,
+        template_id: str,
+        *,
+        quantity: int = 1,
+        durability: int | None = None,
+        parent_container_id: str | None = None,
+        stackable: bool = False,
+    ) -> str:
+        if quantity <= 0:
+            raise ValueError("Item quantity must be greater than zero.")
+        with self._connect() as connection:
+            if stackable:
+                row = connection.execute(
+                    """
+                    SELECT instance_id FROM character_items
+                    WHERE character_id = ? AND template_id = ?
+                      AND parent_container_id IS ?
+                    ORDER BY rowid LIMIT 1
+                    """,
+                    (character_id, template_id, parent_container_id),
+                ).fetchone()
+                if row is not None:
+                    connection.execute(
+                        """
+                        UPDATE character_items SET quantity = quantity + ?
+                        WHERE instance_id = ?
+                        """,
+                        (quantity, row["instance_id"]),
+                    )
+                    return row["instance_id"]
+            instance_id = uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO character_items (
+                    instance_id, character_id, template_id, quantity,
+                    durability, parent_container_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    instance_id,
+                    character_id,
+                    template_id,
+                    quantity,
+                    durability,
+                    parent_container_id,
+                ),
+            )
+        return instance_id
+
+    def move_inventory_item(
+        self, character_id: int, instance_id: str, parent_container_id: str | None
+    ) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE character_items SET parent_container_id = ?
+                WHERE character_id = ? AND instance_id = ?
+                """,
+                (parent_container_id, character_id, instance_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("That item is not in this inventory.")
+
+    def equip_inventory_item(
+        self,
+        character_id: int,
+        instance_id: str,
+        slot: EquipmentSlot,
+        *,
+        clear_off_hand: bool = False,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE character_items SET parent_container_id = NULL
+                WHERE character_id = ? AND instance_id = ?
+                """,
+                (character_id, instance_id),
+            )
+            connection.execute(
+                """
+                DELETE FROM character_equipment
+                WHERE character_id = ? AND item_instance_id = ?
+                """,
+                (character_id, instance_id),
+            )
+            slots_to_clear = [slot.value]
+            if clear_off_hand:
+                slots_to_clear.append(EquipmentSlot.OFF_HAND.value)
+            placeholders = ", ".join("?" for _ in slots_to_clear)
+            connection.execute(
+                f"""
+                DELETE FROM character_equipment
+                WHERE character_id = ? AND slot IN ({placeholders})
+                """,
+                (character_id, *slots_to_clear),
+            )
+            connection.execute(
+                """
+                INSERT INTO character_equipment (character_id, slot, item_instance_id)
+                VALUES (?, ?, ?)
+                """,
+                (character_id, slot.value, instance_id),
+            )
+
+    def unequip_inventory_slot(
+        self, character_id: int, slot: EquipmentSlot
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM character_equipment WHERE character_id = ? AND slot = ?",
+                (character_id, slot.value),
+            )
+
+    def set_inventory_item_quantity(
+        self, character_id: int, instance_id: str, quantity: int
+    ) -> None:
+        with self._connect() as connection:
+            if quantity <= 0:
+                connection.execute(
+                    """
+                    DELETE FROM character_items
+                    WHERE character_id = ? AND instance_id = ?
+                    """,
+                    (character_id, instance_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE character_items SET quantity = ?
+                    WHERE character_id = ? AND instance_id = ?
+                    """,
+                    (quantity, character_id, instance_id),
+                )
+                if cursor.rowcount == 0:
+                    raise ValueError("That item is not in this inventory.")
 
     def set_character_portrait(
         self, discord_user_id: int, character_id: int, portrait_key: str | None

@@ -79,11 +79,16 @@ Player commands:
 
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
+- `/character sheet` — privately open the active character's full sheet, including
+  attribute scores and roll modifiers; use **Publish here** to create or update the
+  character's persistent sheet in whichever channel the command was used.
 - `/character portrait [image] [remove]` — view the active portrait, attach a file
   to replace it, or use `remove: True` to remove it directly. A DM with no active
   character manages their personal Dungeon Master portrait instead.
 - `/character removeportrait` — remove the active character's portrait.
 - `/character cancel` — discard the active creation session.
+- `/inventory` — privately open the active character's bag, equipment, nested
+  containers, item details, and inventory actions.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
   `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
 - `/dicecolor [color]` — view or set a personal six-digit hex dice color.
@@ -97,6 +102,8 @@ DM-role commands:
 - `/heal user amount`
 - `/stance user stance`
 - `/sethp user hp`
+- `/giveitem user item [quantity]` — give an item or consumable stack to the
+  user's active character.
 
 Each Discord user ID can have multiple characters and one active character at a time.
 Damage stops at 0 HP, healing stops at maximum HP, and manual HP must be between
@@ -114,6 +121,15 @@ is useful for generic DM rolls. Archiving removes a character from Discord selec
 without deleting its database record. Final Vitality becomes starting and maximum HP. Active,
 incomplete creation sessions are held in memory and need to be restarted after a bot
 restart.
+
+Inventory ownership and equipment are stored in SQLite, while reusable item
+templates live in `assets/items/items.json`. Item weight and regular inventory
+storage are separate measurements: equipped items still count toward carried
+weight but do not occupy regular storage. Consumables of the same type and location
+stack by quantity. Containers may contain other containers; their own weight and
+all nested contents recursively count against the parent container's capacity and
+the character's carried weight. Cycle checks prevent a container from being placed
+inside itself. The private character sheet links directly to the same inventory UI.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below
@@ -307,11 +323,15 @@ rpg_bot/dice.py                 bounded dice parser and roller
 rpg_bot/dice_audio.py           voice connection and sequential dice sound playback
 rpg_bot/dice_assets.py          safe themed asset and cache path resolution
 rpg_bot/dice_visuals.py         dice color validation, GIF tinting, and generated cache
+rpg_bot/inventory.py            item catalog, instances, equipment, and measurements
+rpg_bot/inventory_service.py    validated inventory and equipment operations
 rpg_bot/checks.py               reusable DM-role permission check
 rpg_bot/commands/player.py      /roll and /status
-rpg_bot/commands/dm.py          DM character-management commands
+rpg_bot/commands/dm.py          DM character and item-management commands
 rpg_bot/commands/character.py   /character creation command group and user sessions
+rpg_bot/commands/inventory.py   private interactive inventory browser
 rpg_bot/character_creation/     UI-independent rules, state machine, and persistence service
+assets/items/items.json         reusable item template catalog
 docs/END_GOAL.md                long-term product vision
 scripts/generate_d20_assets.py  offline multi-die Blender orchestration and GIF encoding
 scripts/render_d20_blender.py   procedural dice scenes and deterministic PNG rendering
