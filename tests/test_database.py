@@ -49,6 +49,25 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.database.set_hp(123, 7).hp, 7)
         self.assertEqual(self.database.set_stance(123, Stance.PRONE).stance, Stance.PRONE)
 
+    def test_published_character_sheet_message_persists_per_channel(self) -> None:
+        character = self.database.create_character(123, "Olof", 22)
+        self.assertIsNone(
+            self.database.get_character_sheet_message(44, 55, character.character_id)
+        )
+
+        self.database.set_character_sheet_message(
+            44, 55, character.character_id, 900
+        )
+        reopened = Database(self.database_path)
+
+        self.assertEqual(
+            reopened.get_character_sheet_message(44, 55, character.character_id),
+            900,
+        )
+        self.assertIsNone(
+            reopened.get_character_sheet_message(44, 66, character.character_id)
+        )
+
     def test_invalid_operations_are_rejected(self) -> None:
         self.database.create_character(123, "Olof", 22)
         with self.assertRaises(CharacterAlreadyExistsError):

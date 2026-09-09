@@ -19,6 +19,7 @@ from rpg_bot.commands.character import (
     BonusView,
     CharacterCommands,
     CharacterManageView,
+    CharacterSheetView,
     ChoiceView,
     ConfirmAttributesButton,
     NameView,
@@ -27,25 +28,36 @@ from rpg_bot.commands.character import (
     SkillView,
     UnequipCharacterButton,
     attribute_prompt,
+    attribute_modifier,
     bonus_prompt,
+    character_sheet_embed,
     creation_prompt,
     creation_view,
     setup,
 )
 from rpg_bot.models import Character, Stance
+from rpg_bot.inventory import InventoryState
 from rpg_bot.portraits import CharacterPortraitStore
 
 
 def interaction_for(user_id: int) -> SimpleNamespace:
+    channel = SimpleNamespace(
+        id=55,
+        send=AsyncMock(),
+        fetch_message=AsyncMock(),
+    )
     return SimpleNamespace(
         user=SimpleNamespace(id=user_id),
         client=SimpleNamespace(config=SimpleNamespace(dm_role_name="Dungeon Master")),
+        guild_id=44,
+        channel=channel,
         response=SimpleNamespace(
             send_message=AsyncMock(),
             edit_message=AsyncMock(),
             send_modal=AsyncMock(),
             defer=AsyncMock(),
         ),
+        followup=SimpleNamespace(send=AsyncMock()),
         edit_original_response=AsyncMock(),
     )
 
@@ -76,6 +88,91 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [option.value for option in select.options],
             ["Commonfolk", "Fey", "Primals", "Felblood", "Wretched"],
+        )
+
+    def test_character_sheet_shows_scores_and_modifiers(self) -> None:
+        character = Character(
+            7,
+            "Olof",
+            12,
+            15,
+            Stance.STEADY,
+            race="Troll",
+            lineage="Felblood",
+            attributes={"Strength": 14, "Dexterity": 9},
+            skills={"Melee": 1},
+            character_id=3,
+        )
+
+        embed = character_sheet_embed(character)
+
+        attributes = next(field.value for field in embed.fields if field.name == "Attributes")
+        self.assertIn("Strength** 14 (+2)", attributes)
+        self.assertIn("Dexterity** 9 (-1)", attributes)
+        self.assertEqual(attribute_modifier(10), 0)
+        self.assertEqual(attribute_modifier(11), 0)
+
+    async def test_sheet_opens_privately_with_publish_button(self) -> None:
+        character = Character(
+            7,
+            "Olof",
+            12,
+            15,
+            Stance.STEADY,
+            attributes={"Strength": 14},
+            character_id=3,
+        )
+        database = Mock()
+        database.get_character.return_value = character
+        database.get_inventory.return_value = InventoryState(3, 20, (), {})
+        cog = CharacterCommands(database)
+        interaction = interaction_for(7)
+
+        await cog.sheet.callback(cog.sheet.binding, interaction)
+
+        call = interaction.response.send_message.await_args
+        self.assertTrue(call.kwargs["ephemeral"])
+        self.assertEqual(call.kwargs["embed"].title, "Olof")
+        self.assertIsInstance(call.kwargs["view"], CharacterSheetView)
+        self.assertEqual(
+            [button.label for button in call.kwargs["view"].children],
+            ["Inventory", "Publish here"],
+        )
+
+    async def test_publishing_sheet_reuses_its_message_in_the_current_channel(self) -> None:
+        character = Character(
+            7,
+            "Olof",
+            12,
+            15,
+            Stance.STEADY,
+            attributes={"Strength": 14},
+            character_id=3,
+        )
+        published_message = SimpleNamespace(id=900, edit=AsyncMock())
+        database = Mock()
+        database.get_character_by_id.return_value = character
+        database.get_inventory.return_value = InventoryState(3, 20, (), {})
+        database.get_character_sheet_message.side_effect = (None, 900)
+        cog = CharacterCommands(database)
+
+        first = interaction_for(7)
+        first.channel.send.return_value = published_message
+        await cog.publish_character_sheet(first, 7, 3)
+
+        database.set_character_sheet_message.assert_called_once_with(44, 55, 3, 900)
+        first.channel.send.assert_awaited_once()
+
+        second = interaction_for(7)
+        second.channel.fetch_message.return_value = published_message
+        await cog.publish_character_sheet(second, 7, 3)
+
+        second.channel.fetch_message.assert_awaited_once_with(900)
+        published_message.edit.assert_awaited_once()
+        second.channel.send.assert_not_awaited()
+        self.assertIn(
+            "Updated",
+            second.followup.send.await_args.args[0],
         )
 
     async def test_existing_character_can_start_another_creation(self) -> None:

@@ -25,6 +25,7 @@ class RPGBot(commands.Bot):
         await self.load_extension("rpg_bot.commands.player")
         await self.load_extension("rpg_bot.commands.dm")
         await self.load_extension("rpg_bot.commands.character")
+        await self.load_extension("rpg_bot.commands.inventory")
 
         if self.config.discord_guild_id is not None:
             guild = discord.Object(id=self.config.discord_guild_id)
