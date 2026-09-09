@@ -6,6 +6,7 @@ data/
 __pycache__/
 *.py[cod]
 .venv/
+.runtime/
 venv/
 .pytest_cache/
 assets/dice/*/cache/*.gif

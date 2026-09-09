@@ -1,0 +1,416 @@
+"""Private Discord inventory browser and item actions."""
+
+from __future__ import annotations
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+from ..inventory import (
+    DEFAULT_ITEM_CATALOG_PATH,
+    EquipmentSlot,
+    InventoryState,
+    ItemCatalog,
+    ItemInstance,
+    ItemType,
+)
+from ..inventory_service import InventoryError, InventoryService
+from ..models import Character
+
+
+def _item_label(item: ItemInstance, catalog: ItemCatalog) -> str:
+    template = catalog.get(item.template_id)
+    quantity = f" ×{item.quantity}" if item.quantity > 1 else ""
+    return f"{template.name}{quantity}"
+
+
+def _inventory_lines(
+    inventory: InventoryState,
+    catalog: ItemCatalog,
+    parent_id: str | None = None,
+    depth: int = 0,
+) -> list[str]:
+    equipped_ids = set(inventory.equipment.values())
+    lines: list[str] = []
+    for item in inventory.children_of(parent_id):
+        if parent_id is None and item.instance_id in equipped_ids:
+            continue
+        template = catalog.get(item.template_id)
+        prefix = "↳ " * depth
+        weight = inventory.recursive_weight(item.instance_id, catalog)
+        capacity = (
+            f" • {inventory.container_storage(item.instance_id, catalog)}"
+            f"/{template.capacity} capacity"
+            if template.item_type is ItemType.CONTAINER
+            else ""
+        )
+        lines.append(f"{prefix}• {_item_label(item, catalog)} • {weight} weight{capacity}")
+        lines.extend(_inventory_lines(inventory, catalog, item.instance_id, depth + 1))
+    return lines
+
+
+def _fit_field(lines: list[str], limit: int = 1024) -> str:
+    visible: list[str] = []
+    length = 0
+    for line in lines:
+        added = len(line) + (1 if visible else 0)
+        if length + added > limit - 2:
+            visible.append("…")
+            break
+        visible.append(line)
+        length += added
+    return "\n".join(visible)
+
+
+def inventory_embed(
+    character: Character,
+    inventory: InventoryState,
+    catalog: ItemCatalog,
+    selected_id: str | None = None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"{character.name}'s Inventory",
+        colour=discord.Colour.dark_gold(),
+    )
+    embed.description = (
+        f"Regular storage: **{inventory.current_storage(catalog)}/"
+        f"{inventory.total_storage}**\n"
+        f"Carried weight: **{inventory.current_weight(catalog)}**"
+    )
+    equipment_lines = []
+    for slot in EquipmentSlot:
+        instance_id = inventory.equipment.get(slot)
+        label = (
+            _item_label(inventory.item(instance_id), catalog)
+            if instance_id is not None
+            else "Empty"
+        )
+        equipment_lines.append(f"**{slot.value.replace('_', ' ').title()}** — {label}")
+    embed.add_field(name="Equipment", value="\n".join(equipment_lines), inline=False)
+    bag_lines = _inventory_lines(inventory, catalog)
+    embed.add_field(
+        name="Bag & Containers",
+        value=_fit_field(bag_lines) if bag_lines else "Empty",
+        inline=False,
+    )
+    if selected_id is not None:
+        item = inventory.item(selected_id)
+        template = catalog.get(item.template_id)
+        details = [template.description, f"Rarity: **{template.rarity}**"]
+        if template.item_type is ItemType.WEAPON:
+            damage = " + ".join(
+                f"{part.amount} {part.damage_type}" for part in template.damage_parts
+            )
+            details.append(f"Damage: **{damage or '—'}**")
+        elif template.item_type is ItemType.ARMOR:
+            details.append(f"Protection: **{template.protection}**")
+            details.append(f"Dodge: **{template.dodge_penalty:+d}**")
+        elif template.item_type is ItemType.CONTAINER:
+            details.append(
+                f"Capacity: **{inventory.container_storage(item.instance_id, catalog)}"
+                f"/{template.capacity}**"
+            )
+        embed.add_field(
+            name=f"Selected: {_item_label(item, catalog)}",
+            value="\n".join(details),
+            inline=False,
+        )
+    return embed
+
+
+class InventoryOwnedView(discord.ui.View):
+    def __init__(self, service: InventoryService, user_id: int, character_id: int) -> None:
+        super().__init__(timeout=15 * 60)
+        self.service = service
+        self.user_id = user_id
+        self.character_id = character_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.user_id:
+            return True
+        await interaction.response.send_message(
+            "This inventory belongs to another player.", ephemeral=True
+        )
+        return False
+
+    def character(self) -> Character:
+        character = self.service.database.get_character_by_id(
+            self.user_id, self.character_id
+        )
+        if character is None:
+            raise InventoryError("That character is no longer available.")
+        return character
+
+
+class InventoryItemSelect(discord.ui.Select):
+    def __init__(self, owner_view: InventoryView, inventory: InventoryState) -> None:
+        self.owner_view = owner_view
+        start = owner_view.page * 25
+        options = [
+            discord.SelectOption(
+                label=_item_label(item, owner_view.service.catalog)[:100],
+                value=item.instance_id,
+                description=owner_view.service.catalog.get(item.template_id).rarity[:100],
+                default=item.instance_id == owner_view.selected_id,
+            )
+            for item in inventory.items[start : start + 25]
+        ]
+        super().__init__(
+            placeholder="Select an item",
+            options=options or [
+                discord.SelectOption(label="Inventory is empty", value="empty")
+            ],
+            disabled=not options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "empty":
+            return
+        character = self.owner_view.character()
+        await show_inventory(
+            interaction,
+            self.owner_view.service,
+            character,
+            selected_id=self.values[0],
+            page=self.owner_view.page,
+            edit=True,
+        )
+
+
+class InventoryView(InventoryOwnedView):
+    def __init__(
+        self,
+        service: InventoryService,
+        user_id: int,
+        character_id: int,
+        inventory: InventoryState,
+        selected_id: str | None = None,
+        page: int = 0,
+    ) -> None:
+        super().__init__(service, user_id, character_id)
+        self.selected_id = selected_id
+        self.page = page
+        self.page_count = max(1, (len(inventory.items) + 24) // 25)
+        self.add_item(InventoryItemSelect(self, inventory))
+        self.previous_page.disabled = page <= 0
+        self.next_page.disabled = page >= self.page_count - 1
+
+    async def _run(self, interaction: discord.Interaction, action: str) -> None:
+        if self.selected_id is None:
+            await interaction.response.send_message(
+                "Select an item first.", ephemeral=True
+            )
+            return
+        character = self.character()
+        try:
+            if action == "equip":
+                self.service.equip(character, self.selected_id)
+            elif action == "unequip":
+                self.service.unequip(character, self.selected_id)
+            elif action == "bag":
+                self.service.move_to_container(character, self.selected_id, None)
+            elif action == "use":
+                character = self.service.use(character, self.selected_id)
+        except (InventoryError, ValueError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        inventory = self.service.database.get_character_inventory(self.character_id)
+        selected = (
+            self.selected_id
+            if any(item.instance_id == self.selected_id for item in inventory.items)
+            else None
+        )
+        await show_inventory(
+            interaction,
+            self.service,
+            character,
+            selected_id=selected,
+            page=self.page,
+            edit=True,
+        )
+
+    @discord.ui.button(label="Equip", style=discord.ButtonStyle.success, row=1)
+    async def equip_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self._run(interaction, "equip")
+
+    @discord.ui.button(label="Unequip", style=discord.ButtonStyle.secondary, row=1)
+    async def unequip_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self._run(interaction, "unequip")
+
+    @discord.ui.button(label="Store…", style=discord.ButtonStyle.primary, row=1)
+    async def store_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if self.selected_id is None:
+            await interaction.response.send_message("Select an item first.", ephemeral=True)
+            return
+        character = self.character()
+        inventory = self.service.database.get_character_inventory(self.character_id)
+        containers = [
+            item
+            for item in inventory.items
+            if self.service.catalog.get(item.template_id).item_type is ItemType.CONTAINER
+            and item.instance_id != self.selected_id
+            and not inventory.contains(self.selected_id, item.instance_id)
+        ]
+        await interaction.response.edit_message(
+            embed=inventory_embed(character, inventory, self.service.catalog, self.selected_id),
+            view=ContainerDestinationView(
+                self.service,
+                self.user_id,
+                self.character_id,
+                self.selected_id,
+                containers,
+            ),
+        )
+
+    @discord.ui.button(label="To bag", style=discord.ButtonStyle.secondary, row=1)
+    async def bag_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self._run(interaction, "bag")
+
+    @discord.ui.button(label="Use", style=discord.ButtonStyle.danger, row=2)
+    async def use_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self._run(interaction, "use")
+
+    @discord.ui.button(label="Back to sheet", style=discord.ButtonStyle.secondary, row=2)
+    async def back_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        from .character import CharacterSheetView
+
+        character = self.character()
+        character_cog = interaction.client.get_cog("CharacterCommands")
+        if character_cog is None:
+            await interaction.response.send_message(
+                "The character sheet is temporarily unavailable.", ephemeral=True
+            )
+            return
+        embed, portrait_file = character_cog._sheet_presentation(character)
+        try:
+            await interaction.response.edit_message(
+                embed=embed,
+                attachments=[portrait_file] if portrait_file is not None else [],
+                view=CharacterSheetView(
+                    character_cog,
+                    self.user_id,
+                    self.character_id,
+                ),
+            )
+        finally:
+            if portrait_file is not None:
+                portrait_file.close()
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=2)
+    async def previous_page(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await show_inventory(
+            interaction,
+            self.service,
+            self.character(),
+            page=max(0, self.page - 1),
+            edit=True,
+        )
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=2)
+    async def next_page(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await show_inventory(
+            interaction,
+            self.service,
+            self.character(),
+            page=min(self.page_count - 1, self.page + 1),
+            edit=True,
+        )
+
+
+class ContainerDestinationSelect(discord.ui.Select):
+    def __init__(
+        self, owner_view: ContainerDestinationView, containers: list[ItemInstance]
+    ) -> None:
+        self.owner_view = owner_view
+        options = [discord.SelectOption(label="Regular inventory", value="root")]
+        options.extend(
+            discord.SelectOption(
+                label=_item_label(item, owner_view.service.catalog)[:100],
+                value=item.instance_id,
+            )
+            for item in containers[:24]
+        )
+        super().__init__(placeholder="Choose a storage location", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        character = self.owner_view.character()
+        destination = None if self.values[0] == "root" else self.values[0]
+        try:
+            self.owner_view.service.move_to_container(
+                character, self.owner_view.item_id, destination
+            )
+        except (InventoryError, ValueError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        await show_inventory(
+            interaction,
+            self.owner_view.service,
+            character,
+            selected_id=self.owner_view.item_id,
+            edit=True,
+        )
+
+
+class ContainerDestinationView(InventoryOwnedView):
+    def __init__(
+        self,
+        service: InventoryService,
+        user_id: int,
+        character_id: int,
+        item_id: str,
+        containers: list[ItemInstance],
+    ) -> None:
+        super().__init__(service, user_id, character_id)
+        self.item_id = item_id
+        self.add_item(ContainerDestinationSelect(self, containers))
+
+
+async def show_inventory(
+    interaction: discord.Interaction,
+    service: InventoryService,
+    character: Character,
+    *,
+    selected_id: str | None = None,
+    page: int = 0,
+    edit: bool = False,
+) -> None:
+    inventory = service.database.get_character_inventory(character.character_id)
+    embed = inventory_embed(character, inventory, service.catalog, selected_id)
+    view = InventoryView(
+        service,
+        character.discord_user_id,
+        character.character_id,
+        inventory,
+        selected_id,
+        page,
+    )
+    if edit:
+        await interaction.response.edit_message(embed=embed, attachments=[], view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class InventoryCommands(commands.Cog):
+    def __init__(self, database, catalog: ItemCatalog | None = None) -> None:
+        self.catalog = catalog or ItemCatalog.load(DEFAULT_ITEM_CATALOG_PATH)
+        self.service = InventoryService(database, self.catalog)
+
+    @app_commands.command(name="inventory", description="Open your active inventory privately.")
+    async def inventory(self, interaction: discord.Interaction) -> None:
+        character = self.service.database.get_character(interaction.user.id)
+        if character is None or character.character_id is None:
+            await interaction.response.send_message(
+                "You do not have an active character. Use `/character manage` first.",
+                ephemeral=True,
+            )
+            return
+        await show_inventory(interaction, self.service, character)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(InventoryCommands(bot.database))

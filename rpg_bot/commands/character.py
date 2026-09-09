@@ -19,6 +19,8 @@ from ..character_creation.service import CharacterCreationService
 from ..checks import is_dm
 from ..database import CharacterAlreadyExistsError, CharacterNotFoundError, Database
 from ..models import Character
+from ..inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
+from ..inventory_service import InventoryService
 from ..portraits import (
     CharacterPortraitStore,
     DEFAULT_DM_PORTRAIT_KEY,
@@ -95,6 +97,52 @@ def bonus_prompt(flow: CharacterCreationFlow, points: Mapping[str, int]) -> str:
         f"{creation_prompt_for_step(CreationStep.BONUS_POINTS)}\n"
         f"{allocation}\nRemaining: **{2 - total}**"
     )
+
+
+def attribute_modifier(score: int) -> int:
+    """Return the compact roll modifier shown beside a full attribute score."""
+    return (score - 10) // 2
+
+
+def character_sheet_embed(
+    character: Character, portrait_filename: str | None = None
+) -> discord.Embed:
+    """Build a current character sheet directly from persisted game state."""
+    profile = " • ".join(
+        value
+        for value in (character.race, character.lineage, character.age, character.gender)
+        if value
+    )
+    embed = discord.Embed(
+        title=character.name,
+        description=profile or "Character sheet",
+        colour=discord.Colour.blurple(),
+    )
+    embed.add_field(name="HP", value=f"**{character.hp}/{character.max_hp}**", inline=True)
+    embed.add_field(name="Stance", value=character.stance.display_name, inline=True)
+
+    if character.attributes:
+        attributes = "\n".join(
+            f"**{attribute}** {character.attributes[attribute]} "
+            f"({attribute_modifier(character.attributes[attribute]):+d})"
+            for attribute in ATTRIBUTES
+            if attribute in character.attributes
+        )
+    else:
+        attributes = "No attributes recorded."
+    embed.add_field(name="Attributes", value=attributes, inline=False)
+
+    if character.skills:
+        skills = "\n".join(
+            f"**{skill}** — Rank {rank}"
+            for skill, rank in sorted(character.skills.items())
+        )
+    else:
+        skills = "No skills recorded."
+    embed.add_field(name="Skills", value=skills, inline=False)
+    if portrait_filename is not None:
+        embed.set_thumbnail(url=f"attachment://{portrait_filename}")
+    return embed
 
 
 class OwnedView(discord.ui.View):
@@ -854,6 +902,63 @@ def creation_view(
     raise ValueError(f"No component view for {step.value}.")
 
 
+class CharacterSheetView(discord.ui.View):
+    def __init__(
+        self, cog: CharacterCommands, user_id: int, character_id: int
+    ) -> None:
+        super().__init__(timeout=15 * 60)
+        self.cog = cog
+        self.user_id = user_id
+        self.character_id = character_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.user_id:
+            return True
+        await interaction.response.send_message(
+            "Only the character's player can publish this sheet.", ephemeral=True
+        )
+        return False
+
+    @discord.ui.button(
+        label="Inventory",
+        style=discord.ButtonStyle.secondary,
+        emoji="🎒",
+    )
+    async def inventory(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        del button
+        from .inventory import show_inventory
+
+        character = self.cog.database.get_character_by_id(
+            self.user_id, self.character_id
+        )
+        if character is None:
+            await interaction.response.send_message(
+                "That character is no longer available.", ephemeral=True
+            )
+            return
+        await show_inventory(
+            interaction,
+            self.cog.inventory_service,
+            character,
+            edit=True,
+        )
+
+    @discord.ui.button(
+        label="Publish here",
+        style=discord.ButtonStyle.primary,
+        emoji="📋",
+    )
+    async def publish_here(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        del button
+        await self.cog.publish_character_sheet(
+            interaction, self.user_id, self.character_id
+        )
+
+
 class CharacterCommands(commands.GroupCog, group_name="character"):
     """Tracks transient flows per Discord user; only results are persisted."""
 
@@ -865,7 +970,118 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         self.database = database
         self.portrait_store = portrait_store or CharacterPortraitStore()
         self.service = CharacterCreationService(database)
+        self.item_catalog = ItemCatalog.load(DEFAULT_ITEM_CATALOG_PATH)
+        self.inventory_service = InventoryService(database, self.item_catalog)
         self.sessions: dict[int, CharacterCreationFlow] = {}
+
+    def _sheet_presentation(
+        self, character: Character
+    ) -> tuple[discord.Embed, discord.File | None]:
+        portrait_path = self.portrait_store.path_for(character.portrait_key)
+        embed = character_sheet_embed(character)
+        if character.character_id is not None:
+            inventory = self.database.get_character_inventory(character.character_id)
+            equipment = []
+            for slot in ("main_hand", "off_hand", "armor", "container"):
+                instance_id = next(
+                    (
+                        equipped_id
+                        for equipped_slot, equipped_id in inventory.equipment.items()
+                        if equipped_slot.value == slot
+                    ),
+                    None,
+                )
+                item_name = (
+                    self.item_catalog.get(inventory.item(instance_id).template_id).name
+                    if instance_id is not None
+                    else "Empty"
+                )
+                equipment.append(
+                    f"**{slot.replace('_', ' ').title()}** — {item_name}"
+                )
+            embed.add_field(
+                name="Equipment", value="\n".join(equipment), inline=False
+            )
+        if portrait_path is None:
+            return embed, None
+        filename = f"character_sheet_portrait{portrait_path.suffix.lower()}"
+        embed.set_thumbnail(url=f"attachment://{filename}")
+        return (
+            embed,
+            discord.File(portrait_path, filename=filename),
+        )
+
+    async def publish_character_sheet(
+        self,
+        interaction: discord.Interaction,
+        user_id: int,
+        character_id: int,
+    ) -> None:
+        character = self.database.get_character_by_id(user_id, character_id)
+        if character is None:
+            await interaction.response.send_message(
+                "That character is no longer available.", ephemeral=True
+            )
+            return
+        channel = interaction.channel
+        if channel is None or not hasattr(channel, "send"):
+            await interaction.response.send_message(
+                "This sheet cannot be published in the current channel.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild_id = interaction.guild_id or 0
+        message_id = self.database.get_character_sheet_message(
+            guild_id, channel.id, character_id
+        )
+        existing_message = None
+        if message_id is not None and hasattr(channel, "fetch_message"):
+            try:
+                existing_message = await channel.fetch_message(message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                existing_message = None
+
+        action = "Published"
+        if existing_message is not None:
+            embed, portrait_file = self._sheet_presentation(character)
+            try:
+                await existing_message.edit(
+                    embed=embed,
+                    attachments=[portrait_file] if portrait_file is not None else [],
+                )
+                action = "Updated"
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, OSError):
+                existing_message = None
+            finally:
+                if portrait_file is not None:
+                    portrait_file.close()
+
+        if existing_message is None:
+            embed, portrait_file = self._sheet_presentation(character)
+            try:
+                if portrait_file is None:
+                    message = await channel.send(embed=embed)
+                else:
+                    message = await channel.send(embed=embed, file=portrait_file)
+            except (discord.Forbidden, discord.HTTPException, OSError):
+                await interaction.followup.send(
+                    "I could not publish the sheet in this channel. Check my permissions.",
+                    ephemeral=True,
+                )
+                return
+            finally:
+                if portrait_file is not None:
+                    portrait_file.close()
+            self.database.set_character_sheet_message(
+                guild_id, channel.id, character_id, message.id
+            )
+
+        await interaction.followup.send(
+            f"{action} **{character.name}**'s sheet in this channel.",
+            ephemeral=True,
+        )
 
     def restore_default_portrait(
         self, user_id: int, character: Character
@@ -1000,6 +1216,37 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             view=creation_view(self, user_id, flow),
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="sheet", description="Open your active character sheet privately."
+    )
+    async def sheet(self, interaction: discord.Interaction) -> None:
+        character = self.database.get_character(interaction.user.id)
+        if character is None or character.character_id is None:
+            await interaction.response.send_message(
+                "You do not have an active character. Use `/character manage` first.",
+                ephemeral=True,
+            )
+            return
+        embed, portrait_file = self._sheet_presentation(character)
+        view = CharacterSheetView(
+            self, interaction.user.id, character.character_id
+        )
+        try:
+            if portrait_file is None:
+                await interaction.response.send_message(
+                    embed=embed, view=view, ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    embed=embed,
+                    file=portrait_file,
+                    view=view,
+                    ephemeral=True,
+                )
+        finally:
+            if portrait_file is not None:
+                portrait_file.close()
 
     @app_commands.command(
         name="manage", description="Choose or archive one of your characters."

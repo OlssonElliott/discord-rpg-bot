@@ -73,17 +73,44 @@ about an hour to show global command changes.
 Stop the process with Ctrl+C. Character data is stored in `rpg_bot.db` by default
 and survives restarts. The database and `.env` are ignored by Git.
 
+## Run the DM location editor
+
+The local dashboard uses the same SQLite database and deterministic world service
+as Discord. Start its API from the repository root:
+
+```powershell
+python -m rpg_bot.dashboard_server --database rpg_bot.db
+```
+
+In a second terminal, start the React dashboard:
+
+```powershell
+Set-Location dashboard
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. Create or select an Area, add locations, drag them
+into place, and connect them by dragging from one node handle to another. Node
+positions are editor-only metadata; arrows are persisted directional gameplay
+exits. The API binds to localhost and is intended for the DM's local machine.
+
 ## Commands
 
 Player commands:
 
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
+- `/character sheet` — privately open the active character's full sheet, including
+  attribute scores and roll modifiers; **Publish here** creates or updates its
+  persistent sheet in the current channel.
 - `/character portrait [image] [remove]` — view the active portrait, attach a file
   to replace it, or use `remove: True` to remove it directly. A DM with no active
   character manages their personal Dungeon Master portrait instead.
 - `/character removeportrait` — remove the active character's portrait.
 - `/character cancel` — discard the active creation session.
+- `/inventory` — privately open the active character's bag, equipment, nested
+  containers, item details, and inventory actions.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
   `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
 - `/dicecolor [color]` — view or set a personal six-digit hex dice color.
@@ -97,6 +124,8 @@ DM-role commands:
 - `/heal user amount`
 - `/stance user stance`
 - `/sethp user hp`
+- `/giveitem user item [quantity]` — give an item or consumable stack to the
+  user's active character.
 
 Each Discord user ID can have multiple characters and one active character at a time.
 Damage stops at 0 HP, healing stops at maximum HP, and manual HP must be between
@@ -114,6 +143,12 @@ is useful for generic DM rolls. Archiving removes a character from Discord selec
 without deleting its database record. Final Vitality becomes starting and maximum HP. Active,
 incomplete creation sessions are held in memory and need to be restarted after a bot
 restart.
+
+Inventory ownership and equipment are stored in SQLite, while reusable item
+templates live in `assets/items/items.json`. Equipped items count toward carried
+weight but not regular storage. Consumables stack by quantity, containers can hold
+items and other containers, and cycle and capacity checks protect nested storage.
+The private character sheet links to the same interactive inventory view.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below
@@ -304,11 +339,20 @@ rpg_bot/dice.py                 bounded dice parser and roller
 rpg_bot/dice_audio.py           voice connection and sequential dice sound playback
 rpg_bot/dice_assets.py          safe themed asset and cache path resolution
 rpg_bot/dice_visuals.py         dice color validation, GIF tinting, and generated cache
+rpg_bot/inventory.py            item catalog, instances, equipment, and measurements
+rpg_bot/inventory_service.py    validated inventory and equipment operations
 rpg_bot/checks.py               reusable DM-role permission check
 rpg_bot/commands/player.py      /roll and /status
-rpg_bot/commands/dm.py          DM character-management commands
+rpg_bot/commands/dm.py          DM character and item-management commands
 rpg_bot/commands/character.py   /character creation command group and user sessions
+rpg_bot/commands/inventory.py   private interactive inventory browser
 rpg_bot/character_creation/     UI-independent rules, state machine, and persistence service
+rpg_bot/world.py                area, room, entity, inventory, and graph domain types
+rpg_bot/world_service.py        deterministic world and editor application service
+assets/items/items.json         reusable item template catalog
+rpg_bot/dashboard_api.py        framework-neutral DM dashboard JSON API
+rpg_bot/dashboard_server.py     localhost API server for the React dashboard
+dashboard/                      React Flow visual location editor
 docs/END_GOAL.md                long-term product vision
 scripts/generate_d20_assets.py  offline multi-die Blender orchestration and GIF encoding
 scripts/render_d20_blender.py   procedural dice scenes and deterministic PNG rendering

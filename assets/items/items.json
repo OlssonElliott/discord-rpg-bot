@@ -1,0 +1,514 @@
+[
+  {
+    "item_type": "weapon",
+    "id": "rusty_sword",
+    "name": "Rusty Sword",
+    "rarity": "Common",
+    "value": 15,
+    "description": "An old sword with a chipped edge.",
+    "weight": 1,
+    "tags": [
+      "sword",
+      "one_handed",
+      "slashing",
+      "severing",
+      "metal",
+      "rusty"
+    ],
+    "durability": 40,
+    "grip": "one_handed",
+    "damage_parts": [
+      {
+        "amount": 6,
+        "damage_type": "slash"
+      }
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "weapon",
+    "id": "iron_dagger",
+    "name": "Iron Dagger",
+    "rarity": "Common",
+    "value": 10,
+    "description": "A small dagger, quick and easy to hide.",
+    "weight": 1,
+    "tags": [
+      "dagger",
+      "one_handed",
+      "piercing",
+      "small_blade",
+      "metal",
+      "light"
+    ],
+    "durability": 35,
+    "grip": "one_handed",
+    "damage_parts": [
+      {
+        "amount": 4,
+        "damage_type": "pierce"
+      }
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "weapon",
+    "id": "great_axe",
+    "name": "Great Axe",
+    "rarity": "Uncommon",
+    "value": 60,
+    "description": "A heavy axe that requires both hands.",
+    "weight": 4,
+    "tags": [
+      "axe",
+      "two_handed",
+      "chopping",
+      "severing",
+      "slashing",
+      "metal",
+      "heavy"
+    ],
+    "durability": 70,
+    "grip": "two_handed",
+    "damage_parts": [
+      {
+        "amount": 10,
+        "damage_type": "slash"
+      },
+      {
+        "amount": 2,
+        "damage_type": "blunt"
+      }
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "weapon",
+    "id": "rusted_greatsword",
+    "name": "Rusted Greatsword",
+    "rarity": "Uncommon",
+    "value": 55,
+    "description": "A broad two-handed sword with a stained edge and a grip wrapped in old leather.",
+    "weight": 4,
+    "tags": [
+      "sword",
+      "two_handed",
+      "slashing",
+      "severing",
+      "metal",
+      "heavy",
+      "rusty"
+    ],
+    "durability": 55,
+    "grip": "two_handed",
+    "damage_parts": [
+      {
+        "amount": 8,
+        "damage_type": "slash"
+      },
+      {
+        "amount": 2,
+        "damage_type": "blunt"
+      }
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "weapon",
+    "id": "crude_stone_maul",
+    "name": "Crude Stone Maul",
+    "rarity": "Uncommon",
+    "value": 45,
+    "description": "A slab of stone lashed to a warped wooden haft.",
+    "weight": 5,
+    "tags": [
+      "hammer",
+      "two_handed",
+      "blunt",
+      "crushing",
+      "heavy",
+      "crude",
+      "wood",
+      "stone"
+    ],
+    "durability": 60,
+    "grip": "two_handed",
+    "damage_parts": [
+      {
+        "amount": 10,
+        "damage_type": "blunt"
+      }
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "weapon",
+    "id": "parrying_dagger",
+    "name": "Parrying Dagger",
+    "rarity": "Uncommon",
+    "value": 25,
+    "description": "A defensive dagger made for close-quarters parrying.",
+    "weight": 1,
+    "tags": [
+      "dagger",
+      "one_handed",
+      "piercing",
+      "small_blade",
+      "metal",
+      "defensive"
+    ],
+    "durability": 45,
+    "grip": "one_handed",
+    "damage_parts": [
+      {
+        "amount": 3,
+        "damage_type": "pierce"
+      }
+    ],
+    "modifiers": [
+      "parry_bonus"
+    ],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "leather_armor",
+    "name": "Leather Armor",
+    "rarity": "Common",
+    "value": 30,
+    "description": "Tough boiled leather over worn padding, flexible enough for quick movement.",
+    "weight": 1,
+    "tags": [
+      "armor",
+      "leather",
+      "light_armor"
+    ],
+    "protection_current": 1,
+    "protection_max": 1,
+    "dodge_penalty": 0,
+    "strength_requirement": 8,
+    "load": 1,
+    "trait": "Quiet",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "padded_war_coat",
+    "name": "Padded War Coat",
+    "rarity": "Common",
+    "value": 38,
+    "description": "Layered cloth and dense padding stitched into a long coat, scarred by old impacts.",
+    "weight": 2,
+    "tags": [
+      "armor",
+      "padded",
+      "light_armor"
+    ],
+    "protection_current": 2,
+    "protection_max": 2,
+    "dodge_penalty": 0,
+    "strength_requirement": 8,
+    "load": 2,
+    "trait": "Resistant to Bludgeoning",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "chainmail_armor",
+    "name": "Chainmail Armor",
+    "rarity": "Common",
+    "value": 70,
+    "description": "Interlocking iron rings over worn padding, heavy on the shoulders but reliable against cutting blows.",
+    "weight": 3,
+    "tags": [
+      "armor",
+      "chainmail",
+      "medium_armor",
+      "metal"
+    ],
+    "protection_current": 3,
+    "protection_max": 3,
+    "dodge_penalty": -1,
+    "strength_requirement": 10,
+    "load": 3,
+    "trait": "Resistant to Slashing",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "scale_armor",
+    "name": "Scale Armor",
+    "rarity": "Uncommon",
+    "value": 85,
+    "description": "Overlapping metal scales fixed to leather straps, turning points and thrusts away from the body.",
+    "weight": 3,
+    "tags": [
+      "armor",
+      "scale",
+      "medium_armor",
+      "metal"
+    ],
+    "protection_current": 3,
+    "protection_max": 3,
+    "dodge_penalty": -1,
+    "strength_requirement": 11,
+    "load": 3,
+    "trait": "Resistant to Piercing",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "bone_armor",
+    "name": "Bone Armor",
+    "rarity": "Uncommon",
+    "value": 75,
+    "description": "Plates of carved bone tied with sinew, teeth, and old prayer-cord.",
+    "weight": 3,
+    "tags": [
+      "armor",
+      "bone",
+      "medium_armor"
+    ],
+    "protection_current": 3,
+    "protection_max": 3,
+    "dodge_penalty": -1,
+    "strength_requirement": 10,
+    "load": 3,
+    "trait": "Resistant to Piercing",
+    "drawback": "Brittle",
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "plate_armor",
+    "name": "Plate Armor",
+    "rarity": "Rare",
+    "value": 160,
+    "description": "Heavy fitted plates over mail and padding, scarred by old strikes and stained at the joints.",
+    "weight": 5,
+    "tags": [
+      "armor",
+      "plate_armor",
+      "heavy_armor",
+      "metal"
+    ],
+    "protection_current": 5,
+    "protection_max": 5,
+    "dodge_penalty": -2,
+    "strength_requirement": 14,
+    "load": 5,
+    "trait": "Resistant to Slashing",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "black_iron_armor",
+    "name": "Black Iron Armor",
+    "rarity": "Rare",
+    "value": 190,
+    "description": "Dark iron plates strapped over dense padding, ugly, practical, and hard to ruin.",
+    "weight": 5,
+    "tags": [
+      "armor",
+      "black_iron",
+      "heavy_armor",
+      "metal"
+    ],
+    "protection_current": 5,
+    "protection_max": 5,
+    "dodge_penalty": -2,
+    "strength_requirement": 14,
+    "load": 5,
+    "trait": "Reinforced",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "cathedral_guard_armor",
+    "name": "Cathedral Guard Armor",
+    "rarity": "Rare",
+    "value": 180,
+    "description": "Heavy ceremonial armor marked with warding symbols, prayer nails, and cracked enamel.",
+    "weight": 4,
+    "tags": [
+      "armor",
+      "cathedral",
+      "heavy_armor",
+      "ritual"
+    ],
+    "protection_current": 4,
+    "protection_max": 4,
+    "dodge_penalty": -2,
+    "strength_requirement": 13,
+    "load": 4,
+    "trait": "Ritual-Marked",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "rusted_knight_harness",
+    "name": "Rusted Knight Harness",
+    "rarity": "Uncommon",
+    "value": 90,
+    "description": "A dead knight's battered mail and plates, corroded but still hard to cut through.",
+    "weight": 4,
+    "tags": [
+      "armor",
+      "heavy_armor",
+      "metal",
+      "rusty",
+      "undead"
+    ],
+    "protection_current": 3,
+    "protection_max": 3,
+    "dodge_penalty": -1,
+    "strength_requirement": 12,
+    "load": 3,
+    "trait": null,
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "armor",
+    "id": "reaper_touched_surgical_plate",
+    "name": "Reaper-Touched Surgical Plate",
+    "rarity": "Epic",
+    "value": 260,
+    "description": "Surgical steel plates bound with pale straps, bone charms, and dark stains that never fully wash out.",
+    "weight": 5,
+    "tags": [
+      "armor",
+      "plate_armor",
+      "cursed",
+      "metal"
+    ],
+    "protection_current": 5,
+    "protection_max": 5,
+    "dodge_penalty": -2,
+    "strength_requirement": 14,
+    "load": 5,
+    "trait": "Cursed",
+    "drawback": null,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "container",
+    "id": "small_satchel",
+    "name": "Small Satchel",
+    "rarity": "Common",
+    "value": 12,
+    "description": "A simple shoulder satchel with enough room for a few useful supplies.",
+    "weight": 1,
+    "tags": [
+      "container",
+      "satchel",
+      "leather",
+      "light"
+    ],
+    "capacity": 3,
+    "items": [],
+    "can_equip": true,
+    "locked": false,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "container",
+    "id": "traveler_backpack",
+    "name": "Traveler Backpack",
+    "rarity": "Common",
+    "value": 25,
+    "description": "A practical backpack with straps, pockets, and bedroll ties for longer travel.",
+    "weight": 2,
+    "tags": [
+      "container",
+      "backpack",
+      "cloth",
+      "leather"
+    ],
+    "capacity": 6,
+    "items": [],
+    "can_equip": true,
+    "locked": false,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "container",
+    "id": "wooden_chest",
+    "name": "Wooden Chest",
+    "rarity": "Common",
+    "value": 20,
+    "description": "A sturdy storage chest for loot, supplies, or valuables.",
+    "weight": 6,
+    "tags": [
+      "container",
+      "chest",
+      "wood"
+    ],
+    "capacity": 12,
+    "items": [],
+    "can_equip": false,
+    "locked": false,
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "consumable",
+    "id": "health_potion",
+    "name": "Health Potion",
+    "rarity": "Common",
+    "value": 20,
+    "description": "Restores 20 HP.",
+    "weight": 0,
+    "tags": [
+      "potion",
+      "healing",
+      "consumable"
+    ],
+    "affected_stat": "hp",
+    "affected_amount": 20,
+    "side_effects": null,
+    "requirements": []
+  },
+  {
+    "item_type": "consumable",
+    "id": "stale_bread",
+    "name": "Stale Bread",
+    "rarity": "Common",
+    "value": 3,
+    "description": "Hard bread. Better than starving.",
+    "weight": 0,
+    "tags": [
+      "food",
+      "healing",
+      "consumable"
+    ],
+    "affected_stat": "hp",
+    "affected_amount": 5,
+    "side_effects": null,
+    "requirements": []
+  }
+]
