@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
+
 from rpg_bot.commands.dm import DMCommands
 from rpg_bot.commands.inventory import (
     InventoryCommands,
@@ -21,6 +23,8 @@ from rpg_bot.inventory import (
     ItemType,
 )
 from rpg_bot.inventory_service import InventoryService
+from rpg_bot.world import InventoryHolder
+from rpg_bot.world_service import WorldService
 
 
 def interaction_for(user_id: int) -> SimpleNamespace:
@@ -34,7 +38,16 @@ def interaction_for(user_id: int) -> SimpleNamespace:
             send_message=AsyncMock(),
             edit_message=AsyncMock(),
         ),
+        followup=SimpleNamespace(send=AsyncMock()),
     )
+
+
+def button_labels(view: InventoryView) -> set[str]:
+    return {
+        child.label
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
+    }
 
 
 class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -123,7 +136,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Store…", labels)
         self.assertNotIn("To bag", labels)
 
-    def test_item_actions_are_enabled_only_when_they_apply(self) -> None:
+    def test_only_available_item_actions_are_shown(self) -> None:
         dagger_id = self.service.grant(self.character, "iron_dagger")
         potion_id = self.service.grant(self.character, "health_potion")
         inventory = self.database.get_character_inventory(self.character.character_id)
@@ -138,15 +151,19 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             self.service, 7, self.character.character_id, inventory, potion_id
         )
 
-        self.assertTrue(no_selection.equip_button.disabled)
-        self.assertTrue(no_selection.unequip_button.disabled)
-        self.assertTrue(no_selection.use_button.disabled)
-        self.assertFalse(dagger.equip_button.disabled)
-        self.assertTrue(dagger.unequip_button.disabled)
-        self.assertTrue(dagger.use_button.disabled)
-        self.assertTrue(potion.equip_button.disabled)
-        self.assertTrue(potion.unequip_button.disabled)
-        self.assertFalse(potion.use_button.disabled)
+        self.assertTrue(
+            {"Equip", "Unequip", "Use", "Read", "Drop"}.isdisjoint(
+                button_labels(no_selection)
+            )
+        )
+        self.assertEqual(
+            button_labels(dagger) & {"Equip", "Unequip", "Use", "Read", "Drop"},
+            {"Equip", "Drop"},
+        )
+        self.assertEqual(
+            button_labels(potion) & {"Equip", "Unequip", "Use", "Read", "Drop"},
+            {"Use", "Drop"},
+        )
 
         self.service.equip(self.character, dagger_id)
         equipped_inventory = self.database.get_character_inventory(
@@ -159,8 +176,11 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             equipped_inventory,
             dagger_id,
         )
-        self.assertTrue(equipped_dagger.equip_button.disabled)
-        self.assertFalse(equipped_dagger.unequip_button.disabled)
+        self.assertEqual(
+            button_labels(equipped_dagger)
+            & {"Equip", "Unequip", "Use", "Read", "Drop"},
+            {"Unequip"},
+        )
 
     async def test_read_opens_separate_panel_without_consuming_item(self) -> None:
         service, note_id, template = self.readable_service()
@@ -179,7 +199,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embeds[1].title, template.name)
         self.assertIn(template.description, embeds[1].description)
         self.assertIn(template.content, embeds[1].description)
-        self.assertTrue(view.use_button.disabled)
+        self.assertNotIn("Use", button_labels(view))
         self.assertEqual(
             self.database.get_character_inventory(
                 self.character.character_id
@@ -206,8 +226,10 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reconstructed, content)
         self.assertGreater(len(pages), 1)
         self.assertTrue(all(len(page) <= 4096 for page in pages))
-        labels = {child.label for child in view.children if hasattr(child, "label")}
-        self.assertIn(f"Page 1 / {len(pages)}", labels)
+        labels = button_labels(view)
+        self.assertIn("Next page", labels)
+        self.assertNotIn("Previous page", labels)
+        self.assertTrue(all(not label.startswith("Page ") for label in labels))
 
     def test_short_readable_has_no_page_controls_and_can_close(self) -> None:
         service, note_id, _ = self.readable_service("Short note.")
@@ -224,6 +246,56 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         labels = [child.label for child in view.children if hasattr(child, "label")]
         self.assertIn("Close reading", labels)
         self.assertNotIn("Page 1 / 1", labels)
+        self.assertNotIn("Previous page", labels)
+        self.assertNotIn("Next page", labels)
+
+    def test_inventory_page_buttons_only_show_when_they_can_move(self) -> None:
+        for _ in range(26):
+            self.database.add_inventory_item(
+                self.character.character_id,
+                "iron_dagger",
+                stackable=False,
+            )
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        first_page = InventoryView(
+            self.service, 7, self.character.character_id, inventory, page=0
+        )
+        last_page = InventoryView(
+            self.service, 7, self.character.character_id, inventory, page=1
+        )
+
+        self.assertNotIn("Previous items", button_labels(first_page))
+        self.assertIn("Next items", button_labels(first_page))
+        self.assertIn("Previous items", button_labels(last_page))
+        self.assertNotIn("Next items", button_labels(last_page))
+
+    async def test_drop_moves_one_item_to_room_and_refreshes_inventory(self) -> None:
+        world = WorldService(self.database, self.catalog)
+        area = world.create_area("test_area", "Test Area")
+        room = world.create_room("test_room", area.id, "Test Room")
+        world.place_character(self.character.character_id, room.id)
+        potion_id = self.service.grant(self.character, "health_potion", quantity=2)
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            self.service, 7, self.character.character_id, inventory, potion_id
+        )
+        interaction = interaction_for(7)
+
+        await view.drop_button.callback(interaction)
+
+        remaining = self.database.get_character_inventory(
+            self.character.character_id
+        ).item(potion_id)
+        self.assertEqual(remaining.quantity, 1)
+        room_items = world.inventory(InventoryHolder.room(room.id))
+        self.assertEqual(
+            [(stack.item.id, stack.quantity) for stack in room_items],
+            [("health_potion", 1)],
+        )
+        self.assertTrue(interaction.response.edit_message.awaited)
+        announcement = interaction.followup.send.await_args.args[0]
+        self.assertIn("**Olof** dropped 1 × Health Potion.", announcement)
 
     def test_item_catalog_loads_all_shared_templates(self) -> None:
         self.assertGreaterEqual(len(self.catalog.all()), 22)

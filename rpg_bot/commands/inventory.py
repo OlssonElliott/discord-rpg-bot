@@ -19,6 +19,7 @@ from ..inventory import (
 )
 from ..inventory_service import InventoryError, InventoryService
 from ..models import Character
+from ..world_service import WorldService
 
 
 DISCORD_FIELD_LIMIT = 1024
@@ -285,8 +286,10 @@ class InventoryView(InventoryOwnedView):
         self.reading_page = reading_page
         self.page_count = max(1, (len(inventory.items) + 24) // 25)
         self.add_item(InventoryItemSelect(self, inventory))
-        self.previous_page.disabled = page <= 0
-        self.next_page.disabled = page >= self.page_count - 1
+        if page <= 0:
+            self.remove_item(self.previous_page)
+        if page >= self.page_count - 1:
+            self.remove_item(self.next_page)
         selected = inventory.item(selected_id) if selected_id is not None else None
         template = (
             service.catalog.get(selected.template_id) if selected is not None else None
@@ -300,34 +303,28 @@ class InventoryView(InventoryOwnedView):
                 and template.can_equip
             )
         )
-        self.equip_button.disabled = not can_equip or is_equipped
-        self.unequip_button.disabled = not is_equipped
-        self.use_button.disabled = (
-            template is None or template.item_type is not ItemType.CONSUMABLE
-        )
-        self.read_button.disabled = (
-            template is None or template.item_type is not ItemType.READABLE
-        )
+        if not can_equip or is_equipped:
+            self.remove_item(self.equip_button)
+        if not is_equipped:
+            self.remove_item(self.unequip_button)
+        if template is None or template.item_type is not ItemType.CONSUMABLE:
+            self.remove_item(self.use_button)
+        if template is None or template.item_type is not ItemType.READABLE:
+            self.remove_item(self.read_button)
+        if selected is None or is_equipped:
+            self.remove_item(self.drop_button)
         if reading_id is None:
             self.remove_item(self.reading_previous_button)
-            self.remove_item(self.reading_page_button)
             self.remove_item(self.reading_next_button)
         else:
             self.read_button.label = "Close reading"
             self.read_button.style = discord.ButtonStyle.secondary
-            self.read_button.disabled = False
             reading_template = service.read(self.character(), reading_id)
             reading_pages = readable_field_pages(reading_template)
             self.reading_page = min(max(0, reading_page), len(reading_pages) - 1)
-            self.reading_previous_button.disabled = self.reading_page == 0
-            self.reading_next_button.disabled = self.reading_page >= len(reading_pages) - 1
-            self.reading_page_button.label = (
-                f"Page {self.reading_page + 1} / {len(reading_pages)}"
-            )
-            self.reading_page_button.disabled = True
-            if len(reading_pages) == 1:
+            if self.reading_page == 0:
                 self.remove_item(self.reading_previous_button)
-                self.remove_item(self.reading_page_button)
+            if self.reading_page >= len(reading_pages) - 1:
                 self.remove_item(self.reading_next_button)
 
     async def _run(self, interaction: discord.Interaction, action: str) -> None:
@@ -407,7 +404,40 @@ class InventoryView(InventoryOwnedView):
             edit=True,
         )
 
-    @discord.ui.button(label="Back to sheet", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Drop", style=discord.ButtonStyle.danger, row=1)
+    async def drop_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if self.selected_id is None:
+            await interaction.response.send_message(
+                "Select an item first.", ephemeral=True
+            )
+            return
+        character = self.character()
+        try:
+            moved = WorldService(
+                self.service.database, self.service.catalog
+            ).drop_item(self.character_id, self.selected_id)
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        inventory = self.service.database.get_character_inventory(self.character_id)
+        selected = (
+            self.selected_id
+            if any(item.instance_id == self.selected_id for item in inventory.items)
+            else None
+        )
+        await show_inventory(
+            interaction,
+            self.service,
+            character,
+            selected_id=selected,
+            page=min(self.page, max(0, (len(inventory.items) - 1) // 25)),
+            edit=True,
+        )
+        await interaction.followup.send(
+            f"**{character.name}** dropped {moved.quantity} × {moved.item.name}."
+        )
+
+    @discord.ui.button(label="Back to sheet", style=discord.ButtonStyle.secondary, row=2)
     async def back_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         from .character import CharacterSheetView
 
@@ -434,7 +464,7 @@ class InventoryView(InventoryOwnedView):
                 portrait_file.close()
         forget_open_inventory(self.user_id, self.character_id)
 
-    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Previous items", style=discord.ButtonStyle.secondary, row=2)
     async def previous_page(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -446,7 +476,7 @@ class InventoryView(InventoryOwnedView):
             edit=True,
         )
 
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Next items", style=discord.ButtonStyle.secondary, row=2)
     async def next_page(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -458,7 +488,7 @@ class InventoryView(InventoryOwnedView):
             edit=True,
         )
 
-    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Previous page", style=discord.ButtonStyle.secondary, row=3)
     async def reading_previous_button(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -473,13 +503,7 @@ class InventoryView(InventoryOwnedView):
             edit=True,
         )
 
-    @discord.ui.button(label="Page", style=discord.ButtonStyle.secondary, row=3)
-    async def reading_page_button(
-        self, interaction: discord.Interaction, _: discord.ui.Button
-    ) -> None:
-        del interaction
-
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Next page", style=discord.ButtonStyle.secondary, row=3)
     async def reading_next_button(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
