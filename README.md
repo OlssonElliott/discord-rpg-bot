@@ -150,9 +150,10 @@ slot beneath armor. Removing armor leaves the clothing equipped; removing the
 clothing itself shows the character as **Nude** until clothing is equipped again.
 Consumables of the same type stack by quantity. The private character sheet links
 directly to the same inventory UI. Readable items keep their written `content`
-separate from their physical description. **Read** (or **Use**) opens that text
-beside the inventory, with lossless pagination for longer books, letters, notes,
-journals, and other documents.
+separate from their physical description. **Read** opens that text
+in a separate full-width panel below the inventory, with lossless pagination for
+longer books, letters, notes, journals, and other documents. While reading, the
+same button becomes **Close reading**; **Use** remains reserved for consumables.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below

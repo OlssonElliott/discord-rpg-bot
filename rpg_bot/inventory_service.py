@@ -153,14 +153,10 @@ class InventoryService:
             raise InventoryError("That item is not readable.")
         return template
 
-    def use(
-        self, character: Character, instance_id: str
-    ) -> Character | ItemTemplate:
+    def use(self, character: Character, instance_id: str) -> Character:
         inventory = self._inventory(character)
         item = inventory.item(instance_id)
         template = self.catalog.get(item.template_id)
-        if template.item_type is ItemType.READABLE:
-            return self.read(character, instance_id)
         if template.item_type is not ItemType.CONSUMABLE:
             raise InventoryError("That item is not consumable.")
         if template.affected_stat != "hp" or template.affected_amount is None:

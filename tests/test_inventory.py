@@ -198,7 +198,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(updated.hp, 10)
         self.assertEqual(inventory.item(potion_id).quantity, 1)
 
-    def test_read_and_use_return_content_without_consuming_readable(self) -> None:
+    def test_read_returns_content_without_consuming_readable(self) -> None:
         note = ItemTemplate(
             template_id="bloodstained_note",
             item_type=ItemType.READABLE,
@@ -215,11 +215,11 @@ class InventoryTests(unittest.TestCase):
         before = self.database.get_character_inventory(self.character.character_id)
 
         read_result = service.read(self.character, note_id)
-        use_result = service.use(self.character, note_id)
+        with self.assertRaisesRegex(InventoryError, "not consumable"):
+            service.use(self.character, note_id)
         after = self.database.get_character_inventory(self.character.character_id)
 
         self.assertEqual(read_result.content, note.content)
-        self.assertEqual(use_result, read_result)
         self.assertEqual(after.items, before.items)
 
 

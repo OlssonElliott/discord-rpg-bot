@@ -90,7 +90,7 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             "**Olof** took 1 × Health Potion.",
         )
         message.edit.assert_awaited_once()
-        refreshed = message.edit.await_args.kwargs["embed"]
+        refreshed = message.edit.await_args.kwargs["embeds"][0]
         items = next(
             field.value for field in refreshed.fields if field.name == "Inventory"
         )

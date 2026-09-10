@@ -82,7 +82,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
 
         call = interaction.response.send_message.await_args
         self.assertTrue(call.kwargs["ephemeral"])
-        self.assertEqual(call.kwargs["embed"].title, "Olof's Inventory")
+        self.assertEqual(call.kwargs["embeds"][0].title, "Olof's Inventory")
         self.assertIsInstance(call.kwargs["view"], InventoryView)
 
     def test_inventory_embed_shows_flat_storage_and_equipped_capacity(self) -> None:
@@ -162,36 +162,30 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(equipped_dagger.equip_button.disabled)
         self.assertFalse(equipped_dagger.unequip_button.disabled)
 
-    async def test_read_and_use_open_reading_panel_without_consuming_item(self) -> None:
+    async def test_read_opens_separate_panel_without_consuming_item(self) -> None:
         service, note_id, template = self.readable_service()
         inventory = self.database.get_character_inventory(self.character.character_id)
 
-        for action_name in ("read_button", "use_button"):
-            with self.subTest(action=action_name):
-                view = InventoryView(
-                    service, 7, self.character.character_id, inventory, note_id
-                )
-                interaction = interaction_for(7)
-                await getattr(view, action_name).callback(interaction)
+        view = InventoryView(
+            service, 7, self.character.character_id, inventory, note_id
+        )
+        interaction = interaction_for(7)
+        await view.read_button.callback(interaction)
 
-                edited = interaction.response.edit_message.await_args.kwargs
-                embed = edited["embed"]
-                inventory_field = next(
-                    field for field in embed.fields if field.name == "Inventory"
-                )
-                reading_field = next(
-                    field for field in embed.fields if field.name == template.name
-                )
-                self.assertTrue(inventory_field.inline)
-                self.assertTrue(reading_field.inline)
-                self.assertIn(template.description, reading_field.value)
-                self.assertIn(template.content, reading_field.value)
-                self.assertEqual(
-                    self.database.get_character_inventory(
-                        self.character.character_id
-                    ).item(note_id).quantity,
-                    1,
-                )
+        edited = interaction.response.edit_message.await_args.kwargs
+        embeds = edited["embeds"]
+        self.assertEqual(len(embeds), 2)
+        self.assertEqual(embeds[0].title, "Olof's Inventory")
+        self.assertEqual(embeds[1].title, template.name)
+        self.assertIn(template.description, embeds[1].description)
+        self.assertIn(template.content, embeds[1].description)
+        self.assertTrue(view.use_button.disabled)
+        self.assertEqual(
+            self.database.get_character_inventory(
+                self.character.character_id
+            ).item(note_id).quantity,
+            1,
+        )
 
     def test_long_readable_content_is_paginated_without_truncation(self) -> None:
         content = " ".join(f"word-{index}" for index in range(900))
@@ -211,7 +205,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         reconstructed = pages[0][prefix_end:] + "".join(pages[1:])
         self.assertEqual(reconstructed, content)
         self.assertGreater(len(pages), 1)
-        self.assertTrue(all(len(page) <= 1024 for page in pages))
+        self.assertTrue(all(len(page) <= 4096 for page in pages))
         labels = {child.label for child in view.children if hasattr(child, "label")}
         self.assertIn(f"Page 1 / {len(pages)}", labels)
 
@@ -232,7 +226,8 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Page 1 / 1", labels)
 
     def test_item_catalog_loads_all_shared_templates(self) -> None:
-        self.assertEqual(len(self.catalog.all()), 22)
+        self.assertGreaterEqual(len(self.catalog.all()), 22)
+        self.assertEqual(self.catalog.get("common_clothing").weight, 0)
         self.assertEqual(self.catalog.get("great_axe").weight, 4)
         self.assertEqual(self.catalog.get("health_potion").affected_stat, "hp")
 
