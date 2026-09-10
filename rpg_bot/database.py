@@ -14,7 +14,12 @@ from .dice_visuals import (
     normalize_dice_color,
 )
 from .models import Character, Stance
-from .inventory import EquipmentSlot, InventoryState, ItemInstance
+from .inventory import (
+    DEFAULT_CLOTHING_TEMPLATE_ID,
+    EquipmentSlot,
+    InventoryState,
+    ItemInstance,
+)
 from .portraits import default_portrait_key
 from .world import (
     Area,
@@ -124,21 +129,7 @@ class Database:
                 )
                 """
             )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS character_equipment (
-                    character_id INTEGER NOT NULL,
-                    slot TEXT NOT NULL CHECK (
-                        slot IN ('main_hand', 'off_hand', 'armor', 'container')
-                    ),
-                    item_instance_id TEXT NOT NULL,
-                    PRIMARY KEY (character_id, slot),
-                    UNIQUE (character_id, item_instance_id),
-                    FOREIGN KEY (character_id) REFERENCES characters(id),
-                    FOREIGN KEY (item_instance_id) REFERENCES character_items(instance_id)
-                )
-                """
-            )
+            self._initialize_character_equipment(connection)
             # The old model allowed nested item trees. Inventory is now flat and
             # an equipped container contributes capacity instead.
             connection.execute(
@@ -148,7 +139,94 @@ class Database:
                 WHERE parent_container_id IS NOT NULL
                 """
             )
+            self._ensure_default_clothing(connection)
             connection.execute("PRAGMA optimize")
+
+    @staticmethod
+    def _create_character_equipment_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS character_equipment (
+                character_id INTEGER NOT NULL,
+                slot TEXT NOT NULL CHECK (
+                    slot IN ('main_hand', 'off_hand', 'clothing', 'armor', 'container')
+                ),
+                item_instance_id TEXT NOT NULL,
+                PRIMARY KEY (character_id, slot),
+                UNIQUE (character_id, item_instance_id),
+                FOREIGN KEY (character_id) REFERENCES characters(id),
+                FOREIGN KEY (item_instance_id) REFERENCES character_items(instance_id)
+            )
+            """
+        )
+
+    @classmethod
+    def _initialize_character_equipment(cls, connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            """
+            SELECT sql FROM sqlite_schema
+            WHERE type = 'table' AND name = 'character_equipment'
+            """
+        ).fetchone()
+        if row is None:
+            cls._create_character_equipment_table(connection)
+            return
+        if "'clothing'" in (row["sql"] or ""):
+            return
+        connection.execute(
+            "ALTER TABLE character_equipment RENAME TO character_equipment_legacy"
+        )
+        cls._create_character_equipment_table(connection)
+        connection.execute(
+            """
+            INSERT INTO character_equipment (character_id, slot, item_instance_id)
+            SELECT character_id, slot, item_instance_id
+            FROM character_equipment_legacy
+            """
+        )
+        connection.execute("DROP TABLE character_equipment_legacy")
+
+    @staticmethod
+    def _ensure_default_clothing(
+        connection: sqlite3.Connection, character_id: int | None = None
+    ) -> None:
+        parameters: tuple[int, ...] = ()
+        character_filter = ""
+        if character_id is not None:
+            character_filter = "WHERE id = ?"
+            parameters = (character_id,)
+        character_rows = connection.execute(
+            f"SELECT id FROM characters {character_filter} ORDER BY id",
+            parameters,
+        ).fetchall()
+        for character_row in character_rows:
+            existing = connection.execute(
+                """
+                SELECT instance_id FROM character_items
+                WHERE character_id = ? AND template_id = ?
+                ORDER BY rowid LIMIT 1
+                """,
+                (character_row["id"], DEFAULT_CLOTHING_TEMPLATE_ID),
+            ).fetchone()
+            if existing is not None:
+                continue
+            instance_id = uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO character_items (
+                    instance_id, character_id, template_id, quantity, durability
+                ) VALUES (?, ?, ?, 1, NULL)
+                """,
+                (instance_id, character_row["id"], DEFAULT_CLOTHING_TEMPLATE_ID),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO character_equipment (
+                    character_id, slot, item_instance_id
+                ) VALUES (?, 'clothing', ?)
+                """,
+                (character_row["id"], instance_id),
+            )
 
     @staticmethod
     def _create_character_tables(connection: sqlite3.Connection) -> None:
@@ -428,6 +506,7 @@ class Database:
                         for skill, rank in (skills or {}).items()
                     ),
                 )
+                self._ensure_default_clothing(connection, character_id)
         except sqlite3.IntegrityError as error:
             raise CharacterAlreadyExistsError(
                 "You already have a selectable character with that name."

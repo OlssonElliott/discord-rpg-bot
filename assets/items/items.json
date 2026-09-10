@@ -1,5 +1,20 @@
 [
   {
+    "item_type": "clothing",
+    "id": "common_clothing",
+    "name": "Common Clothing",
+    "rarity": "Common",
+    "value": 0,
+    "description": "Simple everyday clothes worn beneath armor.",
+    "weight": 0,
+    "tags": [
+      "clothing",
+      "common"
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
     "item_type": "weapon",
     "id": "rusty_sword",
     "name": "Rusty Sword",

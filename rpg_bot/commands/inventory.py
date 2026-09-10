@@ -80,6 +80,8 @@ def inventory_embed(
         label = (
             _item_label(inventory.item(instance_id), catalog)
             if instance_id is not None
+            else "Nude"
+            if slot is EquipmentSlot.CLOTHING
             else "Empty"
         )
         equipment_lines.append(f"**{slot.value.replace('_', ' ').title()}** — {label}")

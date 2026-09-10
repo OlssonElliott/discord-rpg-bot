@@ -12,7 +12,7 @@ from rpg_bot.commands.inventory import (
     inventory_embed,
 )
 from rpg_bot.database import Database
-from rpg_bot.inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
+from rpg_bot.inventory import DEFAULT_ITEM_CATALOG_PATH, EquipmentSlot, ItemCatalog
 from rpg_bot.inventory_service import InventoryService
 
 
@@ -75,6 +75,17 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         items = next(field.value for field in embed.fields if field.name == "Inventory")
         self.assertIn("Iron Dagger", items)
 
+    def test_inventory_shows_nude_only_after_clothing_is_unequipped(self) -> None:
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        clothing_id = inventory.equipment[EquipmentSlot.CLOTHING]
+
+        self.service.unequip(self.character, clothing_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        embed = inventory_embed(self.character, inventory, self.catalog)
+
+        equipment = next(field.value for field in embed.fields if field.name == "Equipment")
+        self.assertIn("**Clothing** — Nude", equipment)
+
     def test_inventory_view_has_no_nested_storage_controls(self) -> None:
         backpack_id = self.service.grant(self.character, "traveler_backpack")
         inventory = self.database.get_character_inventory(self.character.character_id)
@@ -88,7 +99,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("To bag", labels)
 
     def test_item_catalog_loads_all_shared_templates(self) -> None:
-        self.assertEqual(len(self.catalog.all()), 21)
+        self.assertEqual(len(self.catalog.all()), 22)
         self.assertEqual(self.catalog.get("great_axe").weight, 4)
         self.assertEqual(self.catalog.get("health_potion").affected_stat, "hp")
 
@@ -106,7 +117,10 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         )
 
         inventory = self.database.get_character_inventory(self.character.character_id)
-        self.assertEqual(inventory.items[0].quantity, 3)
+        potion = next(
+            item for item in inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 3)
         self.assertIn("Health Potion ×3", interaction.response.send_message.await_args.args[0])
         self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
 

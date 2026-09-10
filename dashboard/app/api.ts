@@ -15,7 +15,7 @@ export type CharacterSummary = {
 
 export type CatalogItem = {
   id: string;
-  item_type: 'weapon' | 'armor' | 'container' | 'consumable' | 'misc';
+  item_type: 'weapon' | 'armor' | 'clothing' | 'container' | 'consumable' | 'misc';
   name: string;
   rarity: string;
   value: number;

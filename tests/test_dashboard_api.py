@@ -160,7 +160,9 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(placed_status, 201)
         self.assertEqual(list_status, 200)
         self.assertEqual([item["id"] for item in items], ["iron_key"])
-        self.assertEqual(inventory.items[0].template_id, "iron_key")
+        self.assertTrue(
+            any(item.template_id == "iron_key" for item in inventory.items)
+        )
         self.assertEqual(reloaded.get("iron_key").name, "Iron Key")
 
     def test_creating_catalog_item_migrates_matching_legacy_character_item(self) -> None:
@@ -185,7 +187,7 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(self.world.inventory(holder), ())
         inventory = self.database.get_character_inventory(character.character_id)
-        self.assertEqual(inventory.items[0].template_id, "key")
+        self.assertTrue(any(item.template_id == "key" for item in inventory.items))
 
     def test_room_rejects_item_that_is_not_in_catalog(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})

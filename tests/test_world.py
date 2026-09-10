@@ -88,16 +88,26 @@ class WorldServiceTests(unittest.TestCase):
         self.assertEqual((moved.item.name, moved.quantity), ("Health Potion", 2))
         self.assertEqual(self.world.inventory(room_holder)[0].quantity, 1)
         rich_inventory = self.database.get_character_inventory(self.character_id)
-        self.assertEqual(rich_inventory.items[0].quantity, 2)
+        potion = next(
+            item for item in rich_inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 2)
 
         self.world.drop_item(self.character_id, "Health Potion", 1)
 
         self.assertEqual(self.world.inventory(room_holder)[0].quantity, 2)
         rich_inventory = self.database.get_character_inventory(self.character_id)
-        self.assertEqual(rich_inventory.items[0].quantity, 1)
+        potion = next(
+            item for item in rich_inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
         self.assertEqual(
             sum(stack.quantity for stack in self.world.inventory(room_holder))
-            + sum(item.quantity for item in rich_inventory.items),
+            + sum(
+                item.quantity
+                for item in rich_inventory.items
+                if item.template_id != "common_clothing"
+            ),
             3,
         )
 
@@ -111,7 +121,11 @@ class WorldServiceTests(unittest.TestCase):
         self.assertEqual(self.world.get_room(self.entrance.id).loose_items, ())
         inventory = self.database.get_character_inventory(self.character_id)
         self.assertEqual(
-            [(item.template_id, item.quantity) for item in inventory.items],
+            [
+                (item.template_id, item.quantity)
+                for item in inventory.items
+                if item.template_id != "common_clothing"
+            ],
             [("rusty_sword", 1)],
         )
 
@@ -126,7 +140,13 @@ class WorldServiceTests(unittest.TestCase):
 
         self.assertEqual(self.world.inventory(room_holder)[0].item.id, "old_key")
         self.assertEqual(
-            self.database.get_character_inventory(self.character_id).items, ()
+            [
+                item.template_id
+                for item in self.database.get_character_inventory(
+                    self.character_id
+                ).items
+            ],
+            ["common_clothing"],
         )
 
     def test_catalog_loot_uses_the_interactive_character_inventory(self) -> None:
@@ -141,14 +161,21 @@ class WorldServiceTests(unittest.TestCase):
         self.assertEqual(self.world.get_room(self.entrance.id).loose_items, ())
         inventory = self.database.get_character_inventory(self.character_id)
         self.assertEqual(
-            [(item.template_id, item.quantity) for item in inventory.items],
+            [
+                (item.template_id, item.quantity)
+                for item in inventory.items
+                if item.template_id != "common_clothing"
+            ],
             [("health_potion", 2)],
         )
 
         self.world.drop_item(self.character_id, "Health Potion")
 
         inventory = self.database.get_character_inventory(self.character_id)
-        self.assertEqual(inventory.items[0].quantity, 1)
+        potion = next(
+            item for item in inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
         self.assertEqual(
             [(stack.item.id, stack.quantity) for stack in self.world.get_room(self.entrance.id).loose_items],
             [("health_potion", 1)],
@@ -167,7 +194,10 @@ class WorldServiceTests(unittest.TestCase):
 
         self.assertEqual(self.world.inventory(chest_holder)[0].quantity, 1)
         inventory = self.database.get_character_inventory(self.character_id)
-        self.assertEqual(inventory.items[0].quantity, 1)
+        potion = next(
+            item for item in inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
         self.assertEqual(self.world.get_room(self.hall.id).containers, (chest,))
 
     def test_player_can_only_take_from_a_container_in_their_room(self) -> None:
@@ -185,7 +215,9 @@ class WorldServiceTests(unittest.TestCase):
         self.world.take_from_container(self.character_id, chest.id, "iron_dagger")
         self.assertEqual(self.world.inventory(InventoryHolder.entity(chest.id)), ())
         inventory = self.database.get_character_inventory(self.character_id)
-        self.assertEqual(inventory.items[0].template_id, "iron_dagger")
+        self.assertTrue(
+            any(item.template_id == "iron_dagger" for item in inventory.items)
+        )
 
     def test_location_and_room_contents_survive_restart(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)

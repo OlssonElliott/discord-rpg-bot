@@ -14,6 +14,7 @@ from uuid import uuid4
 class ItemType(str, Enum):
     WEAPON = "weapon"
     ARMOR = "armor"
+    CLOTHING = "clothing"
     CONTAINER = "container"
     CONSUMABLE = "consumable"
     MISC = "misc"
@@ -27,6 +28,7 @@ class WeaponGrip(str, Enum):
 class EquipmentSlot(str, Enum):
     MAIN_HAND = "main_hand"
     OFF_HAND = "off_hand"
+    CLOTHING = "clothing"
     ARMOR = "armor"
     CONTAINER = "container"
 
@@ -86,7 +88,7 @@ class ItemCatalog:
         self._templates = {template.template_id: template for template in templates}
         self._source_path = source_path
         self._records = records
-        self._source_mtime_ns = self._mtime_ns()
+        self._source_signature = self._signature()
         self._lock = threading.RLock()
 
     @classmethod
@@ -198,18 +200,18 @@ class ItemCatalog:
                 temporary.unlink(missing_ok=True)
             self._records = records
             self._templates[template.template_id] = template
-            self._source_mtime_ns = self._mtime_ns()
+            self._source_signature = self._signature()
         return template
 
     def _reload_if_changed(self) -> None:
         if self._source_path is None:
             return
-        current_mtime = self._mtime_ns()
-        if current_mtime == self._source_mtime_ns:
+        current_signature = self._signature()
+        if current_signature == self._source_signature:
             return
         with self._lock:
-            current_mtime = self._mtime_ns()
-            if current_mtime == self._source_mtime_ns:
+            current_signature = self._signature()
+            if current_signature == self._source_signature:
                 return
             with self._source_path.open("r", encoding="utf-8") as file:
                 records = json.load(file)
@@ -220,13 +222,14 @@ class ItemCatalog:
                 template.template_id: template for template in templates
             }
             self._records = records
-            self._source_mtime_ns = current_mtime
+            self._source_signature = current_signature
 
-    def _mtime_ns(self) -> int | None:
+    def _signature(self) -> tuple[int, int, int] | None:
         if self._source_path is None:
             return None
         try:
-            return self._source_path.stat().st_mtime_ns
+            stat = self._source_path.stat()
+            return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
         except OSError:
             return None
 
@@ -269,3 +272,4 @@ class InventoryState:
 DEFAULT_ITEM_CATALOG_PATH = (
     Path(__file__).resolve().parent.parent / "assets" / "items" / "items.json"
 )
+DEFAULT_CLOTHING_TEMPLATE_ID = "common_clothing"

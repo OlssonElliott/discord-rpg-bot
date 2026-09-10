@@ -145,6 +145,9 @@ measurements: equipped items still count toward carried weight but do not occupy
 storage. A loose backpack is an ordinary inventory item; equipping it adds its
 capacity to the character's storage limit. Inventory is intentionally flat, and
 older nested contents are moved to that flat inventory automatically at startup.
+Every character starts with weightless **Common Clothing** in a separate clothing
+slot beneath armor. Removing armor leaves the clothing equipped; removing the
+clothing itself shows the character as **Nude** until clothing is equipped again.
 Consumables of the same type stack by quantity. The private character sheet links
 directly to the same inventory UI.
 

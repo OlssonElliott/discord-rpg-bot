@@ -982,7 +982,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         if character.character_id is not None:
             inventory = self.database.get_character_inventory(character.character_id)
             equipment = []
-            for slot in ("main_hand", "off_hand", "armor", "container"):
+            for slot in ("main_hand", "off_hand", "clothing", "armor", "container"):
                 instance_id = next(
                     (
                         equipped_id
@@ -994,6 +994,8 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
                 item_name = (
                     self.item_catalog.get(inventory.item(instance_id).template_id).name
                     if instance_id is not None
+                    else "Nude"
+                    if slot == "clothing"
                     else "Empty"
                 )
                 equipment.append(

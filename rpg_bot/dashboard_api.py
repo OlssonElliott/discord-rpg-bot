@@ -267,7 +267,7 @@ class DashboardAPI:
             item_type = ItemType(cls._text(body, "item_type"))
         except ValueError as error:
             raise ValueError(
-                "Item type must be weapon, armor, container, consumable, or misc."
+                "Item type must be weapon, armor, clothing, container, consumable, or misc."
             ) from error
 
         value = cls._integer(body, "value", default=0)

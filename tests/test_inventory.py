@@ -1,12 +1,15 @@
 import tempfile
 import unittest
 from pathlib import Path
+import sqlite3
 
 from rpg_bot.database import Database
 from rpg_bot.inventory import (
     DEFAULT_ITEM_CATALOG_PATH,
     EquipmentSlot,
     ItemCatalog,
+    ItemTemplate,
+    ItemType,
 )
 from rpg_bot.inventory_service import InventoryError, InventoryService
 
@@ -35,8 +38,102 @@ class InventoryTests(unittest.TestCase):
         inventory = self.database.get_character_inventory(self.character.character_id)
 
         self.assertEqual(first_id, second_id)
-        self.assertEqual(len(inventory.items), 1)
-        self.assertEqual(inventory.items[0].quantity, 5)
+        potion = inventory.item(first_id)
+        self.assertEqual(potion.quantity, 5)
+
+    def test_character_starts_in_weightless_common_clothing(self) -> None:
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        clothing_id = inventory.equipment[EquipmentSlot.CLOTHING]
+
+        self.assertEqual(inventory.item(clothing_id).template_id, "common_clothing")
+        self.assertEqual(inventory.current_storage(self.catalog), 0)
+        self.assertEqual(inventory.current_weight(self.catalog), 0)
+
+    def test_armor_is_worn_over_clothing_and_does_not_replace_it(self) -> None:
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        clothing_id = inventory.equipment[EquipmentSlot.CLOTHING]
+        armor_id = self.service.grant(self.character, "leather_armor")
+
+        self.service.equip(self.character, armor_id)
+        equipped = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(equipped.equipment[EquipmentSlot.CLOTHING], clothing_id)
+        self.assertEqual(equipped.equipment[EquipmentSlot.ARMOR], armor_id)
+
+        self.service.unequip(self.character, armor_id)
+        unarmored = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(unarmored.equipment[EquipmentSlot.CLOTHING], clothing_id)
+        self.assertNotIn(EquipmentSlot.ARMOR, unarmored.equipment)
+
+    def test_equipping_other_clothes_replaces_common_clothing(self) -> None:
+        fine_clothes = ItemTemplate(
+            template_id="fine_clothing",
+            item_type=ItemType.CLOTHING,
+            name="Fine Clothing",
+            rarity="Uncommon",
+            value=20,
+            description="Tailored clothes.",
+            weight=0,
+        )
+        service = InventoryService(
+            self.database, ItemCatalog((*self.catalog.all(), fine_clothes))
+        )
+        fine_id = self.database.add_inventory_item(
+            self.character.character_id, fine_clothes.template_id
+        )
+
+        slot = service.equip(self.character, fine_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        self.assertEqual(slot, EquipmentSlot.CLOTHING)
+        self.assertEqual(inventory.equipment[EquipmentSlot.CLOTHING], fine_id)
+        common = next(
+            item for item in inventory.items if item.template_id == "common_clothing"
+        )
+        self.assertNotIn(common.instance_id, inventory.equipment.values())
+
+    def test_existing_equipment_table_is_migrated_and_gets_default_clothing(self) -> None:
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        clothing_id = inventory.equipment[EquipmentSlot.CLOTHING]
+        self.service.unequip(self.character, clothing_id)
+        self.database.set_inventory_item_quantity(
+            self.character.character_id, clothing_id, 0
+        )
+        connection = sqlite3.connect(self.database.path)
+        try:
+            connection.execute(
+                "ALTER TABLE character_equipment RENAME TO character_equipment_new"
+            )
+            connection.execute(
+                """
+                CREATE TABLE character_equipment (
+                    character_id INTEGER NOT NULL,
+                    slot TEXT NOT NULL CHECK (
+                        slot IN ('main_hand', 'off_hand', 'armor', 'container')
+                    ),
+                    item_instance_id TEXT NOT NULL,
+                    PRIMARY KEY (character_id, slot),
+                    UNIQUE (character_id, item_instance_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO character_equipment
+                SELECT * FROM character_equipment_new
+                """
+            )
+            connection.execute("DROP TABLE character_equipment_new")
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.database.initialize()
+        migrated = self.database.get_character_inventory(self.character.character_id)
+
+        migrated_clothing_id = migrated.equipment[EquipmentSlot.CLOTHING]
+        self.assertEqual(
+            migrated.item(migrated_clothing_id).template_id, "common_clothing"
+        )
 
     def test_equipment_counts_as_weight_but_not_regular_storage(self) -> None:
         axe_id = self.service.grant(self.character, "great_axe")

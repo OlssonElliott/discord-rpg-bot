@@ -89,6 +89,8 @@ class InventoryService:
                     raise InventoryError("Unequip the two-handed weapon first.")
         elif template.item_type is ItemType.ARMOR:
             slot = EquipmentSlot.ARMOR
+        elif template.item_type is ItemType.CLOTHING:
+            slot = EquipmentSlot.CLOTHING
         elif template.item_type is ItemType.CONTAINER and template.can_equip:
             slot = EquipmentSlot.CONTAINER
         else:
