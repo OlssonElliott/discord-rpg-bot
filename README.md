@@ -140,11 +140,15 @@ restart.
 
 Inventory ownership and equipment are stored in SQLite, while reusable item
 templates are managed through the dashboard's **Item library** and persisted in
-`assets/items/items.json`. Item weight and inventory storage are separate
+`assets/items/items.json`. Item weight and inventory slots are separate
 measurements: equipped items still count toward carried weight but do not occupy
-storage. A loose backpack is an ordinary inventory item; equipping it adds its
-capacity to the character's storage limit. Inventory is intentionally flat, and
-older nested contents are moved to that flat inventory automatically at startup.
+slots. Characters start with four slots, while carried-weight capacity equals
+Strength (or 10 for legacy characters without Strength). A loose backpack is an
+ordinary inventory item; equipping it adds its capacity to the character's slot
+limit. Each item template has a `slot_cost`; weightless readable items default to
+zero slots, so notes need no space while books can still use a slot. Inventory is
+intentionally flat, and older nested contents are moved to that flat inventory
+automatically at startup.
 Every character starts with weightless **Common Clothing** in a separate clothing
 slot beneath armor. Removing armor leaves the clothing equipped; removing the
 clothing itself shows the character as **Nude** until clothing is equipped again.
@@ -154,6 +158,10 @@ separate from their physical description. **Read** opens that text
 in a separate full-width panel below the inventory, with lossless pagination for
 longer books, letters, notes, journals, and other documents. While reading, the
 same button becomes **Close reading**; **Use** remains reserved for consumables.
+Character wallets store copper, silver, and gold independently from item slots.
+The first 50 coins across all denominations are weightless, and every started
+group of 50 coins after that adds one carried-weight unit. DMs can add money with
+`/givecoins`; the private inventory shows both the wallet and coin weight.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below

@@ -11,6 +11,13 @@ from typing import Iterable
 from uuid import uuid4
 
 
+DEFAULT_BASE_SLOTS = 4
+DEFAULT_CARRY_CAPACITY = 10
+DEFAULT_CLOTHING_TEMPLATE_ID = "common_clothing"
+FREE_COIN_COUNT = 50
+COINS_PER_WEIGHT = 50
+
+
 class ItemType(str, Enum):
     WEAPON = "weapon"
     ARMOR = "armor"
@@ -49,6 +56,7 @@ class ItemTemplate:
     value: int
     description: str
     weight: int
+    slot_cost: int | None = None
     tags: tuple[str, ...] = ()
     grip: WeaponGrip | None = None
     durability: int | None = None
@@ -63,6 +71,18 @@ class ItemTemplate:
     trait: str | None = None
     drawback: str | None = None
     content: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.weight < 0:
+            raise ValueError("Item weight cannot be negative.")
+        if self.slot_cost is None:
+            object.__setattr__(
+                self,
+                "slot_cost",
+                0 if self.item_type is ItemType.READABLE and self.weight == 0 else 1,
+            )
+        elif self.slot_cost < 0:
+            raise ValueError("Item slot cost cannot be negative.")
 
     @property
     def stackable(self) -> bool:
@@ -110,6 +130,15 @@ class ItemCatalog:
     def _template_from_record(record: dict[str, object]) -> ItemTemplate:
         item_type = ItemType(str(record["item_type"]))
         protection = int(record.get("protection_max", record.get("protection", 0)))
+        weight = int(record.get("weight", record.get("load", 0)))
+        slot_cost = int(
+            record.get(
+                "slot_cost",
+                0 if item_type is ItemType.READABLE and weight == 0 else 1,
+            )
+        )
+        if weight < 0 or slot_cost < 0:
+            raise ValueError("Item weight and slot cost cannot be negative.")
         return ItemTemplate(
             template_id=str(record["id"]),
             item_type=item_type,
@@ -117,7 +146,8 @@ class ItemCatalog:
             rarity=str(record["rarity"]),
             value=int(record["value"]),
             description=str(record["description"]),
-            weight=int(record.get("weight", record.get("load", 0))),
+            weight=weight,
+            slot_cost=slot_cost,
             tags=tuple(str(tag) for tag in record.get("tags", [])),
             grip=(
                 WeaponGrip(str(record.get("grip", "one_handed")))
@@ -282,6 +312,10 @@ class InventoryState:
     total_storage: int
     items: tuple[ItemInstance, ...]
     equipment: dict[EquipmentSlot, str]
+    strength: int | None = None
+    copper: int = 0
+    silver: int = 0
+    gold: int = 0
 
     def item(self, instance_id: str) -> ItemInstance:
         try:
@@ -290,18 +324,41 @@ class InventoryState:
             raise ValueError("That item is not in this inventory.") from error
 
     def current_storage(self, catalog: ItemCatalog) -> int:
+        """Return slots occupied by unequipped item stacks."""
         equipped = set(self.equipment.values())
         return sum(
-            catalog.get(item.template_id).weight * item.quantity
+            catalog.get(item.template_id).slot_cost
             for item in self.items
             if item.instance_id not in equipped
         )
 
     def current_weight(self, catalog: ItemCatalog) -> int:
-        return sum(
-            catalog.get(item.template_id).weight * item.quantity
+        item_weight = sum(
+            (
+                0
+                if item.template_id == DEFAULT_CLOTHING_TEMPLATE_ID
+                else catalog.get(item.template_id).weight * item.quantity
+            )
             for item in self.items
         )
+        return item_weight + self.coin_weight()
+
+    def carry_capacity(self) -> int:
+        return self.strength if self.strength is not None else DEFAULT_CARRY_CAPACITY
+
+    def coin_count(self) -> int:
+        return self.copper + self.silver + self.gold
+
+    def coin_weight(self) -> int:
+        weighted_coins = max(0, self.coin_count() - FREE_COIN_COUNT)
+        return (weighted_coins + COINS_PER_WEIGHT - 1) // COINS_PER_WEIGHT
+
+    def additional_slots(self, catalog: ItemCatalog, template: ItemTemplate) -> int:
+        if template.stackable and any(
+            item.template_id == template.template_id for item in self.items
+        ):
+            return 0
+        return template.slot_cost
 
     def storage_capacity(self, catalog: ItemCatalog) -> int:
         """Return base storage plus the bonus from an equipped container."""
@@ -314,4 +371,3 @@ class InventoryState:
 DEFAULT_ITEM_CATALOG_PATH = (
     Path(__file__).resolve().parent.parent / "assets" / "items" / "items.json"
 )
-DEFAULT_CLOTHING_TEMPLATE_ID = "common_clothing"

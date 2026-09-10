@@ -15,6 +15,7 @@ from .dice_visuals import (
 )
 from .models import Character, Stance
 from .inventory import (
+    DEFAULT_BASE_SLOTS,
     DEFAULT_CLOTHING_TEMPLATE_ID,
     EquipmentSlot,
     InventoryState,
@@ -110,7 +111,39 @@ class Database:
                 """
                 CREATE TABLE IF NOT EXISTS character_inventories (
                     character_id INTEGER PRIMARY KEY,
-                    total_storage INTEGER NOT NULL DEFAULT 20 CHECK (total_storage >= 0),
+                    total_storage INTEGER NOT NULL DEFAULT 4 CHECK (total_storage >= 0),
+                    FOREIGN KEY (character_id) REFERENCES characters(id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    name TEXT PRIMARY KEY
+                )
+                """
+            )
+            slots_migration = "inventory_base_slots_4"
+            if connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE name = ?",
+                (slots_migration,),
+            ).fetchone() is None:
+                connection.execute(
+                    "UPDATE character_inventories SET total_storage = ? "
+                    "WHERE total_storage = 20",
+                    (DEFAULT_BASE_SLOTS,),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations (name) VALUES (?)",
+                    (slots_migration,),
+                )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_wallets (
+                    character_id INTEGER PRIMARY KEY,
+                    copper INTEGER NOT NULL DEFAULT 0 CHECK (copper >= 0),
+                    silver INTEGER NOT NULL DEFAULT 0 CHECK (silver >= 0),
+                    gold INTEGER NOT NULL DEFAULT 0 CHECK (gold >= 0),
                     FOREIGN KEY (character_id) REFERENCES characters(id)
                 )
                 """
@@ -653,7 +686,9 @@ class Database:
                 (guild_id, channel_id, character_id, message_id),
             )
 
-    def get_character_inventory(self, character_id: int, total_storage: int = 20) -> InventoryState:
+    def get_character_inventory(
+        self, character_id: int, total_storage: int = DEFAULT_BASE_SLOTS
+    ) -> InventoryState:
         with self._connect() as connection:
             connection.execute(
                 """
@@ -663,7 +698,20 @@ class Database:
                 (character_id, total_storage),
             )
             inventory_row = connection.execute(
-                "SELECT total_storage FROM character_inventories WHERE character_id = ?",
+                """
+                SELECT inventory.total_storage, characters.strength
+                FROM character_inventories AS inventory
+                JOIN characters ON characters.id = inventory.character_id
+                WHERE inventory.character_id = ?
+                """,
+                (character_id,),
+            ).fetchone()
+            connection.execute(
+                "INSERT OR IGNORE INTO character_wallets (character_id) VALUES (?)",
+                (character_id,),
+            )
+            wallet_row = connection.execute(
+                "SELECT copper, silver, gold FROM character_wallets WHERE character_id = ?",
                 (character_id,),
             ).fetchone()
             item_rows = connection.execute(
@@ -700,7 +748,43 @@ class Database:
                 EquipmentSlot(row["slot"]): row["item_instance_id"]
                 for row in equipment_rows
             },
+            strength=inventory_row["strength"],
+            copper=wallet_row["copper"],
+            silver=wallet_row["silver"],
+            gold=wallet_row["gold"],
         )
+
+    def add_currency(
+        self,
+        character_id: int,
+        *,
+        copper: int = 0,
+        silver: int = 0,
+        gold: int = 0,
+    ) -> InventoryState:
+        if copper < 0 or silver < 0 or gold < 0:
+            raise ValueError("Currency amounts cannot be negative.")
+        if copper == silver == gold == 0:
+            raise ValueError("At least one currency amount must be greater than zero.")
+        with self._connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone() is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            connection.execute(
+                "INSERT OR IGNORE INTO character_wallets (character_id) VALUES (?)",
+                (character_id,),
+            )
+            connection.execute(
+                """
+                UPDATE character_wallets
+                SET copper = copper + ?, silver = silver + ?, gold = gold + ?
+                WHERE character_id = ?
+                """,
+                (copper, silver, gold, character_id),
+            )
+        return self.get_character_inventory(character_id)
 
     def add_inventory_item(
         self,

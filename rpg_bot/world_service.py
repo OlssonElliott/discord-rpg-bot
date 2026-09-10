@@ -327,11 +327,19 @@ class WorldService:
         self, character_id: int, template: ItemTemplate, quantity: int
     ) -> None:
         inventory = self.database.get_character_inventory(character_id)
+        added_slots = inventory.additional_slots(self.catalog, template)
         if (
-            inventory.current_storage(self.catalog) + template.weight * quantity
+            inventory.current_storage(self.catalog) + added_slots
             > inventory.storage_capacity(self.catalog)
         ):
-            raise InvalidTransferError("There is not enough inventory space.")
+            raise InvalidTransferError("There are not enough storage slots.")
+        if (
+            inventory.current_weight(self.catalog) + template.weight * quantity
+            > inventory.carry_capacity()
+        ):
+            raise InvalidTransferError(
+                "That would exceed the character's carry capacity."
+            )
 
     def _resolve_character_item(
         self, inventory: InventoryState, query: str

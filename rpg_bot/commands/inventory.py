@@ -47,11 +47,15 @@ def _inventory_lines(
         template = catalog.get(item.template_id)
         weight = template.weight * item.quantity
         capacity_bonus = (
-            f" • +{template.capacity or 0} storage when equipped"
+            f" • +{template.capacity or 0} slots when equipped"
             if template.item_type is ItemType.CONTAINER
             else ""
         )
-        lines.append(f"• {_item_label(item, catalog)} • {weight} weight{capacity_bonus}")
+        slot_label = "slot" if template.slot_cost == 1 else "slots"
+        lines.append(
+            f"• {_item_label(item, catalog)} • {weight} weight • "
+            f"{template.slot_cost} {slot_label}{capacity_bonus}"
+        )
     return lines
 
 
@@ -127,10 +131,15 @@ def inventory_embed(
         title=f"{character.name}'s Inventory",
         colour=discord.Colour.dark_gold(),
     )
+    coin_weight = inventory.coin_weight()
+    coin_weight_text = f" (coins: {coin_weight})" if coin_weight else ""
     embed.description = (
-        f"Storage: **{inventory.current_storage(catalog)}/"
+        f"Money: **{inventory.gold} gold • {inventory.silver} silver • "
+        f"{inventory.copper} copper**\n"
+        f"Storage slots: **{inventory.current_storage(catalog)}/"
         f"{inventory.storage_capacity(catalog)}**\n"
-        f"Carried weight: **{inventory.current_weight(catalog)}**"
+        f"Carried weight: **{inventory.current_weight(catalog)}/"
+        f"{inventory.carry_capacity()}**{coin_weight_text}"
     )
     equipment_lines = []
     for slot in EquipmentSlot:
@@ -154,6 +163,7 @@ def inventory_embed(
         item = inventory.item(selected_id)
         template = catalog.get(item.template_id)
         details = [template.description, f"Rarity: **{template.rarity}**"]
+        details.append(f"Slots: **{template.slot_cost}**")
         if template.item_type is ItemType.WEAPON:
             damage = " + ".join(
                 f"{part.amount} {part.damage_type}" for part in template.damage_parts
@@ -164,7 +174,7 @@ def inventory_embed(
             details.append(f"Dodge: **{template.dodge_penalty:+d}**")
         elif template.item_type is ItemType.CONTAINER:
             details.append(
-                f"Storage bonus when equipped: **+{template.capacity or 0}**"
+                f"Storage slot bonus when equipped: **+{template.capacity or 0}**"
             )
         embed.add_field(
             name=f"Selected: {_item_label(item, catalog)}",

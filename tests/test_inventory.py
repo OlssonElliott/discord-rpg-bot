@@ -138,7 +138,7 @@ class InventoryTests(unittest.TestCase):
     def test_equipment_counts_as_weight_but_not_regular_storage(self) -> None:
         axe_id = self.service.grant(self.character, "great_axe")
         before = self.database.get_character_inventory(self.character.character_id)
-        self.assertEqual(before.current_storage(self.catalog), 4)
+        self.assertEqual(before.current_storage(self.catalog), 1)
 
         slot = self.service.equip(self.character, axe_id)
         equipped = self.database.get_character_inventory(self.character.character_id)
@@ -152,29 +152,41 @@ class InventoryTests(unittest.TestCase):
         dagger_id = self.service.grant(self.character, "iron_dagger")
 
         loose = self.database.get_character_inventory(self.character.character_id)
-        self.assertEqual(loose.storage_capacity(self.catalog), 20)
-        self.assertEqual(loose.current_storage(self.catalog), 3)
+        self.assertEqual(loose.storage_capacity(self.catalog), 4)
+        self.assertEqual(loose.current_storage(self.catalog), 2)
 
         self.service.equip(self.character, backpack_id)
         inventory = self.database.get_character_inventory(self.character.character_id)
 
-        self.assertEqual(inventory.storage_capacity(self.catalog), 26)
+        self.assertEqual(inventory.storage_capacity(self.catalog), 10)
         self.assertEqual(inventory.current_storage(self.catalog), 1)
         self.assertEqual(inventory.current_weight(self.catalog), 3)
         self.assertIsNone(inventory.item(dagger_id).parent_container_id)
 
     def test_backpack_cannot_be_unequipped_when_inventory_would_overflow(self) -> None:
+        token = ItemTemplate(
+            template_id="inventory_token",
+            item_type=ItemType.MISC,
+            name="Inventory Token",
+            rarity="Common",
+            value=0,
+            description="Used to exercise slot capacity.",
+            weight=0,
+        )
+        service = InventoryService(
+            self.database, ItemCatalog((*self.catalog.all(), token))
+        )
         backpack_id = self.service.grant(self.character, "traveler_backpack")
         self.service.equip(self.character, backpack_id)
-        for _ in range(6):
-            self.service.grant(self.character, "great_axe")
+        for _ in range(10):
+            service.grant(self.character, token.template_id)
 
         with self.assertRaisesRegex(InventoryError, "unequip"):
-            self.service.unequip(self.character, backpack_id)
+            service.unequip(self.character, backpack_id)
 
         inventory = self.database.get_character_inventory(self.character.character_id)
-        self.assertEqual(inventory.storage_capacity(self.catalog), 26)
-        self.assertEqual(inventory.current_storage(self.catalog), 24)
+        self.assertEqual(inventory.storage_capacity(service.catalog), 10)
+        self.assertEqual(inventory.current_storage(service.catalog), 10)
 
     def test_initialize_flattens_items_from_the_old_container_model(self) -> None:
         backpack_id = self.service.grant(self.character, "traveler_backpack")
@@ -222,6 +234,78 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(read_result.content, note.content)
         self.assertEqual(after.items, before.items)
 
+    def test_weightless_readable_uses_no_slot_but_book_can_use_one(self) -> None:
+        note = ItemTemplate(
+            "note", ItemType.READABLE, "Note", "Common", 0, "Paper.", 0,
+            slot_cost=0,
+        )
+        book = ItemTemplate(
+            "book", ItemType.READABLE, "Book", "Common", 0, "Bound pages.", 1,
+            slot_cost=1,
+        )
+        service = InventoryService(
+            self.database, ItemCatalog((*self.catalog.all(), note, book))
+        )
+
+        service.grant(self.character, note.template_id)
+        service.grant(self.character, book.template_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        self.assertEqual(inventory.current_storage(service.catalog), 1)
+        self.assertEqual(inventory.current_weight(service.catalog), 1)
+
+    def test_carried_weight_is_limited_by_strength(self) -> None:
+        self.service.grant(self.character, "plate_armor")
+        self.service.grant(self.character, "great_axe")
+        self.service.grant(self.character, "crude_stone_maul")
+
+        with self.assertRaisesRegex(InventoryError, "carry capacity"):
+            self.service.grant(self.character, "iron_dagger")
+
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(inventory.current_weight(self.catalog), 14)
+        self.assertEqual(inventory.carry_capacity(), 14)
+
+    def test_all_coin_denominations_share_one_weight_threshold(self) -> None:
+        wallet = self.service.grant_currency(
+            self.character, copper=49, silver=49, gold=49
+        )
+
+        self.assertEqual(wallet.coin_count(), 147)
+        self.assertEqual(wallet.coin_weight(), 2)
+        self.assertEqual(wallet.current_storage(self.catalog), 0)
+        self.assertEqual(wallet.current_weight(self.catalog), 2)
+
+        with self.assertRaisesRegex(InventoryError, "carry capacity"):
+            self.service.grant_currency(self.character, copper=604)
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_character_inventory(self.character.character_id)
+        self.assertEqual(
+            (persisted.copper, persisted.silver, persisted.gold), (49, 49, 49)
+        )
+
+    def test_existing_default_storage_is_migrated_to_four_slots(self) -> None:
+        connection = sqlite3.connect(self.database.path)
+        try:
+            connection.execute(
+                "UPDATE character_inventories SET total_storage = 20 "
+                "WHERE character_id = ?",
+                (self.character.character_id,),
+            )
+            connection.execute(
+                "DELETE FROM schema_migrations WHERE name = 'inventory_base_slots_4'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.database.initialize()
+
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(inventory.storage_capacity(self.catalog), 4)
+
 
 class ItemCatalogTests(unittest.TestCase):
     def test_readable_content_persists_and_can_be_edited(self) -> None:
@@ -250,6 +334,7 @@ class ItemCatalogTests(unittest.TestCase):
             self.assertEqual(readable.item_type, ItemType.READABLE)
             self.assertEqual(readable.description, record["description"])
             self.assertEqual(readable.content, "A corrected final entry.")
+            self.assertEqual(readable.slot_cost, 1)
 
     def test_other_process_view_reloads_after_catalog_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

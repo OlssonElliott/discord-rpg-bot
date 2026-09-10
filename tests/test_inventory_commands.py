@@ -107,8 +107,9 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
 
         embed = inventory_embed(self.character, inventory, self.catalog)
 
-        self.assertIn("Storage: **1/26**", embed.description)
-        self.assertIn("Carried weight: **3**", embed.description)
+        self.assertIn("Storage slots: **1/10**", embed.description)
+        self.assertIn("Carried weight: **3/14**", embed.description)
+        self.assertIn("Money: **0 gold", embed.description)
         equipment = next(field.value for field in embed.fields if field.name == "Equipment")
         self.assertIn("Traveler Backpack", equipment)
         items = next(field.value for field in embed.fields if field.name == "Inventory")
@@ -324,6 +325,27 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(potion.quantity, 3)
         self.assertIn("Health Potion ×3", interaction.response.send_message.await_args.args[0])
         self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
+
+    async def test_dm_can_give_persisted_coins(self) -> None:
+        cog = DMCommands(self.database)
+        interaction = interaction_for(99)
+        member = SimpleNamespace(id=7)
+
+        await cog.give_coins.callback(
+            cog.give_coins.binding,
+            interaction,
+            member,
+            60,
+            4,
+            2,
+        )
+
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(
+            (inventory.copper, inventory.silver, inventory.gold), (60, 4, 2)
+        )
+        self.assertEqual(inventory.coin_weight(), 1)
+        self.assertIn("2 gold", interaction.response.send_message.await_args.args[0])
 
 
 if __name__ == "__main__":

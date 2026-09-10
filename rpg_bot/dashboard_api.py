@@ -78,6 +78,7 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         "value": template.value,
         "description": template.description,
         "weight": template.weight,
+        "slot_cost": template.slot_cost,
         "stackable": template.stackable,
         "content": template.content,
     }
@@ -301,8 +302,10 @@ class DashboardAPI:
 
         value = cls._integer(body, "value", default=0)
         weight = cls._integer(body, "weight", default=0)
-        if value < 0 or weight < 0:
-            raise ValueError("Item value and weight cannot be negative.")
+        default_slot_cost = 0 if item_type is ItemType.READABLE and weight == 0 else 1
+        slot_cost = cls._integer(body, "slot_cost", default=default_slot_cost)
+        if value < 0 or weight < 0 or slot_cost < 0:
+            raise ValueError("Item value, weight, and slot cost cannot be negative.")
         record: dict[str, object] = {
             "item_type": item_type.value,
             "id": cls._text(body, "id"),
@@ -311,6 +314,7 @@ class DashboardAPI:
             "value": value,
             "description": cls._optional_text(body, "description") or "",
             "weight": weight,
+            "slot_cost": slot_cost,
             "tags": [],
             "modifiers": [],
             "requirements": [],

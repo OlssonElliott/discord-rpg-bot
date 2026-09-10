@@ -237,6 +237,7 @@ class DashboardAPITests(unittest.TestCase):
 
         self.assertEqual(created_status, 201)
         self.assertEqual(created["content"], "Do not open the western gate after sunset...")
+        self.assertEqual(created["slot_cost"], 0)
         self.assertEqual(updated_status, 200)
         self.assertEqual(updated["content"], "The western gate is already open.")
         self.assertEqual(

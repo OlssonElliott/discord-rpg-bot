@@ -35,18 +35,54 @@ class InventoryService:
         if not template.stackable and quantity != 1:
             raise InventoryError("Only consumables can be granted as a stack.")
         inventory = self.database.get_character_inventory(character.character_id)
+        added_slots = inventory.additional_slots(self.catalog, template)
         added_weight = template.weight * quantity
         if (
-            inventory.current_storage(self.catalog) + added_weight
+            inventory.current_storage(self.catalog) + added_slots
             > inventory.storage_capacity(self.catalog)
         ):
-            raise InventoryError("There is not enough inventory space.")
+            raise InventoryError("There are not enough storage slots.")
+        if (
+            inventory.current_weight(self.catalog) + added_weight
+            > inventory.carry_capacity()
+        ):
+            raise InventoryError("That would exceed the character's carry capacity.")
         return self.database.add_inventory_item(
             character.character_id,
             template_id,
             quantity=quantity,
             durability=template.durability,
             stackable=template.stackable,
+        )
+
+    def grant_currency(
+        self,
+        character: Character,
+        *,
+        copper: int = 0,
+        silver: int = 0,
+        gold: int = 0,
+    ) -> InventoryState:
+        if character.character_id is None:
+            raise InventoryError("The character has not been saved.")
+        if copper < 0 or silver < 0 or gold < 0:
+            raise InventoryError("Currency amounts cannot be negative.")
+        if copper == silver == gold == 0:
+            raise InventoryError("Give at least one coin.")
+        inventory = self.database.get_character_inventory(character.character_id)
+        future = replace(
+            inventory,
+            copper=inventory.copper + copper,
+            silver=inventory.silver + silver,
+            gold=inventory.gold + gold,
+        )
+        if future.current_weight(self.catalog) > future.carry_capacity():
+            raise InventoryError("Those coins would exceed the character's carry capacity.")
+        return self.database.add_currency(
+            character.character_id,
+            copper=copper,
+            silver=silver,
+            gold=gold,
         )
 
     def equip(
@@ -117,7 +153,7 @@ class InventoryService:
             inventory, items=future_items, equipment=future_equipment
         )
         if future.current_storage(self.catalog) > future.storage_capacity(self.catalog):
-            raise InventoryError("There is not enough room to store displaced equipment.")
+            raise InventoryError("There are not enough slots to store displaced equipment.")
         self.database.equip_inventory_item(
             character.character_id,
             instance_id,
@@ -141,7 +177,7 @@ class InventoryService:
         }
         future = replace(inventory, equipment=future_equipment)
         if future.current_storage(self.catalog) > future.storage_capacity(self.catalog):
-            raise InventoryError("There is not enough inventory space to unequip that item.")
+            raise InventoryError("There are not enough storage slots to unequip that item.")
         for slot in slots:
             self.database.unequip_inventory_slot(character.character_id, slot)
 

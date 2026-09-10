@@ -21,6 +21,7 @@ export type CatalogItem = {
   value: number;
   description: string;
   weight: number;
+  slot_cost: number;
   stackable: boolean;
   content: string | null;
   grip?: string;
