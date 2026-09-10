@@ -193,6 +193,24 @@ class InventoryView(InventoryOwnedView):
         self.add_item(InventoryItemSelect(self, inventory))
         self.previous_page.disabled = page <= 0
         self.next_page.disabled = page >= self.page_count - 1
+        selected = inventory.item(selected_id) if selected_id is not None else None
+        template = (
+            service.catalog.get(selected.template_id) if selected is not None else None
+        )
+        is_equipped = selected_id in inventory.equipment.values()
+        can_equip = template is not None and (
+            template.item_type
+            in {ItemType.WEAPON, ItemType.ARMOR, ItemType.CLOTHING}
+            or (
+                template.item_type is ItemType.CONTAINER
+                and template.can_equip
+            )
+        )
+        self.equip_button.disabled = not can_equip or is_equipped
+        self.unequip_button.disabled = not is_equipped
+        self.use_button.disabled = (
+            template is None or template.item_type is not ItemType.CONSUMABLE
+        )
 
     async def _run(self, interaction: discord.Interaction, action: str) -> None:
         if self.selected_id is None:

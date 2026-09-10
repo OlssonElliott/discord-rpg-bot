@@ -98,6 +98,45 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Store…", labels)
         self.assertNotIn("To bag", labels)
 
+    def test_item_actions_are_enabled_only_when_they_apply(self) -> None:
+        dagger_id = self.service.grant(self.character, "iron_dagger")
+        potion_id = self.service.grant(self.character, "health_potion")
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        no_selection = InventoryView(
+            self.service, 7, self.character.character_id, inventory
+        )
+        dagger = InventoryView(
+            self.service, 7, self.character.character_id, inventory, dagger_id
+        )
+        potion = InventoryView(
+            self.service, 7, self.character.character_id, inventory, potion_id
+        )
+
+        self.assertTrue(no_selection.equip_button.disabled)
+        self.assertTrue(no_selection.unequip_button.disabled)
+        self.assertTrue(no_selection.use_button.disabled)
+        self.assertFalse(dagger.equip_button.disabled)
+        self.assertTrue(dagger.unequip_button.disabled)
+        self.assertTrue(dagger.use_button.disabled)
+        self.assertTrue(potion.equip_button.disabled)
+        self.assertTrue(potion.unequip_button.disabled)
+        self.assertFalse(potion.use_button.disabled)
+
+        self.service.equip(self.character, dagger_id)
+        equipped_inventory = self.database.get_character_inventory(
+            self.character.character_id
+        )
+        equipped_dagger = InventoryView(
+            self.service,
+            7,
+            self.character.character_id,
+            equipped_inventory,
+            dagger_id,
+        )
+        self.assertTrue(equipped_dagger.equip_button.disabled)
+        self.assertFalse(equipped_dagger.unequip_button.disabled)
+
     def test_item_catalog_loads_all_shared_templates(self) -> None:
         self.assertEqual(len(self.catalog.all()), 22)
         self.assertEqual(self.catalog.get("great_axe").weight, 4)
