@@ -70,7 +70,7 @@ def _character_data(character: object) -> JsonObject:
 
 
 def _template_data(template: ItemTemplate) -> JsonObject:
-    return {
+    data: JsonObject = {
         "id": template.template_id,
         "item_type": template.item_type.value,
         "name": template.name,
@@ -79,7 +79,30 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         "description": template.description,
         "weight": template.weight,
         "stackable": template.stackable,
+        "content": template.content,
     }
+    if template.item_type is ItemType.WEAPON:
+        data.update(
+            grip=template.grip.value if template.grip else "one_handed",
+            durability=template.durability,
+            damage=template.damage_parts[0].amount if template.damage_parts else 1,
+            damage_type=(
+                template.damage_parts[0].damage_type
+                if template.damage_parts
+                else "physical"
+            ),
+        )
+    elif template.item_type is ItemType.ARMOR:
+        data.update(
+            protection=template.protection,
+            dodge_penalty=template.dodge_penalty,
+            strength_requirement=template.strength_requirement,
+        )
+    elif template.item_type is ItemType.CONTAINER:
+        data.update(capacity=template.capacity, can_equip=template.can_equip)
+    elif template.item_type is ItemType.CONSUMABLE:
+        data["affected_amount"] = template.affected_amount
+    return data
 
 
 class DashboardAPI:
@@ -119,6 +142,12 @@ class DashboardAPI:
             record = self._item_record(body)
             template = self.world.create_item_template(record)
             return 201, _template_data(template)
+
+        match = re.fullmatch(r"/api/items/([^/]+)", path)
+        if method == "PUT" and match:
+            record = self._item_record({**body, "id": match.group(1)})
+            template = self.world.update_item_template(match.group(1), record)
+            return 200, _template_data(template)
 
         match = re.fullmatch(r"/api/characters/(\d+)/room", path)
         if method == "PATCH" and match:
@@ -267,7 +296,7 @@ class DashboardAPI:
             item_type = ItemType(cls._text(body, "item_type"))
         except ValueError as error:
             raise ValueError(
-                "Item type must be weapon, armor, clothing, container, consumable, or misc."
+                "Item type must be weapon, armor, clothing, container, consumable, readable, or misc."
             ) from error
 
         value = cls._integer(body, "value", default=0)
@@ -333,6 +362,11 @@ class DashboardAPI:
                 ),
                 side_effects=None,
             )
+        elif item_type is ItemType.READABLE:
+            content = body.get("content", "")
+            if not isinstance(content, str):
+                raise ValueError("'content' must be text.")
+            record["content"] = content
         return record
 
     @staticmethod

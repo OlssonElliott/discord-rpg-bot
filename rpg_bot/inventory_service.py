@@ -10,6 +10,7 @@ from .inventory import (
     InventoryState,
     ItemCatalog,
     ItemInstance,
+    ItemTemplate,
     ItemType,
     WeaponGrip,
 )
@@ -144,10 +145,22 @@ class InventoryService:
         for slot in slots:
             self.database.unequip_inventory_slot(character.character_id, slot)
 
-    def use(self, character: Character, instance_id: str) -> Character:
+    def read(self, character: Character, instance_id: str) -> ItemTemplate:
         inventory = self._inventory(character)
         item = inventory.item(instance_id)
         template = self.catalog.get(item.template_id)
+        if template.item_type is not ItemType.READABLE:
+            raise InventoryError("That item is not readable.")
+        return template
+
+    def use(
+        self, character: Character, instance_id: str
+    ) -> Character | ItemTemplate:
+        inventory = self._inventory(character)
+        item = inventory.item(instance_id)
+        template = self.catalog.get(item.template_id)
+        if template.item_type is ItemType.READABLE:
+            return self.read(character, instance_id)
         if template.item_type is not ItemType.CONSUMABLE:
             raise InventoryError("That item is not consumable.")
         if template.affected_stat != "hp" or template.affected_amount is None:

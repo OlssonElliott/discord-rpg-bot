@@ -17,6 +17,7 @@ class ItemType(str, Enum):
     CLOTHING = "clothing"
     CONTAINER = "container"
     CONSUMABLE = "consumable"
+    READABLE = "readable"
     MISC = "misc"
 
 
@@ -61,6 +62,7 @@ class ItemTemplate:
     affected_amount: int | None = None
     trait: str | None = None
     drawback: str | None = None
+    content: str | None = None
 
     @property
     def stackable(self) -> bool:
@@ -158,6 +160,11 @@ class ItemCatalog:
             ),
             trait=str(record["trait"]) if record.get("trait") else None,
             drawback=str(record["drawback"]) if record.get("drawback") else None,
+            content=(
+                str(record.get("content", ""))
+                if item_type is ItemType.READABLE
+                else None
+            ),
         )
 
     def get(self, template_id: str) -> ItemTemplate:
@@ -187,21 +194,56 @@ class ItemCatalog:
                 raise ValueError("This item catalog is not backed by a writable file.")
 
             records = [*self._records, record]
-            temporary = self._source_path.with_name(
-                f".{self._source_path.name}.{uuid4().hex}.tmp"
-            )
-            try:
-                temporary.write_text(
-                    json.dumps(records, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-                temporary.replace(self._source_path)
-            finally:
-                temporary.unlink(missing_ok=True)
+            self._write_records(records)
             self._records = records
             self._templates[template.template_id] = template
             self._source_signature = self._signature()
         return template
+
+    def update(
+        self, template_id: str, record: dict[str, object]
+    ) -> ItemTemplate:
+        """Replace a template while keeping its stable catalog identifier."""
+        updated_record = {**record, "id": template_id}
+        template = self._template_from_record(updated_record)
+        with self._lock:
+            self._reload_if_changed()
+            if template_id not in self._templates:
+                raise ValueError(f"Unknown item template: {template_id}")
+            if self._templates[template_id].item_type is not template.item_type:
+                raise ValueError("An existing item's type cannot be changed.")
+            if any(
+                existing.template_id != template_id
+                and existing.name.casefold() == template.name.casefold()
+                for existing in self._templates.values()
+            ):
+                raise ValueError(f"An item named '{template.name}' already exists.")
+            if self._source_path is None or self._records is None:
+                raise ValueError("This item catalog is not backed by a writable file.")
+            records = [
+                updated_record if str(candidate.get("id")) == template_id else candidate
+                for candidate in self._records
+            ]
+            self._write_records(records)
+            self._records = records
+            self._templates[template_id] = template
+            self._source_signature = self._signature()
+        return template
+
+    def _write_records(self, records: list[dict[str, object]]) -> None:
+        if self._source_path is None:
+            raise ValueError("This item catalog is not backed by a writable file.")
+        temporary = self._source_path.with_name(
+            f".{self._source_path.name}.{uuid4().hex}.tmp"
+        )
+        try:
+            temporary.write_text(
+                json.dumps(records, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self._source_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _reload_if_changed(self) -> None:
         if self._source_path is None:

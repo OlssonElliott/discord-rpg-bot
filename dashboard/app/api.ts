@@ -15,13 +15,24 @@ export type CharacterSummary = {
 
 export type CatalogItem = {
   id: string;
-  item_type: 'weapon' | 'armor' | 'clothing' | 'container' | 'consumable' | 'misc';
+  item_type: 'weapon' | 'armor' | 'clothing' | 'container' | 'consumable' | 'readable' | 'misc';
   name: string;
   rarity: string;
   value: number;
   description: string;
   weight: number;
   stackable: boolean;
+  content: string | null;
+  grip?: string;
+  durability?: number;
+  damage?: number;
+  damage_type?: string;
+  protection?: number;
+  dodge_penalty?: number;
+  strength_requirement?: number | null;
+  capacity?: number;
+  can_equip?: boolean;
+  affected_amount?: number;
 };
 
 export type RoomData = {

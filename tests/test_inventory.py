@@ -198,8 +198,59 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(updated.hp, 10)
         self.assertEqual(inventory.item(potion_id).quantity, 1)
 
+    def test_read_and_use_return_content_without_consuming_readable(self) -> None:
+        note = ItemTemplate(
+            template_id="bloodstained_note",
+            item_type=ItemType.READABLE,
+            name="Bloodstained Note",
+            rarity="Common",
+            value=0,
+            description="A folded note stained with old blood.",
+            weight=0,
+            content="Do not open the western gate after sunset...",
+        )
+        catalog = ItemCatalog((*self.catalog.all(), note))
+        service = InventoryService(self.database, catalog)
+        note_id = service.grant(self.character, note.template_id)
+        before = self.database.get_character_inventory(self.character.character_id)
+
+        read_result = service.read(self.character, note_id)
+        use_result = service.use(self.character, note_id)
+        after = self.database.get_character_inventory(self.character.character_id)
+
+        self.assertEqual(read_result.content, note.content)
+        self.assertEqual(use_result, read_result)
+        self.assertEqual(after.items, before.items)
+
 
 class ItemCatalogTests(unittest.TestCase):
+    def test_readable_content_persists_and_can_be_edited(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "items.json"
+            path.write_text("[]\n", encoding="utf-8")
+            catalog = ItemCatalog.load(path)
+            record = {
+                "item_type": "readable",
+                "id": "old_journal",
+                "name": "Old Journal",
+                "rarity": "Common",
+                "value": 4,
+                "description": "A weathered leather journal.",
+                "weight": 1,
+                "content": "First entry.\nSecond entry.",
+            }
+
+            catalog.create(record)
+            catalog.update(
+                "old_journal", {**record, "content": "A corrected final entry."}
+            )
+            reloaded = ItemCatalog.load(path)
+
+            readable = reloaded.get("old_journal")
+            self.assertEqual(readable.item_type, ItemType.READABLE)
+            self.assertEqual(readable.description, record["description"])
+            self.assertEqual(readable.content, "A corrected final entry.")
+
     def test_other_process_view_reloads_after_catalog_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "items.json"

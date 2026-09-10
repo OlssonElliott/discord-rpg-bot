@@ -123,6 +123,13 @@ class WorldService:
         self.migrate_legacy_character_items()
         return template
 
+    def update_item_template(
+        self, template_id: str, record: dict[str, object]
+    ) -> ItemTemplate:
+        template = self.catalog.update(template_id, record)
+        self._sync_catalog_item(template)
+        return template
+
     def place_catalog_item(
         self, holder: InventoryHolder, template_id: str, quantity: int = 1
     ) -> ItemStack:

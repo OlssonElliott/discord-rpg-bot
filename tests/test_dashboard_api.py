@@ -206,6 +206,44 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Unknown item template", payload["error"])
 
+    def test_readable_item_content_is_created_and_edited(self) -> None:
+        created_status, created = self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "bloodstained_note",
+                "item_type": "readable",
+                "name": "Bloodstained Note",
+                "description": "A folded note stained with old blood.",
+                "rarity": "Common",
+                "value": 0,
+                "weight": 0,
+                "content": "Do not open the western gate after sunset...",
+            },
+        )
+        updated_status, updated = self.api.handle(
+            "PUT",
+            "/api/items/bloodstained_note",
+            {
+                "item_type": "readable",
+                "name": "Bloodstained Note",
+                "description": "A folded note stained with old blood.",
+                "rarity": "Common",
+                "value": 0,
+                "weight": 0,
+                "content": "The western gate is already open.",
+            },
+        )
+
+        self.assertEqual(created_status, 201)
+        self.assertEqual(created["content"], "Do not open the western gate after sunset...")
+        self.assertEqual(updated_status, 200)
+        self.assertEqual(updated["content"], "The western gate is already open.")
+        self.assertEqual(
+            ItemCatalog.load(self.catalog_path).get("bloodstained_note").content,
+            "The western gate is already open.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

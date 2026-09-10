@@ -14,10 +14,15 @@ from ..inventory import (
     InventoryState,
     ItemCatalog,
     ItemInstance,
+    ItemTemplate,
     ItemType,
 )
 from ..inventory_service import InventoryError, InventoryService
 from ..models import Character
+
+
+DISCORD_FIELD_LIMIT = 1024
+READING_SEPARATOR = "──────────"
 
 
 def _item_label(item: ItemInstance, catalog: ItemCatalog) -> str:
@@ -59,11 +64,48 @@ def _fit_field(lines: list[str], limit: int = 1024) -> str:
     return "\n".join(visible)
 
 
+def _split_readable_content(
+    content: str, first_limit: int, later_limit: int = DISCORD_FIELD_LIMIT
+) -> tuple[str, ...]:
+    if not content:
+        return ("*Nothing is written here.*",)
+    pages: list[str] = []
+    remaining = content
+    limit = first_limit
+    while remaining:
+        cut = min(len(remaining), limit)
+        if cut < len(remaining):
+            newline = remaining.rfind("\n", 0, cut + 1)
+            space = remaining.rfind(" ", 0, cut + 1)
+            preferred = max(newline, space)
+            if preferred >= limit // 2:
+                cut = preferred + 1
+        pages.append(remaining[:cut])
+        remaining = remaining[cut:]
+        limit = later_limit
+    return tuple(pages)
+
+
+def readable_field_pages(template: ItemTemplate) -> tuple[str, ...]:
+    if template.item_type is not ItemType.READABLE:
+        raise ValueError("That item is not readable.")
+    description = template.description.strip()
+    prefix = (
+        f"*{description}*\n\n{READING_SEPARATOR}\n" if description else f"{READING_SEPARATOR}\n"
+    )
+    written_content = template.content or "*Nothing is written here.*"
+    return _split_readable_content(
+        f"{prefix}{written_content}", DISCORD_FIELD_LIMIT
+    )
+
+
 def inventory_embed(
     character: Character,
     inventory: InventoryState,
     catalog: ItemCatalog,
     selected_id: str | None = None,
+    reading_id: str | None = None,
+    reading_page: int = 0,
 ) -> discord.Embed:
     embed = discord.Embed(
         title=f"{character.name}'s Inventory",
@@ -90,9 +132,19 @@ def inventory_embed(
     embed.add_field(
         name="Inventory",
         value=_fit_field(bag_lines) if bag_lines else "Empty",
-        inline=False,
+        inline=reading_id is not None,
     )
-    if selected_id is not None:
+    if reading_id is not None:
+        readable = inventory.item(reading_id)
+        template = catalog.get(readable.template_id)
+        pages = readable_field_pages(template)
+        page = min(max(0, reading_page), len(pages) - 1)
+        embed.add_field(
+            name=template.name,
+            value=pages[page],
+            inline=True,
+        )
+    elif selected_id is not None:
         item = inventory.item(selected_id)
         template = catalog.get(item.template_id)
         details = [template.description, f"Rarity: **{template.rarity}**"]
@@ -166,12 +218,25 @@ class InventoryItemSelect(discord.ui.Select):
         if self.values[0] == "empty":
             return
         character = self.owner_view.character()
+        selected_id = self.values[0]
+        selected = self.owner_view.service.database.get_character_inventory(
+            self.owner_view.character_id
+        ).item(selected_id)
+        template = self.owner_view.service.catalog.get(selected.template_id)
+        reading_id = (
+            selected_id
+            if self.owner_view.reading_id is not None
+            and template.item_type is ItemType.READABLE
+            else None
+        )
         await show_inventory(
             interaction,
             self.owner_view.service,
             character,
-            selected_id=self.values[0],
+            selected_id=selected_id,
             page=self.owner_view.page,
+            reading_id=reading_id,
+            reading_page=0,
             edit=True,
         )
 
@@ -185,10 +250,14 @@ class InventoryView(InventoryOwnedView):
         inventory: InventoryState,
         selected_id: str | None = None,
         page: int = 0,
+        reading_id: str | None = None,
+        reading_page: int = 0,
     ) -> None:
         super().__init__(service, user_id, character_id)
         self.selected_id = selected_id
         self.page = page
+        self.reading_id = reading_id
+        self.reading_page = reading_page
         self.page_count = max(1, (len(inventory.items) + 24) // 25)
         self.add_item(InventoryItemSelect(self, inventory))
         self.previous_page.disabled = page <= 0
@@ -209,8 +278,31 @@ class InventoryView(InventoryOwnedView):
         self.equip_button.disabled = not can_equip or is_equipped
         self.unequip_button.disabled = not is_equipped
         self.use_button.disabled = (
-            template is None or template.item_type is not ItemType.CONSUMABLE
+            template is None
+            or template.item_type not in {ItemType.CONSUMABLE, ItemType.READABLE}
         )
+        self.read_button.disabled = (
+            template is None or template.item_type is not ItemType.READABLE
+        )
+        if reading_id is None:
+            self.remove_item(self.close_reading_button)
+            self.remove_item(self.reading_previous_button)
+            self.remove_item(self.reading_page_button)
+            self.remove_item(self.reading_next_button)
+        else:
+            reading_template = service.read(self.character(), reading_id)
+            reading_pages = readable_field_pages(reading_template)
+            self.reading_page = min(max(0, reading_page), len(reading_pages) - 1)
+            self.reading_previous_button.disabled = self.reading_page == 0
+            self.reading_next_button.disabled = self.reading_page >= len(reading_pages) - 1
+            self.reading_page_button.label = (
+                f"Page {self.reading_page + 1} / {len(reading_pages)}"
+            )
+            self.reading_page_button.disabled = True
+            if len(reading_pages) == 1:
+                self.remove_item(self.reading_previous_button)
+                self.remove_item(self.reading_page_button)
+                self.remove_item(self.reading_next_button)
 
     async def _run(self, interaction: discord.Interaction, action: str) -> None:
         if self.selected_id is None:
@@ -225,7 +317,20 @@ class InventoryView(InventoryOwnedView):
             elif action == "unequip":
                 self.service.unequip(character, self.selected_id)
             elif action == "use":
-                character = self.service.use(character, self.selected_id)
+                result = self.service.use(character, self.selected_id)
+                if isinstance(result, ItemTemplate):
+                    await show_inventory(
+                        interaction,
+                        self.service,
+                        character,
+                        selected_id=self.selected_id,
+                        page=self.page,
+                        reading_id=self.selected_id,
+                        reading_page=0,
+                        edit=True,
+                    )
+                    return
+                character = result
         except (InventoryError, ValueError) as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
@@ -255,6 +360,29 @@ class InventoryView(InventoryOwnedView):
     @discord.ui.button(label="Use", style=discord.ButtonStyle.danger, row=1)
     async def use_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await self._run(interaction, "use")
+
+    @discord.ui.button(label="Read", style=discord.ButtonStyle.primary, row=1)
+    async def read_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if self.selected_id is None:
+            await interaction.response.send_message(
+                "Select a readable item first.", ephemeral=True
+            )
+            return
+        try:
+            self.service.read(self.character(), self.selected_id)
+        except (InventoryError, ValueError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        await show_inventory(
+            interaction,
+            self.service,
+            self.character(),
+            selected_id=self.selected_id,
+            page=self.page,
+            reading_id=self.selected_id,
+            reading_page=0,
+            edit=True,
+        )
 
     @discord.ui.button(label="Back to sheet", style=discord.ButtonStyle.secondary, row=1)
     async def back_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -307,6 +435,57 @@ class InventoryView(InventoryOwnedView):
             edit=True,
         )
 
+    @discord.ui.button(
+        label="Close reading", style=discord.ButtonStyle.secondary, row=2
+    )
+    async def close_reading_button(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await show_inventory(
+            interaction,
+            self.service,
+            self.character(),
+            selected_id=self.selected_id,
+            page=self.page,
+            edit=True,
+        )
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=3)
+    async def reading_previous_button(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await show_inventory(
+            interaction,
+            self.service,
+            self.character(),
+            selected_id=self.selected_id,
+            page=self.page,
+            reading_id=self.reading_id,
+            reading_page=max(0, self.reading_page - 1),
+            edit=True,
+        )
+
+    @discord.ui.button(label="Page", style=discord.ButtonStyle.secondary, row=3)
+    async def reading_page_button(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        del interaction
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=3)
+    async def reading_next_button(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await show_inventory(
+            interaction,
+            self.service,
+            self.character(),
+            selected_id=self.selected_id,
+            page=self.page,
+            reading_id=self.reading_id,
+            reading_page=self.reading_page + 1,
+            edit=True,
+        )
+
 
 @dataclass(slots=True)
 class OpenInventory:
@@ -315,6 +494,8 @@ class OpenInventory:
     message: discord.InteractionMessage
     selected_id: str | None
     page: int
+    reading_id: str | None
+    reading_page: int
 
 
 _OPEN_INVENTORIES: dict[int, OpenInventory] = {}
@@ -345,6 +526,11 @@ async def refresh_open_inventory(user_id: int, character_id: int) -> None:
         if any(item.instance_id == session.selected_id for item in inventory.items)
         else None
     )
+    reading_id = (
+        session.reading_id
+        if any(item.instance_id == session.reading_id for item in inventory.items)
+        else None
+    )
     page_count = max(1, (len(inventory.items) + 24) // 25)
     page = min(session.page, page_count - 1)
     view = InventoryView(
@@ -354,11 +540,18 @@ async def refresh_open_inventory(user_id: int, character_id: int) -> None:
         inventory,
         selected_id,
         page,
+        reading_id,
+        session.reading_page if reading_id is not None else 0,
     )
     try:
         await session.message.edit(
             embed=inventory_embed(
-                character, inventory, session.service.catalog, selected_id
+                character,
+                inventory,
+                session.service.catalog,
+                selected_id,
+                reading_id,
+                view.reading_page if reading_id is not None else 0,
             ),
             view=view,
         )
@@ -367,6 +560,8 @@ async def refresh_open_inventory(user_id: int, character_id: int) -> None:
         return
     session.selected_id = selected_id
     session.page = page
+    session.reading_id = reading_id
+    session.reading_page = view.reading_page if reading_id is not None else 0
 
 
 async def show_inventory(
@@ -376,10 +571,19 @@ async def show_inventory(
     *,
     selected_id: str | None = None,
     page: int = 0,
+    reading_id: str | None = None,
+    reading_page: int = 0,
     edit: bool = False,
 ) -> None:
     inventory = service.database.get_character_inventory(character.character_id)
-    embed = inventory_embed(character, inventory, service.catalog, selected_id)
+    embed = inventory_embed(
+        character,
+        inventory,
+        service.catalog,
+        selected_id,
+        reading_id,
+        reading_page,
+    )
     view = InventoryView(
         service,
         character.discord_user_id,
@@ -387,6 +591,8 @@ async def show_inventory(
         inventory,
         selected_id,
         page,
+        reading_id,
+        reading_page,
     )
     if edit:
         await interaction.response.edit_message(embed=embed, attachments=[], view=view)
@@ -401,6 +607,8 @@ async def show_inventory(
             message,
             selected_id,
             page,
+            reading_id,
+            view.reading_page,
         )
 
 

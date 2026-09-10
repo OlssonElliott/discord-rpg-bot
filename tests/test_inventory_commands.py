@@ -10,9 +10,16 @@ from rpg_bot.commands.inventory import (
     InventoryView,
     forget_open_inventory,
     inventory_embed,
+    readable_field_pages,
 )
 from rpg_bot.database import Database
-from rpg_bot.inventory import DEFAULT_ITEM_CATALOG_PATH, EquipmentSlot, ItemCatalog
+from rpg_bot.inventory import (
+    DEFAULT_ITEM_CATALOG_PATH,
+    EquipmentSlot,
+    ItemCatalog,
+    ItemTemplate,
+    ItemType,
+)
 from rpg_bot.inventory_service import InventoryService
 
 
@@ -47,6 +54,24 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         forget_open_inventory(7)
         self.temp_directory.cleanup()
+
+    def readable_service(
+        self, content: str = "Do not open the western gate after sunset..."
+    ) -> tuple[InventoryService, str, ItemTemplate]:
+        template = ItemTemplate(
+            template_id="bloodstained_note",
+            item_type=ItemType.READABLE,
+            name="Bloodstained Note",
+            rarity="Common",
+            value=0,
+            description="A folded note stained with old blood.",
+            weight=0,
+            content=content,
+        )
+        service = InventoryService(
+            self.database, ItemCatalog((*self.catalog.all(), template))
+        )
+        return service, service.grant(self.character, template.template_id), template
 
     async def test_inventory_command_opens_a_private_interactive_view(self) -> None:
         self.service.grant(self.character, "iron_dagger")
@@ -136,6 +161,75 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(equipped_dagger.equip_button.disabled)
         self.assertFalse(equipped_dagger.unequip_button.disabled)
+
+    async def test_read_and_use_open_reading_panel_without_consuming_item(self) -> None:
+        service, note_id, template = self.readable_service()
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        for action_name in ("read_button", "use_button"):
+            with self.subTest(action=action_name):
+                view = InventoryView(
+                    service, 7, self.character.character_id, inventory, note_id
+                )
+                interaction = interaction_for(7)
+                await getattr(view, action_name).callback(interaction)
+
+                edited = interaction.response.edit_message.await_args.kwargs
+                embed = edited["embed"]
+                inventory_field = next(
+                    field for field in embed.fields if field.name == "Inventory"
+                )
+                reading_field = next(
+                    field for field in embed.fields if field.name == template.name
+                )
+                self.assertTrue(inventory_field.inline)
+                self.assertTrue(reading_field.inline)
+                self.assertIn(template.description, reading_field.value)
+                self.assertIn(template.content, reading_field.value)
+                self.assertEqual(
+                    self.database.get_character_inventory(
+                        self.character.character_id
+                    ).item(note_id).quantity,
+                    1,
+                )
+
+    def test_long_readable_content_is_paginated_without_truncation(self) -> None:
+        content = " ".join(f"word-{index}" for index in range(900))
+        service, note_id, template = self.readable_service(content)
+        pages = readable_field_pages(template)
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            service,
+            7,
+            self.character.character_id,
+            inventory,
+            note_id,
+            reading_id=note_id,
+        )
+
+        prefix_end = pages[0].index("──────────\n") + len("──────────\n")
+        reconstructed = pages[0][prefix_end:] + "".join(pages[1:])
+        self.assertEqual(reconstructed, content)
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(all(len(page) <= 1024 for page in pages))
+        labels = {child.label for child in view.children if hasattr(child, "label")}
+        self.assertIn(f"Page 1 / {len(pages)}", labels)
+
+    def test_short_readable_has_no_page_controls_and_can_close(self) -> None:
+        service, note_id, _ = self.readable_service("Short note.")
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            service,
+            7,
+            self.character.character_id,
+            inventory,
+            note_id,
+            reading_id=note_id,
+        )
+
+        labels = [child.label for child in view.children if hasattr(child, "label")]
+        self.assertIn("Close reading", labels)
+        self.assertNotIn("Page 1 / 1", labels)
 
     def test_item_catalog_loads_all_shared_templates(self) -> None:
         self.assertEqual(len(self.catalog.all()), 22)

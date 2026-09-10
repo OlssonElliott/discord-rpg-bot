@@ -122,8 +122,12 @@ button, input, textarea { font: inherit; }
 .dialog-label input, .dialog-label textarea { background: #0e1724; }
 .catalog-count { padding: 8px 10px; color: #d9b576; font-size: .8rem; border: 1px solid #4b3b27; border-radius: 7px; background: #1d1812; }
 .catalog-list { display: grid; gap: 5px; max-height: 150px; padding-right: 4px; overflow-y: auto; }
-.catalog-list div { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; color: #dce2e9; font-size: .8rem; border-bottom: 1px solid #26344a; }
+.catalog-heading { display: flex; align-items: center; justify-content: space-between; }
+.catalog-heading button { color: #d39a4a; font-size: .78rem; }
+.catalog-list button { display: flex; width: 100%; align-items: center; justify-content: space-between; padding: 6px 8px; color: #dce2e9; font-size: .8rem; text-align: left; border-bottom: 1px solid #26344a; }
+.catalog-list button:hover, .catalog-list button.selected { background: #172337; }
 .catalog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.readable-content-input { min-height: 12rem; resize: vertical; }
 .catalog-check { display: flex; align-items: center; gap: 8px; color: #aab5c3; font-size: .8rem; }
 
 @media (max-width: 820px) {

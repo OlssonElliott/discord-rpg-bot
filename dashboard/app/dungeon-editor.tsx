@@ -458,10 +458,13 @@ export function DungeonEditor() {
         open={itemLibraryOpen}
         items={catalogItems}
         onOpenChange={setItemLibraryOpen}
-        onCreate={async (record) => {
+        onSave={async (record, itemId) => {
           const ok = await mutate(
-            () => api('/items', { method: 'POST', body: JSON.stringify({ ...record, id: identifier(record.name) }) }),
-            `${record.name} created`,
+            () => api(itemId ? `/items/${itemId}` : '/items', {
+              method: itemId ? 'PUT' : 'POST',
+              body: JSON.stringify(itemId ? record : { ...record, id: identifier(record.name) }),
+            }),
+            `${record.name} ${itemId ? 'updated' : 'created'}`,
           );
           if (ok) setItemLibraryOpen(false);
         }}
@@ -672,9 +675,11 @@ type ItemDraft = {
   capacity?: number;
   can_equip?: boolean;
   affected_amount?: number;
+  content?: string;
 };
 
-function ItemLibraryDialog({ open, items, onOpenChange, onCreate }: { open: boolean; items: CatalogItem[]; onOpenChange: (open: boolean) => void; onCreate: (record: ItemDraft) => Promise<void> }) {
+function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open: boolean; items: CatalogItem[]; onOpenChange: (open: boolean) => void; onSave: (record: ItemDraft, itemId?: string) => Promise<void> }) {
+  const [editingId, setEditingId] = useState<string | undefined>();
   const [name, setName] = useState('');
   const [itemType, setItemType] = useState<CatalogItem['item_type']>('misc');
   const [description, setDescription] = useState('');
@@ -685,36 +690,61 @@ function ItemLibraryDialog({ open, items, onOpenChange, onCreate }: { open: bool
   const [damageType, setDamageType] = useState('physical');
   const [grip, setGrip] = useState('one_handed');
   const [canEquip, setCanEquip] = useState(false);
+  const [readableContent, setReadableContent] = useState('');
 
+  const editingItem = items.find((item) => item.id === editingId);
   const record: ItemDraft = { name, item_type: itemType, description, rarity, value, weight };
-  if (itemType === 'weapon') Object.assign(record, { grip, durability: 40, damage: power, damage_type: damageType });
-  if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: 0, strength_requirement: 0 });
+  if (itemType === 'weapon') Object.assign(record, { grip, durability: editingItem?.durability ?? 40, damage: power, damage_type: damageType });
+  if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: editingItem?.dodge_penalty ?? 0, strength_requirement: editingItem?.strength_requirement ?? 0 });
   if (itemType === 'container') Object.assign(record, { capacity: power, can_equip: canEquip });
   if (itemType === 'consumable') Object.assign(record, { affected_amount: power });
+  if (itemType === 'readable') Object.assign(record, { content: readableContent });
+
+  const editItem = (item?: CatalogItem) => {
+    setEditingId(item?.id);
+    setName(item?.name ?? '');
+    setItemType(item?.item_type ?? 'misc');
+    setDescription(item?.description ?? '');
+    setRarity(item?.rarity ?? 'Common');
+    setValue(item?.value ?? 0);
+    setWeight(item?.weight ?? 0);
+    setReadableContent(item?.content ?? '');
+    setGrip(item?.grip ?? 'one_handed');
+    setDamageType(item?.damage_type ?? 'physical');
+    setCanEquip(item?.can_equip ?? false);
+    setPower(
+      item?.damage
+      ?? item?.protection
+      ?? item?.capacity
+      ?? item?.affected_amount
+      ?? 1
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Item library</DialogTitle><DialogDescription>Create each item type once. Rooms and containers can only use entries from this shared library.</DialogDescription></DialogHeader>
-        <div className="catalog-count">{items.length} item types available</div>
+        <DialogHeader><DialogTitle>Item library</DialogTitle><DialogDescription>Create and edit item types here. Rooms and containers can only use entries from this shared library.</DialogDescription></DialogHeader>
+        <div className="catalog-heading"><div className="catalog-count">{items.length} item types available</div><button type="button" onClick={() => editItem()}>New item</button></div>
         <div className="catalog-list" aria-label="Existing item types">
           {items.map((item) => (
-            <div key={item.id}><span>{item.name}</span><Badge variant="outline">{item.item_type}</Badge></div>
+            <button type="button" className={editingId === item.id ? 'selected' : ''} key={item.id} onClick={() => editItem(item)}><span>{item.name}</span><Badge variant="outline">{item.item_type}</Badge></button>
           ))}
         </div>
         <div className="catalog-grid">
           <label className="dialog-label" htmlFor="item-name">Name<Input id="item-name" value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} onChange={(event) => setItemType(event.target.value as CatalogItem['item_type'])}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption></NativeSelect></label>
+          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} disabled={Boolean(editingId)} onChange={(event) => setItemType(event.target.value as CatalogItem['item_type'])}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption><NativeSelectOption value="readable">Readable</NativeSelectOption></NativeSelect></label>
           <label className="dialog-label" htmlFor="item-rarity">Rarity<Input id="item-rarity" value={rarity} onChange={(event) => setRarity(event.target.value)} /></label>
           <label className="dialog-label" htmlFor="item-value">Value<Input id="item-value" type="number" min={0} value={value} onChange={(event) => setValue(Number(event.target.value))} /></label>
           <label className="dialog-label" htmlFor="item-weight">Weight<Input id="item-weight" type="number" min={0} value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
-          {!['misc', 'clothing'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
+          {!['misc', 'clothing', 'readable'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
           {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
           {itemType === 'container' && <label className="catalog-check"><input type="checkbox" checked={canEquip} onChange={(event) => setCanEquip(event.target.checked)} /> Can be equipped</label>}
         </div>
         <label className="dialog-label" htmlFor="item-description">Description</label>
         <Textarea id="item-description" value={description} onChange={(event) => setDescription(event.target.value)} />
-        <DialogFooter><Button disabled={!name.trim() || !rarity.trim() || value < 0 || weight < 0 || power < 1} onClick={() => void onCreate(record)}>Create item type</Button></DialogFooter>
+        {itemType === 'readable' && <label className="dialog-label" htmlFor="item-readable-content">Readable content<Textarea className="readable-content-input" id="item-readable-content" value={readableContent} onChange={(event) => setReadableContent(event.target.value)} /></label>}
+        <DialogFooter><Button disabled={!name.trim() || !rarity.trim() || value < 0 || weight < 0 || power < 1} onClick={() => void onSave(record, editingId)}>{editingId ? 'Save item type' : 'Create item type'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
