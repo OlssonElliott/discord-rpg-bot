@@ -4,6 +4,8 @@ from pathlib import Path
 
 from rpg_bot.dashboard_api import DashboardAPI
 from rpg_bot.database import Database
+from rpg_bot.inventory import ItemCatalog
+from rpg_bot.world import InventoryHolder
 from rpg_bot.world_service import WorldService
 
 
@@ -12,7 +14,9 @@ class DashboardAPITests(unittest.TestCase):
         self.temp_directory = tempfile.TemporaryDirectory()
         self.database = Database(Path(self.temp_directory.name) / "dashboard.db")
         self.database.initialize()
-        self.world = WorldService(self.database)
+        self.catalog_path = Path(self.temp_directory.name) / "items.json"
+        self.catalog_path.write_text("[]\n", encoding="utf-8")
+        self.world = WorldService(self.database, ItemCatalog.load(self.catalog_path))
         self.api = DashboardAPI(self.world)
 
     def tearDown(self) -> None:
@@ -113,6 +117,92 @@ class DashboardAPITests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("does not exist", payload["error"])
+
+    def test_catalog_item_is_created_once_then_selected_for_a_room(self) -> None:
+        character = self.database.create_character(123, "Olof", 20)
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+        self.api.handle(
+            "PATCH",
+            f"/api/characters/{character.character_id}/room",
+            {"room_id": "hall"},
+        )
+
+        created_status, created = self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "iron_key",
+                "item_type": "misc",
+                "name": "Iron Key",
+                "description": "Opens the crypt.",
+                "rarity": "Common",
+                "value": 2,
+                "weight": 0,
+            },
+        )
+        placed_status, _ = self.api.handle(
+            "POST",
+            "/api/rooms/hall/items",
+            {"item_id": "iron_key", "quantity": 1},
+        )
+        self.world.take_loose_item(character.character_id, "iron_key")
+
+        inventory = self.database.get_character_inventory(character.character_id)
+        list_status, items = self.api.handle("GET", "/api/items")
+        reloaded = ItemCatalog.load(self.catalog_path)
+        self.assertEqual(created_status, 201)
+        self.assertEqual(created["id"], "iron_key")
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(list_status, 200)
+        self.assertEqual([item["id"] for item in items], ["iron_key"])
+        self.assertEqual(inventory.items[0].template_id, "iron_key")
+        self.assertEqual(reloaded.get("iron_key").name, "Iron Key")
+
+    def test_creating_catalog_item_migrates_matching_legacy_character_item(self) -> None:
+        character = self.database.create_character(123, "Olof", 20)
+        self.world.create_item("old_key", "Key", stackable=False)
+        holder = InventoryHolder.character(character.character_id)
+        self.world.place_item(holder, "old_key")
+
+        status, _ = self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "key",
+                "item_type": "misc",
+                "name": "Key",
+                "rarity": "Common",
+                "value": 0,
+                "weight": 0,
+            },
+        )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(self.world.inventory(holder), ())
+        inventory = self.database.get_character_inventory(character.character_id)
+        self.assertEqual(inventory.items[0].template_id, "key")
+
+    def test_room_rejects_item_that_is_not_in_catalog(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+
+        status, payload = self.api.handle(
+            "POST",
+            "/api/rooms/hall/items",
+            {"item_id": "invented_here", "quantity": 1},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("Unknown item template", payload["error"])
 
 
 if __name__ == "__main__":

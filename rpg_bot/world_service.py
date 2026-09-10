@@ -114,6 +114,45 @@ class WorldService:
             item_id, name, description, stackable=stackable
         )
 
+    def list_item_templates(self) -> tuple[ItemTemplate, ...]:
+        return self.catalog.all()
+
+    def create_item_template(self, record: dict[str, object]) -> ItemTemplate:
+        template = self.catalog.create(record)
+        self._sync_catalog_item(template)
+        self.migrate_legacy_character_items()
+        return template
+
+    def place_catalog_item(
+        self, holder: InventoryHolder, template_id: str, quantity: int = 1
+    ) -> ItemStack:
+        template = self.catalog.get(template_id)
+        self._sync_catalog_item(template)
+        return self.database.add_item(holder, template.template_id, quantity)
+
+    def migrate_legacy_character_items(self) -> int:
+        """Move recognizable old world stacks into the interactive inventory."""
+        migrated = 0
+        for character in self.list_characters():
+            if character.character_id is None:
+                continue
+            holder = InventoryHolder.character(character.character_id)
+            for stack in self.database.get_inventory(holder):
+                template = self._template_for_world_item(stack.item)
+                if template is None:
+                    continue
+                self.database.take_world_item_into_character_inventory(
+                    holder,
+                    character.character_id,
+                    stack.item.id,
+                    template.template_id,
+                    quantity=stack.quantity,
+                    durability=template.durability,
+                    stackable=template.stackable,
+                )
+                migrated += stack.quantity
+        return migrated
+
     def create_entity(
         self,
         entity_id: str,
@@ -159,8 +198,9 @@ class WorldService:
         source = InventoryHolder.room(room.id)
         template = self._catalog_template(source, item)
         if template is None:
-            return self.transfer_item(
-                source, InventoryHolder.character(character_id), item, quantity
+            raise InvalidTransferError(
+                "That item is not registered in the shared item library. "
+                "Ask the DM to create it in the dashboard first."
             )
         self._validate_character_capacity(character_id, template, quantity)
         return self.database.take_world_item_into_character_inventory(
@@ -230,8 +270,9 @@ class WorldService:
         source = InventoryHolder.entity(selected.id)
         template = self._catalog_template(source, item)
         if template is None:
-            return self.transfer_item(
-                source, InventoryHolder.character(character_id), item, quantity
+            raise InvalidTransferError(
+                "That item is not registered in the shared item library. "
+                "Ask the DM to create it in the dashboard first."
             )
         self._validate_character_capacity(character_id, template, quantity)
         return self.database.take_world_item_into_character_inventory(
@@ -255,7 +296,9 @@ class WorldService:
         ]
         if len(matches) != 1:
             return None
-        world_item = matches[0].item
+        return self._template_for_world_item(matches[0].item)
+
+    def _template_for_world_item(self, world_item: Item) -> ItemTemplate | None:
         try:
             return self.catalog.get(world_item.id)
         except ValueError:
@@ -265,12 +308,23 @@ class WorldService:
             ]
             return named[0] if len(named) == 1 else None
 
+    def _sync_catalog_item(self, template: ItemTemplate) -> Item:
+        return self.database.upsert_item(
+            template.template_id,
+            template.name,
+            template.description,
+            stackable=template.stackable,
+        )
+
     def _validate_character_capacity(
         self, character_id: int, template: ItemTemplate, quantity: int
     ) -> None:
         inventory = self.database.get_character_inventory(character_id)
-        if inventory.current_storage(self.catalog) + template.weight * quantity > inventory.total_storage:
-            raise InvalidTransferError("There is not enough regular inventory space.")
+        if (
+            inventory.current_storage(self.catalog) + template.weight * quantity
+            > inventory.storage_capacity(self.catalog)
+        ):
+            raise InvalidTransferError("There is not enough inventory space.")
 
     def _resolve_character_item(
         self, inventory: InventoryState, query: str

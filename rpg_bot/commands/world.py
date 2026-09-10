@@ -5,8 +5,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..database import CharacterNotFoundError, Database
+from ..models import Character
 from ..world import InventoryHolder, ItemStack, Room, WorldError
 from ..world_service import WorldService
+from .inventory import refresh_open_inventory
 
 
 def _stack_text(stack: ItemStack) -> str:
@@ -51,12 +53,17 @@ class WorldCommands(commands.Cog):
         self.database = database
         self.world = WorldService(database)
 
-    def _active_character_id(self, user_id: int) -> int:
+    def _active_character(self, user_id: int) -> Character:
         character = self.database.get_character(user_id)
         if character is None or character.character_id is None:
             raise CharacterNotFoundError(
                 "You need an active character before using world commands."
             )
+        return character
+
+    def _active_character_id(self, user_id: int) -> int:
+        character = self._active_character(user_id)
+        assert character.character_id is not None
         return character.character_id
 
     async def _error(self, interaction: discord.Interaction, error: ValueError) -> None:
@@ -119,13 +126,18 @@ class WorldCommands(commands.Cog):
         self, interaction: discord.Interaction, item: str, quantity: int = 1
     ) -> None:
         try:
+            character = self._active_character(interaction.user.id)
+            assert character.character_id is not None
             moved = self.world.take_loose_item(
-                self._active_character_id(interaction.user.id), item, quantity
+                character.character_id, item, quantity
             )
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
             return
-        await interaction.response.send_message(f"Took {_stack_text(moved)}.")
+        await interaction.response.send_message(
+            f"**{character.name}** took {_stack_text(moved)}."
+        )
+        await refresh_open_inventory(interaction.user.id, character.character_id)
 
     @app_commands.command(
         name="drop", description="Drop an inventory item in the room."
@@ -135,13 +147,18 @@ class WorldCommands(commands.Cog):
         self, interaction: discord.Interaction, item: str, quantity: int = 1
     ) -> None:
         try:
+            character = self._active_character(interaction.user.id)
+            assert character.character_id is not None
             moved = self.world.drop_item(
-                self._active_character_id(interaction.user.id), item, quantity
+                character.character_id, item, quantity
             )
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
             return
-        await interaction.response.send_message(f"Dropped {_stack_text(moved)}.")
+        await interaction.response.send_message(
+            f"**{character.name}** dropped {_stack_text(moved)}."
+        )
+        await refresh_open_inventory(interaction.user.id, character.character_id)
 
     @app_commands.command(name="loot", description="Inspect an accessible container.")
     @app_commands.describe(container="Container name or ID")
@@ -184,8 +201,10 @@ class WorldCommands(commands.Cog):
         quantity: int = 1,
     ) -> None:
         try:
+            character = self._active_character(interaction.user.id)
+            assert character.character_id is not None
             moved = self.world.take_from_container(
-                self._active_character_id(interaction.user.id),
+                character.character_id,
                 container,
                 item,
                 quantity,
@@ -193,7 +212,10 @@ class WorldCommands(commands.Cog):
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
             return
-        await interaction.response.send_message(f"Took {_stack_text(moved)}.")
+        await interaction.response.send_message(
+            f"**{character.name}** took {_stack_text(moved)}."
+        )
+        await refresh_open_inventory(interaction.user.id, character.character_id)
 
 
 async def setup(bot: commands.Bot) -> None:

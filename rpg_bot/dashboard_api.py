@@ -4,6 +4,7 @@ from dataclasses import asdict
 import re
 from typing import Any
 
+from .inventory import ItemTemplate, ItemType, WeaponGrip
 from .world import AreaGraph, EntityKind, InventoryHolder, RoomEditorNode, WorldError
 from .world_service import WorldService
 
@@ -68,6 +69,19 @@ def _character_data(character: object) -> JsonObject:
     }
 
 
+def _template_data(template: ItemTemplate) -> JsonObject:
+    return {
+        "id": template.template_id,
+        "item_type": template.item_type.value,
+        "name": template.name,
+        "rarity": template.rarity,
+        "value": template.value,
+        "description": template.description,
+        "weight": template.weight,
+        "stackable": template.stackable,
+    }
+
+
 class DashboardAPI:
     """Translate HTTP-shaped requests into deterministic service calls."""
 
@@ -91,6 +105,20 @@ class DashboardAPI:
             return 200, [
                 _character_data(character) for character in self.world.list_characters()
             ]
+
+        if method == "GET" and path == "/api/items":
+            return 200, [
+                _template_data(template)
+                for template in sorted(
+                    self.world.list_item_templates(),
+                    key=lambda template: (template.name.casefold(), template.template_id),
+                )
+            ]
+
+        if method == "POST" and path == "/api/items":
+            record = self._item_record(body)
+            template = self.world.create_item_template(record)
+            return 201, _template_data(template)
 
         match = re.fullmatch(r"/api/characters/(\d+)/room", path)
         if method == "PATCH" and match:
@@ -177,14 +205,9 @@ class DashboardAPI:
             quantity = self._integer(body, "quantity", default=1)
             if quantity <= 0:
                 raise ValueError("Quantity must be greater than zero.")
-            item = self.world.create_item(
-                self._text(body, "id"),
-                self._text(body, "name"),
-                self._optional_text(body, "description"),
-            )
-            stack = self.world.place_item(
+            stack = self.world.place_catalog_item(
                 InventoryHolder.room(room_id),
-                item.id,
+                self._text(body, "item_id"),
                 quantity,
             )
             return 201, _stack_data(stack)
@@ -236,4 +259,99 @@ class DashboardAPI:
         value = body.get(field, default)
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"'{field}' must be an integer.")
+        return value
+
+    @classmethod
+    def _item_record(cls, body: JsonObject) -> dict[str, object]:
+        try:
+            item_type = ItemType(cls._text(body, "item_type"))
+        except ValueError as error:
+            raise ValueError(
+                "Item type must be weapon, armor, container, consumable, or misc."
+            ) from error
+
+        value = cls._integer(body, "value", default=0)
+        weight = cls._integer(body, "weight", default=0)
+        if value < 0 or weight < 0:
+            raise ValueError("Item value and weight cannot be negative.")
+        record: dict[str, object] = {
+            "item_type": item_type.value,
+            "id": cls._text(body, "id"),
+            "name": cls._text(body, "name"),
+            "rarity": cls._text_or_default(body, "rarity", "Common"),
+            "value": value,
+            "description": cls._optional_text(body, "description") or "",
+            "weight": weight,
+            "tags": [],
+            "modifiers": [],
+            "requirements": [],
+        }
+        if item_type is ItemType.WEAPON:
+            try:
+                grip = WeaponGrip(cls._text_or_default(body, "grip", "one_handed"))
+            except ValueError as error:
+                raise ValueError("Weapon grip must be one_handed or two_handed.") from error
+            durability = cls._positive_integer(body, "durability", default=40)
+            damage = cls._positive_integer(body, "damage", default=1)
+            record.update(
+                grip=grip.value,
+                durability=durability,
+                damage_parts=[
+                    {
+                        "amount": damage,
+                        "damage_type": cls._text_or_default(
+                            body, "damage_type", "physical"
+                        ),
+                    }
+                ],
+            )
+        elif item_type is ItemType.ARMOR:
+            protection = cls._positive_integer(body, "protection", default=1)
+            strength_requirement = cls._integer(
+                body, "strength_requirement", default=0
+            )
+            if strength_requirement < 0:
+                raise ValueError("Strength requirement cannot be negative.")
+            record.update(
+                protection_current=protection,
+                protection_max=protection,
+                dodge_penalty=cls._integer(body, "dodge_penalty", default=0),
+                strength_requirement=strength_requirement or None,
+            )
+        elif item_type is ItemType.CONTAINER:
+            record.update(
+                capacity=cls._positive_integer(body, "capacity", default=10),
+                items=[],
+                can_equip=cls._boolean(body, "can_equip", default=False),
+                locked=False,
+            )
+        elif item_type is ItemType.CONSUMABLE:
+            record.update(
+                affected_stat="hp",
+                affected_amount=cls._positive_integer(
+                    body, "affected_amount", default=1
+                ),
+                side_effects=None,
+            )
+        return record
+
+    @staticmethod
+    def _text_or_default(body: JsonObject, field: str, default: str) -> str:
+        value = body.get(field, default)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"'{field}' must be text.")
+        return value.strip()
+
+    @classmethod
+    def _positive_integer(cls, body: JsonObject, field: str, *, default: int) -> int:
+        value = cls._integer(body, field, default=default)
+        if value <= 0:
+            raise ValueError(f"'{field}' must be greater than zero.")
+        return value
+
+    @staticmethod
+    def _boolean(body: JsonObject, field: str, *, default: bool) -> bool:
+        value = body.get(field, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"'{field}' must be true or false.")
         return value

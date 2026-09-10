@@ -139,6 +139,15 @@ class Database:
                 )
                 """
             )
+            # The old model allowed nested item trees. Inventory is now flat and
+            # an equipped container contributes capacity instead.
+            connection.execute(
+                """
+                UPDATE character_items
+                SET parent_container_id = NULL
+                WHERE parent_container_id IS NOT NULL
+                """
+            )
             connection.execute("PRAGMA optimize")
 
     @staticmethod
@@ -1164,6 +1173,29 @@ class Database:
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError(f"Item '{item_id}' already exists.") from error
+        return Item(item_id, name, description, stackable)
+
+    def upsert_item(
+        self,
+        item_id: str,
+        name: str,
+        description: str | None = None,
+        *,
+        stackable: bool = True,
+    ) -> Item:
+        """Make a catalog item available to room and entity inventories."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO items (id, name, description, stackable)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    stackable = excluded.stackable
+                """,
+                (item_id, name, description, int(stackable)),
+            )
         return Item(item_id, name, description, stackable)
 
     def add_item(

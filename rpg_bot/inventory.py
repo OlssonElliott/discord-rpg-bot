@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 from pathlib import Path
+import threading
 from typing import Iterable
+from uuid import uuid4
 
 
 class ItemType(str, Enum):
@@ -74,16 +76,31 @@ class ItemInstance:
 
 
 class ItemCatalog:
-    def __init__(self, templates: Iterable[ItemTemplate]) -> None:
+    def __init__(
+        self,
+        templates: Iterable[ItemTemplate],
+        *,
+        source_path: Path | None = None,
+        records: list[dict[str, object]] | None = None,
+    ) -> None:
         self._templates = {template.template_id: template for template in templates}
+        self._source_path = source_path
+        self._records = records
+        self._source_mtime_ns = self._mtime_ns()
+        self._lock = threading.RLock()
 
     @classmethod
     def load(cls, path: str | Path) -> ItemCatalog:
-        with Path(path).open("r", encoding="utf-8") as file:
+        source_path = Path(path)
+        with source_path.open("r", encoding="utf-8") as file:
             records = json.load(file)
         if not isinstance(records, list):
             raise ValueError("Item catalog must contain a JSON list.")
-        return cls(cls._template_from_record(record) for record in records)
+        return cls(
+            (cls._template_from_record(record) for record in records),
+            source_path=source_path,
+            records=records,
+        )
 
     @staticmethod
     def _template_from_record(record: dict[str, object]) -> ItemTemplate:
@@ -142,13 +159,76 @@ class ItemCatalog:
         )
 
     def get(self, template_id: str) -> ItemTemplate:
+        self._reload_if_changed()
         try:
             return self._templates[template_id]
         except KeyError as error:
             raise ValueError(f"Unknown item template: {template_id}") from error
 
     def all(self) -> tuple[ItemTemplate, ...]:
+        self._reload_if_changed()
         return tuple(self._templates.values())
+
+    def create(self, record: dict[str, object]) -> ItemTemplate:
+        """Validate and persist a new template in the shared JSON catalog."""
+        template = self._template_from_record(record)
+        with self._lock:
+            self._reload_if_changed()
+            if template.template_id in self._templates:
+                raise ValueError(f"Item template '{template.template_id}' already exists.")
+            if any(
+                existing.name.casefold() == template.name.casefold()
+                for existing in self._templates.values()
+            ):
+                raise ValueError(f"An item named '{template.name}' already exists.")
+            if self._source_path is None or self._records is None:
+                raise ValueError("This item catalog is not backed by a writable file.")
+
+            records = [*self._records, record]
+            temporary = self._source_path.with_name(
+                f".{self._source_path.name}.{uuid4().hex}.tmp"
+            )
+            try:
+                temporary.write_text(
+                    json.dumps(records, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                temporary.replace(self._source_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            self._records = records
+            self._templates[template.template_id] = template
+            self._source_mtime_ns = self._mtime_ns()
+        return template
+
+    def _reload_if_changed(self) -> None:
+        if self._source_path is None:
+            return
+        current_mtime = self._mtime_ns()
+        if current_mtime == self._source_mtime_ns:
+            return
+        with self._lock:
+            current_mtime = self._mtime_ns()
+            if current_mtime == self._source_mtime_ns:
+                return
+            with self._source_path.open("r", encoding="utf-8") as file:
+                records = json.load(file)
+            if not isinstance(records, list):
+                raise ValueError("Item catalog must contain a JSON list.")
+            templates = [self._template_from_record(record) for record in records]
+            self._templates = {
+                template.template_id: template for template in templates
+            }
+            self._records = records
+            self._source_mtime_ns = current_mtime
+
+    def _mtime_ns(self) -> int | None:
+        if self._source_path is None:
+            return None
+        try:
+            return self._source_path.stat().st_mtime_ns
+        except OSError:
+            return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,57 +244,27 @@ class InventoryState:
         except StopIteration as error:
             raise ValueError("That item is not in this inventory.") from error
 
-    def children_of(self, parent_id: str | None) -> tuple[ItemInstance, ...]:
-        return tuple(
-            item for item in self.items if item.parent_container_id == parent_id
-        )
-
-    def recursive_weight(
-        self,
-        instance_id: str,
-        catalog: ItemCatalog,
-        ancestors: frozenset[str] = frozenset(),
-    ) -> int:
-        if instance_id in ancestors:
-            raise ValueError("Inventory contains a container cycle.")
-        item = self.item(instance_id)
-        template = catalog.get(item.template_id)
-        own_weight = template.weight * item.quantity
-        descendants = sum(
-            self.recursive_weight(
-                child.instance_id, catalog, ancestors | {instance_id}
-            )
-            for child in self.children_of(instance_id)
-        )
-        return own_weight + descendants
-
-    def container_storage(self, instance_id: str, catalog: ItemCatalog) -> int:
-        return sum(
-            self.recursive_weight(child.instance_id, catalog)
-            for child in self.children_of(instance_id)
-        )
-
     def current_storage(self, catalog: ItemCatalog) -> int:
         equipped = set(self.equipment.values())
         return sum(
-            self.recursive_weight(item.instance_id, catalog)
-            for item in self.children_of(None)
+            catalog.get(item.template_id).weight * item.quantity
+            for item in self.items
             if item.instance_id not in equipped
         )
 
     def current_weight(self, catalog: ItemCatalog) -> int:
         return sum(
-            self.recursive_weight(item.instance_id, catalog)
-            for item in self.children_of(None)
+            catalog.get(item.template_id).weight * item.quantity
+            for item in self.items
         )
 
-    def contains(self, container_id: str, possible_descendant_id: str) -> bool:
-        return any(
-            child.instance_id == possible_descendant_id
-            or self.contains(child.instance_id, possible_descendant_id)
-            for child in self.children_of(container_id)
-        )
-
+    def storage_capacity(self, catalog: ItemCatalog) -> int:
+        """Return base storage plus the bonus from an equipped container."""
+        container_id = self.equipment.get(EquipmentSlot.CONTAINER)
+        if container_id is None:
+            return self.total_storage
+        template = catalog.get(self.item(container_id).template_id)
+        return self.total_storage + (template.capacity or 0)
 
 DEFAULT_ITEM_CATALOG_PATH = (
     Path(__file__).resolve().parent.parent / "assets" / "items" / "items.json"

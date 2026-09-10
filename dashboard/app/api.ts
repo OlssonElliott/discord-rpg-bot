@@ -13,6 +13,17 @@ export type CharacterSummary = {
   is_active: boolean;
 };
 
+export type CatalogItem = {
+  id: string;
+  item_type: 'weapon' | 'armor' | 'container' | 'consumable' | 'misc';
+  name: string;
+  rarity: string;
+  value: number;
+  description: string;
+  weight: number;
+  stackable: boolean;
+};
+
 export type RoomData = {
   id: string;
   area_id: string;

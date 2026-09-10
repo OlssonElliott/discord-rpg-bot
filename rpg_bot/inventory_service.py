@@ -35,8 +35,11 @@ class InventoryService:
             raise InventoryError("Only consumables can be granted as a stack.")
         inventory = self.database.get_character_inventory(character.character_id)
         added_weight = template.weight * quantity
-        if inventory.current_storage(self.catalog) + added_weight > inventory.total_storage:
-            raise InventoryError("There is not enough regular inventory space.")
+        if (
+            inventory.current_storage(self.catalog) + added_weight
+            > inventory.storage_capacity(self.catalog)
+        ):
+            raise InventoryError("There is not enough inventory space.")
         return self.database.add_inventory_item(
             character.character_id,
             template_id,
@@ -110,7 +113,7 @@ class InventoryService:
         future = replace(
             inventory, items=future_items, equipment=future_equipment
         )
-        if future.current_storage(self.catalog) > future.total_storage:
+        if future.current_storage(self.catalog) > future.storage_capacity(self.catalog):
             raise InventoryError("There is not enough room to store displaced equipment.")
         self.database.equip_inventory_item(
             character.character_id,
@@ -134,53 +137,10 @@ class InventoryService:
             if equipped_id != instance_id
         }
         future = replace(inventory, equipment=future_equipment)
-        if future.current_storage(self.catalog) > future.total_storage:
-            raise InventoryError("There is not enough regular inventory space.")
+        if future.current_storage(self.catalog) > future.storage_capacity(self.catalog):
+            raise InventoryError("There is not enough inventory space to unequip that item.")
         for slot in slots:
             self.database.unequip_inventory_slot(character.character_id, slot)
-
-    def move_to_container(
-        self, character: Character, instance_id: str, container_id: str | None
-    ) -> None:
-        inventory = self._inventory(character)
-        item = inventory.item(instance_id)
-        if instance_id in inventory.equipment.values():
-            raise InventoryError("Unequip that item before moving it.")
-        if container_id is None:
-            future_items = tuple(
-                replace(candidate, parent_container_id=None)
-                if candidate.instance_id == instance_id
-                else candidate
-                for candidate in inventory.items
-            )
-            future = replace(inventory, items=future_items)
-            if future.current_storage(self.catalog) > future.total_storage:
-                raise InventoryError("There is not enough regular inventory space.")
-        else:
-            container = inventory.item(container_id)
-            container_template = self.catalog.get(container.template_id)
-            if container_template.item_type is not ItemType.CONTAINER:
-                raise InventoryError("The selected destination is not a container.")
-            if instance_id == container_id or inventory.contains(instance_id, container_id):
-                raise InventoryError("A container cannot be placed inside itself.")
-            if item.parent_container_id == container_id:
-                return
-            future_items = tuple(
-                replace(candidate, parent_container_id=container_id)
-                if candidate.instance_id == instance_id
-                else candidate
-                for candidate in inventory.items
-            )
-            future = replace(inventory, items=future_items)
-            if future.container_storage(container_id, self.catalog) > (
-                container_template.capacity or 0
-            ):
-                raise InventoryError("That container does not have enough capacity.")
-            if future.current_storage(self.catalog) > future.total_storage:
-                raise InventoryError("There is not enough regular inventory space.")
-        self.database.move_inventory_item(
-            character.character_id, instance_id, container_id
-        )
 
     def use(self, character: Character, instance_id: str) -> Character:
         inventory = self._inventory(character)

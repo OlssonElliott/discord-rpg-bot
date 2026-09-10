@@ -50,31 +50,46 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(equipped.current_storage(self.catalog), 0)
         self.assertEqual(equipped.current_weight(self.catalog), 4)
 
-    def test_nested_container_weight_rolls_up_to_equipped_container(self) -> None:
+    def test_equipped_backpack_adds_capacity_without_hiding_items(self) -> None:
         backpack_id = self.service.grant(self.character, "traveler_backpack")
-        satchel_id = self.service.grant(self.character, "small_satchel")
         dagger_id = self.service.grant(self.character, "iron_dagger")
 
-        self.service.move_to_container(self.character, satchel_id, backpack_id)
-        self.service.move_to_container(self.character, dagger_id, satchel_id)
+        loose = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(loose.storage_capacity(self.catalog), 20)
+        self.assertEqual(loose.current_storage(self.catalog), 3)
+
         self.service.equip(self.character, backpack_id)
         inventory = self.database.get_character_inventory(self.character.character_id)
 
-        self.assertEqual(inventory.container_storage(satchel_id, self.catalog), 1)
-        self.assertEqual(inventory.container_storage(backpack_id, self.catalog), 2)
-        self.assertEqual(inventory.current_storage(self.catalog), 0)
-        self.assertEqual(inventory.current_weight(self.catalog), 4)
+        self.assertEqual(inventory.storage_capacity(self.catalog), 26)
+        self.assertEqual(inventory.current_storage(self.catalog), 1)
+        self.assertEqual(inventory.current_weight(self.catalog), 3)
+        self.assertIsNone(inventory.item(dagger_id).parent_container_id)
 
-    def test_containers_cannot_create_cycles_or_exceed_capacity(self) -> None:
+    def test_backpack_cannot_be_unequipped_when_inventory_would_overflow(self) -> None:
         backpack_id = self.service.grant(self.character, "traveler_backpack")
-        satchel_id = self.service.grant(self.character, "small_satchel")
-        axe_id = self.service.grant(self.character, "great_axe")
-        self.service.move_to_container(self.character, satchel_id, backpack_id)
+        self.service.equip(self.character, backpack_id)
+        for _ in range(6):
+            self.service.grant(self.character, "great_axe")
 
-        with self.assertRaisesRegex(InventoryError, "inside itself"):
-            self.service.move_to_container(self.character, backpack_id, satchel_id)
-        with self.assertRaisesRegex(InventoryError, "enough capacity"):
-            self.service.move_to_container(self.character, axe_id, satchel_id)
+        with self.assertRaisesRegex(InventoryError, "unequip"):
+            self.service.unequip(self.character, backpack_id)
+
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        self.assertEqual(inventory.storage_capacity(self.catalog), 26)
+        self.assertEqual(inventory.current_storage(self.catalog), 24)
+
+    def test_initialize_flattens_items_from_the_old_container_model(self) -> None:
+        backpack_id = self.service.grant(self.character, "traveler_backpack")
+        dagger_id = self.service.grant(self.character, "iron_dagger")
+        self.database.move_inventory_item(
+            self.character.character_id, dagger_id, backpack_id
+        )
+
+        self.database.initialize()
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        self.assertIsNone(inventory.item(dagger_id).parent_container_id)
 
     def test_using_one_consumable_decrements_its_stack(self) -> None:
         potion_id = self.service.grant(self.character, "stale_bread", 2)
@@ -85,6 +100,54 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(updated.hp, 10)
         self.assertEqual(inventory.item(potion_id).quantity, 1)
+
+
+class ItemCatalogTests(unittest.TestCase):
+    def test_other_process_view_reloads_after_catalog_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "items.json"
+            path.write_text("[]\n", encoding="utf-8")
+            writer = ItemCatalog.load(path)
+            reader = ItemCatalog.load(path)
+
+            writer.create(
+                {
+                    "item_type": "misc",
+                    "id": "iron_key",
+                    "name": "Iron Key",
+                    "rarity": "Common",
+                    "value": 2,
+                    "description": "Opens the crypt.",
+                    "weight": 0,
+                    "tags": [],
+                    "modifiers": [],
+                    "requirements": [],
+                }
+            )
+
+            self.assertEqual(reader.get("iron_key").name, "Iron Key")
+
+    def test_catalog_rejects_duplicate_item_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "items.json"
+            path.write_text("[]\n", encoding="utf-8")
+            catalog = ItemCatalog.load(path)
+            record = {
+                "item_type": "misc",
+                "id": "iron_key",
+                "name": "Iron Key",
+                "rarity": "Common",
+                "value": 2,
+                "description": "",
+                "weight": 0,
+                "tags": [],
+                "modifiers": [],
+                "requirements": [],
+            }
+            catalog.create(record)
+
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                catalog.create({**record, "id": "another_key"})
 
 
 if __name__ == "__main__":

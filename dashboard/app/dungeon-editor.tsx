@@ -56,6 +56,7 @@ import {
   identifier,
   type AreaGraphData,
   type AreaSummary,
+  type CatalogItem,
   type CharacterSummary,
   type ConnectionData,
   type RoomData,
@@ -109,6 +110,7 @@ function graphEdges(graph: AreaGraphData): Edge[] {
 export function DungeonEditor() {
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [areaId, setAreaId] = useState('');
   const [graph, setGraph] = useState<AreaGraphData | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RoomNodeData>>([]);
@@ -123,6 +125,7 @@ export function DungeonEditor() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [contentKind, setContentKind] = useState<ContentKind | null>(null);
+  const [itemLibraryOpen, setItemLibraryOpen] = useState(false);
 
   const selectedRoom = useMemo(
     () => graph?.nodes.find((room) => room.id === selectedRoomId) ?? null,
@@ -176,12 +179,21 @@ export function DungeonEditor() {
     }
   }, []);
 
+  const loadCatalogItems = useCallback(async () => {
+    try {
+      setCatalogItems(await api<CatalogItem[]>('/items'));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load items.');
+    }
+  }, []);
+
   useEffect(() => {
     queueMicrotask(() => {
       void loadAreas();
       void loadCharacters();
+      void loadCatalogItems();
     });
-  }, [loadAreas, loadCharacters]);
+  }, [loadAreas, loadCatalogItems, loadCharacters]);
   useEffect(() => {
     if (areaId) queueMicrotask(() => void loadGraph(areaId));
   }, [areaId, loadGraph]);
@@ -189,7 +201,7 @@ export function DungeonEditor() {
   const mutate = useCallback(async (action: () => Promise<unknown>, message: string) => {
     try {
       await action();
-      await Promise.all([loadGraph(areaId), loadAreas(areaId), loadCharacters()]);
+      await Promise.all([loadGraph(areaId), loadAreas(areaId), loadCharacters(), loadCatalogItems()]);
       setNotice(message);
       setError('');
       window.setTimeout(() => setNotice(''), 1800);
@@ -198,7 +210,7 @@ export function DungeonEditor() {
       setError(requestError instanceof Error ? requestError.message : 'The change was rejected.');
       return false;
     }
-  }, [areaId, loadAreas, loadCharacters, loadGraph]);
+  }, [areaId, loadAreas, loadCatalogItems, loadCharacters, loadGraph]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -321,6 +333,9 @@ export function DungeonEditor() {
         <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
           <Plus /> Area
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
+          <Box /> Item library
+        </Button>
         <div className="header-status"><span /> {notice || 'Saved'}</div>
         <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
           <Plus /> Add location
@@ -427,11 +442,11 @@ export function DungeonEditor() {
         );
         if (ok) setConnection(null);
       }} />
-      <ContentDialog kind={contentKind} onOpenChange={(open) => { if (!open) setContentKind(null); }} onCreate={async (name, quantity) => {
+      <ContentDialog kind={contentKind} catalogItems={catalogItems} onOpenChange={(open) => { if (!open) setContentKind(null); }} onCreate={async (name, quantity) => {
         if (!selectedRoom || !contentKind) return;
         const path = contentKind === 'item' ? 'items' : 'entities';
         const payload = contentKind === 'item'
-          ? { id: identifier(name), name, quantity }
+          ? { item_id: name, quantity }
           : { id: identifier(name), name, kind: contentKind };
         const ok = await mutate(
           () => api(`/rooms/${selectedRoom.id}/${path}`, { method: 'POST', body: JSON.stringify(payload) }),
@@ -439,6 +454,18 @@ export function DungeonEditor() {
         );
         if (ok) setContentKind(null);
       }} />
+      <ItemLibraryDialog
+        open={itemLibraryOpen}
+        items={catalogItems}
+        onOpenChange={setItemLibraryOpen}
+        onCreate={async (record) => {
+          const ok = await mutate(
+            () => api('/items', { method: 'POST', body: JSON.stringify({ ...record, id: identifier(record.name) }) }),
+            `${record.name} created`,
+          );
+          if (ok) setItemLibraryOpen(false);
+        }}
+      />
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -607,17 +634,87 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
   );
 }
 
-function ContentDialog({ kind, onOpenChange, onCreate }: { kind: ContentKind | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, quantity: number) => Promise<void> }) {
+function ContentDialog({ kind, catalogItems, onOpenChange, onCreate }: { kind: ContentKind | null; catalogItems: CatalogItem[]; onOpenChange: (open: boolean) => void; onCreate: (name: string, quantity: number) => Promise<void> }) {
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState(1);
   return (
     <Dialog open={Boolean(kind)} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Add {kind}</DialogTitle><DialogDescription>This creates a persisted world object in the selected location.</DialogDescription></DialogHeader>
-        <label className="dialog-label" htmlFor="content-name">Name</label>
-        <Input id="content-name" value={name} onChange={(event) => setName(event.target.value)} />
+        <DialogHeader><DialogTitle>Add {kind}</DialogTitle><DialogDescription>{kind === 'item' ? 'Choose an existing item from the shared library.' : 'This creates a persisted world object in the selected location.'}</DialogDescription></DialogHeader>
+        <label className="dialog-label" htmlFor="content-name">{kind === 'item' ? 'Item' : 'Name'}</label>
+        {kind === 'item' ? (
+          <NativeSelect id="content-name" value={name} onChange={(event) => setName(event.target.value)}>
+            <NativeSelectOption value="">Choose an item…</NativeSelectOption>
+            {catalogItems.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.name} · {item.item_type}</NativeSelectOption>)}
+          </NativeSelect>
+        ) : <Input id="content-name" value={name} onChange={(event) => setName(event.target.value)} />}
         {kind === 'item' && <><label className="dialog-label" htmlFor="content-quantity">Quantity</label><Input id="content-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></>}
         <DialogFooter><Button disabled={!name.trim() || quantity < 1} onClick={() => void onCreate(name, quantity)}>Add {kind}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type ItemDraft = {
+  name: string;
+  item_type: CatalogItem['item_type'];
+  description: string;
+  rarity: string;
+  value: number;
+  weight: number;
+  grip?: string;
+  durability?: number;
+  damage?: number;
+  damage_type?: string;
+  protection?: number;
+  dodge_penalty?: number;
+  strength_requirement?: number;
+  capacity?: number;
+  can_equip?: boolean;
+  affected_amount?: number;
+};
+
+function ItemLibraryDialog({ open, items, onOpenChange, onCreate }: { open: boolean; items: CatalogItem[]; onOpenChange: (open: boolean) => void; onCreate: (record: ItemDraft) => Promise<void> }) {
+  const [name, setName] = useState('');
+  const [itemType, setItemType] = useState<CatalogItem['item_type']>('misc');
+  const [description, setDescription] = useState('');
+  const [rarity, setRarity] = useState('Common');
+  const [value, setValue] = useState(0);
+  const [weight, setWeight] = useState(0);
+  const [power, setPower] = useState(1);
+  const [damageType, setDamageType] = useState('physical');
+  const [grip, setGrip] = useState('one_handed');
+  const [canEquip, setCanEquip] = useState(false);
+
+  const record: ItemDraft = { name, item_type: itemType, description, rarity, value, weight };
+  if (itemType === 'weapon') Object.assign(record, { grip, durability: 40, damage: power, damage_type: damageType });
+  if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: 0, strength_requirement: 0 });
+  if (itemType === 'container') Object.assign(record, { capacity: power, can_equip: canEquip });
+  if (itemType === 'consumable') Object.assign(record, { affected_amount: power });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Item library</DialogTitle><DialogDescription>Create each item type once. Rooms and containers can only use entries from this shared library.</DialogDescription></DialogHeader>
+        <div className="catalog-count">{items.length} item types available</div>
+        <div className="catalog-list" aria-label="Existing item types">
+          {items.map((item) => (
+            <div key={item.id}><span>{item.name}</span><Badge variant="outline">{item.item_type}</Badge></div>
+          ))}
+        </div>
+        <div className="catalog-grid">
+          <label className="dialog-label" htmlFor="item-name">Name<Input id="item-name" value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} onChange={(event) => setItemType(event.target.value as CatalogItem['item_type'])}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption></NativeSelect></label>
+          <label className="dialog-label" htmlFor="item-rarity">Rarity<Input id="item-rarity" value={rarity} onChange={(event) => setRarity(event.target.value)} /></label>
+          <label className="dialog-label" htmlFor="item-value">Value<Input id="item-value" type="number" min={0} value={value} onChange={(event) => setValue(Number(event.target.value))} /></label>
+          <label className="dialog-label" htmlFor="item-weight">Weight<Input id="item-weight" type="number" min={0} value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
+          {itemType !== 'misc' && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
+          {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
+          {itemType === 'container' && <label className="catalog-check"><input type="checkbox" checked={canEquip} onChange={(event) => setCanEquip(event.target.checked)} /> Can be equipped</label>}
+        </div>
+        <label className="dialog-label" htmlFor="item-description">Description</label>
+        <Textarea id="item-description" value={description} onChange={(event) => setDescription(event.target.value)} />
+        <DialogFooter><Button disabled={!name.trim() || !rarity.trim() || value < 0 || weight < 0 || power < 1} onClick={() => void onCreate(record)}>Create item type</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

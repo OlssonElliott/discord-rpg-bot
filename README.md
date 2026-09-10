@@ -80,10 +80,13 @@ database and `.env` are ignored by Git.
 ## Run the DM location editor
 
 The local dashboard uses the same SQLite database and deterministic world service
-as Discord and is included in `npm run dev`. Create or select an Area, add locations, drag them
-into place, and connect them by dragging from one node handle to another. Node
-positions are editor-only metadata; arrows are persisted directional gameplay
-exits. The API binds to localhost and is intended for the DM's local machine.
+as Discord and is included in `npm run dev`. Create or select an Area, add locations,
+drag them into place, and connect them by dragging from one node handle to another.
+Create reusable item types once in **Item library**; rooms can only receive items
+selected from that shared catalog, so anything taken with `/take` appears in the
+same interactive `/inventory`. Node positions are editor-only metadata; arrows are
+persisted directional gameplay exits. The API binds to localhost and is intended
+for the DM's local machine.
 
 ## Commands
 
@@ -99,8 +102,9 @@ Player commands:
   character manages their personal Dungeon Master portrait instead.
 - `/character removeportrait` — remove the active character's portrait.
 - `/character cancel` — discard the active creation session.
-- `/inventory` — privately open the active character's bag, equipment, nested
-  containers, item details, and inventory actions.
+- `/inventory` — privately open the active character's equipment, flat inventory,
+  item details, and inventory actions. An open view refreshes after taking or
+  dropping an item.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
   `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
 - `/dicecolor [color]` — view or set a personal six-digit hex dice color.
@@ -135,13 +139,14 @@ incomplete creation sessions are held in memory and need to be restarted after a
 restart.
 
 Inventory ownership and equipment are stored in SQLite, while reusable item
-templates live in `assets/items/items.json`. Item weight and regular inventory
-storage are separate measurements: equipped items still count toward carried
-weight but do not occupy regular storage. Consumables of the same type and location
-stack by quantity. Containers may contain other containers; their own weight and
-all nested contents recursively count against the parent container's capacity and
-the character's carried weight. Cycle checks prevent a container from being placed
-inside itself. The private character sheet links directly to the same inventory UI.
+templates are managed through the dashboard's **Item library** and persisted in
+`assets/items/items.json`. Item weight and inventory storage are separate
+measurements: equipped items still count toward carried weight but do not occupy
+storage. A loose backpack is an ordinary inventory item; equipping it adds its
+capacity to the character's storage limit. Inventory is intentionally flat, and
+older nested contents are moved to that flat inventory automatically at startup.
+Consumables of the same type stack by quantity. The private character sheet links
+directly to the same inventory UI.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below
