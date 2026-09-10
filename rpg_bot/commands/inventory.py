@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import discord
@@ -25,6 +26,7 @@ from ..world_service import WorldService
 DISCORD_FIELD_LIMIT = 1024
 DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
 READING_SEPARATOR = "──────────"
+LOGGER = logging.getLogger(__name__)
 
 
 def _item_label(item: ItemInstance, catalog: ItemCatalog) -> str:
@@ -523,6 +525,7 @@ class InventoryView(InventoryOwnedView):
 class OpenInventory:
     service: InventoryService
     character_id: int
+    interaction: discord.Interaction
     message: discord.InteractionMessage
     selected_id: str | None
     page: int
@@ -575,21 +578,34 @@ async def refresh_open_inventory(user_id: int, character_id: int) -> None:
         reading_id,
         session.reading_page if reading_id is not None else 0,
     )
+    edit_arguments = {
+        "embeds": inventory_embeds(
+            character,
+            inventory,
+            session.service.catalog,
+            selected_id,
+            reading_id,
+            view.reading_page if reading_id is not None else 0,
+        ),
+        "attachments": [],
+        "view": view,
+    }
     try:
-        await session.message.edit(
-            embeds=inventory_embeds(
-                character,
-                inventory,
-                session.service.catalog,
-                selected_id,
-                reading_id,
-                view.reading_page if reading_id is not None else 0,
-            ),
-            view=view,
-        )
-    except discord.HTTPException:
-        forget_open_inventory(user_id)
-        return
+        await session.interaction.edit_original_response(**edit_arguments)
+    except discord.HTTPException as original_error:
+        try:
+            await session.message.edit(**edit_arguments)
+        except discord.HTTPException as fallback_error:
+            LOGGER.warning(
+                "Could not refresh the open inventory for user %s and character %s "
+                "(original edit: %r; message edit: %r)",
+                user_id,
+                character_id,
+                original_error,
+                fallback_error,
+            )
+            forget_open_inventory(user_id)
+            return
     session.selected_id = selected_id
     session.page = page
     session.reading_id = reading_id
@@ -636,6 +652,7 @@ async def show_inventory(
         _OPEN_INVENTORIES[character.discord_user_id] = OpenInventory(
             service,
             character.character_id,
+            interaction,
             message,
             selected_id,
             page,

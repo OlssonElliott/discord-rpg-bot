@@ -34,6 +34,7 @@ def interaction_for(user_id: int) -> SimpleNamespace:
         client=SimpleNamespace(get_cog=lambda _: None),
         message=message,
         original_response=AsyncMock(return_value=message),
+        edit_original_response=AsyncMock(),
         response=SimpleNamespace(
             send_message=AsyncMock(),
             edit_message=AsyncMock(),

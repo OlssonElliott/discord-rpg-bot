@@ -41,6 +41,7 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=user_id),
             message=message,
             original_response=AsyncMock(return_value=message),
+            edit_original_response=AsyncMock(),
             response=SimpleNamespace(
                 send_message=AsyncMock(),
                 edit_message=AsyncMock(),
@@ -89,8 +90,10 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             take_interaction.response.send_message.await_args.args[0],
             "**Olof** took 1 × Health Potion.",
         )
-        message.edit.assert_awaited_once()
-        refreshed = message.edit.await_args.kwargs["embeds"][0]
+        inventory_interaction.edit_original_response.assert_awaited_once()
+        refreshed = inventory_interaction.edit_original_response.await_args.kwargs[
+            "embeds"
+        ][0]
         items = next(
             field.value for field in refreshed.fields if field.name == "Inventory"
         )
