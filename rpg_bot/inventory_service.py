@@ -10,6 +10,7 @@ from .inventory import (
     InventoryState,
     ItemCatalog,
     ItemInstance,
+    ItemTemplate,
     ItemType,
     WeaponGrip,
 )
@@ -34,15 +35,54 @@ class InventoryService:
         if not template.stackable and quantity != 1:
             raise InventoryError("Only consumables can be granted as a stack.")
         inventory = self.database.get_character_inventory(character.character_id)
+        added_slots = inventory.additional_slots(self.catalog, template)
         added_weight = template.weight * quantity
-        if inventory.current_storage(self.catalog) + added_weight > inventory.total_storage:
-            raise InventoryError("There is not enough regular inventory space.")
+        if (
+            inventory.current_storage(self.catalog) + added_slots
+            > inventory.storage_capacity(self.catalog)
+        ):
+            raise InventoryError("There are not enough storage slots.")
+        if (
+            inventory.current_weight(self.catalog) + added_weight
+            > inventory.carry_capacity()
+        ):
+            raise InventoryError("That would exceed the character's carry capacity.")
         return self.database.add_inventory_item(
             character.character_id,
             template_id,
             quantity=quantity,
             durability=template.durability,
             stackable=template.stackable,
+        )
+
+    def grant_currency(
+        self,
+        character: Character,
+        *,
+        copper: int = 0,
+        silver: int = 0,
+        gold: int = 0,
+    ) -> InventoryState:
+        if character.character_id is None:
+            raise InventoryError("The character has not been saved.")
+        if copper < 0 or silver < 0 or gold < 0:
+            raise InventoryError("Currency amounts cannot be negative.")
+        if copper == silver == gold == 0:
+            raise InventoryError("Give at least one coin.")
+        inventory = self.database.get_character_inventory(character.character_id)
+        future = replace(
+            inventory,
+            copper=inventory.copper + copper,
+            silver=inventory.silver + silver,
+            gold=inventory.gold + gold,
+        )
+        if future.current_weight(self.catalog) > future.carry_capacity():
+            raise InventoryError("Those coins would exceed the character's carry capacity.")
+        return self.database.add_currency(
+            character.character_id,
+            copper=copper,
+            silver=silver,
+            gold=gold,
         )
 
     def equip(
@@ -86,6 +126,8 @@ class InventoryService:
                     raise InventoryError("Unequip the two-handed weapon first.")
         elif template.item_type is ItemType.ARMOR:
             slot = EquipmentSlot.ARMOR
+        elif template.item_type is ItemType.CLOTHING:
+            slot = EquipmentSlot.CLOTHING
         elif template.item_type is ItemType.CONTAINER and template.can_equip:
             slot = EquipmentSlot.CONTAINER
         else:
@@ -110,8 +152,8 @@ class InventoryService:
         future = replace(
             inventory, items=future_items, equipment=future_equipment
         )
-        if future.current_storage(self.catalog) > future.total_storage:
-            raise InventoryError("There is not enough room to store displaced equipment.")
+        if future.current_storage(self.catalog) > future.storage_capacity(self.catalog):
+            raise InventoryError("There are not enough slots to store displaced equipment.")
         self.database.equip_inventory_item(
             character.character_id,
             instance_id,
@@ -134,53 +176,18 @@ class InventoryService:
             if equipped_id != instance_id
         }
         future = replace(inventory, equipment=future_equipment)
-        if future.current_storage(self.catalog) > future.total_storage:
-            raise InventoryError("There is not enough regular inventory space.")
+        if future.current_storage(self.catalog) > future.storage_capacity(self.catalog):
+            raise InventoryError("There are not enough storage slots to unequip that item.")
         for slot in slots:
             self.database.unequip_inventory_slot(character.character_id, slot)
 
-    def move_to_container(
-        self, character: Character, instance_id: str, container_id: str | None
-    ) -> None:
+    def read(self, character: Character, instance_id: str) -> ItemTemplate:
         inventory = self._inventory(character)
         item = inventory.item(instance_id)
-        if instance_id in inventory.equipment.values():
-            raise InventoryError("Unequip that item before moving it.")
-        if container_id is None:
-            future_items = tuple(
-                replace(candidate, parent_container_id=None)
-                if candidate.instance_id == instance_id
-                else candidate
-                for candidate in inventory.items
-            )
-            future = replace(inventory, items=future_items)
-            if future.current_storage(self.catalog) > future.total_storage:
-                raise InventoryError("There is not enough regular inventory space.")
-        else:
-            container = inventory.item(container_id)
-            container_template = self.catalog.get(container.template_id)
-            if container_template.item_type is not ItemType.CONTAINER:
-                raise InventoryError("The selected destination is not a container.")
-            if instance_id == container_id or inventory.contains(instance_id, container_id):
-                raise InventoryError("A container cannot be placed inside itself.")
-            if item.parent_container_id == container_id:
-                return
-            future_items = tuple(
-                replace(candidate, parent_container_id=container_id)
-                if candidate.instance_id == instance_id
-                else candidate
-                for candidate in inventory.items
-            )
-            future = replace(inventory, items=future_items)
-            if future.container_storage(container_id, self.catalog) > (
-                container_template.capacity or 0
-            ):
-                raise InventoryError("That container does not have enough capacity.")
-            if future.current_storage(self.catalog) > future.total_storage:
-                raise InventoryError("There is not enough regular inventory space.")
-        self.database.move_inventory_item(
-            character.character_id, instance_id, container_id
-        )
+        template = self.catalog.get(item.template_id)
+        if template.item_type is not ItemType.READABLE:
+            raise InventoryError("That item is not readable.")
+        return template
 
     def use(self, character: Character, instance_id: str) -> Character:
         inventory = self._inventory(character)

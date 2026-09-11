@@ -3,7 +3,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from PIL import Image
 
@@ -14,11 +14,13 @@ from rpg_bot.commands.character import (
     AttributeView,
     ArchiveCharacterButton,
     ArchiveConfirmationView,
+    ActivateCharacterButton,
     BackButton,
     BonusButton,
     BonusView,
     CharacterCommands,
     CharacterManageView,
+    DynamicCharacterManageItem,
     CharacterSheetView,
     ChoiceView,
     ConfirmAttributesButton,
@@ -35,7 +37,8 @@ from rpg_bot.commands.character import (
     creation_view,
     setup,
 )
-from rpg_bot.models import Character, Stance
+from rpg_bot.models import Character, CharacterSheetViewState, Stance
+from rpg_bot.dungeon import PlayerViewState
 from rpg_bot.inventory import InventoryState
 from rpg_bot.portraits import CharacterPortraitStore
 
@@ -138,6 +141,258 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
             [button.label for button in call.kwargs["view"].children],
             ["Inventory", "Publish here"],
         )
+
+    async def test_sheet_creates_dedicated_read_only_server_channel(self) -> None:
+        character = Character(
+            7,
+            "Olof",
+            12,
+            15,
+            Stance.STEADY,
+            attributes={"Strength": 14},
+            character_id=3,
+        )
+        database = Mock()
+        database.get_character.return_value = character
+        database.get_character_inventory.return_value = InventoryState(3, 20, (), {})
+        database.get_character_sheet_view_state.return_value = None
+        cog = CharacterCommands(database)
+        sheet_message = SimpleNamespace(id=901)
+        channel = SimpleNamespace(
+            id=56,
+            mention="#character-olof",
+            send=AsyncMock(return_value=sheet_message),
+            fetch_message=AsyncMock(),
+        )
+        user = MagicMock()
+        user.id = 7
+        bot_member = MagicMock()
+        bot_member.guild_permissions.manage_channels = True
+        guild = MagicMock()
+        guild.id = 44
+        guild.me = bot_member
+        guild.default_role = MagicMock()
+        guild.get_channel.return_value = None
+        guild.create_text_channel = AsyncMock(return_value=channel)
+        response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock())
+        followup = SimpleNamespace(send=AsyncMock())
+        interaction = SimpleNamespace(
+            user=user,
+            guild=guild,
+            client=MagicMock(),
+            response=response,
+            followup=followup,
+        )
+
+        await cog.sheet.callback(cog.sheet.binding, interaction)
+
+        response.defer.assert_awaited_once_with(ephemeral=True)
+        guild.create_text_channel.assert_awaited_once()
+        create_call = guild.create_text_channel.await_args
+        self.assertEqual(create_call.args[0], "character-olof")
+        player_permissions = create_call.kwargs["overwrites"][user]
+        self.assertTrue(player_permissions.view_channel)
+        self.assertFalse(player_permissions.send_messages)
+        bot_permissions = create_call.kwargs["overwrites"][bot_member]
+        self.assertIsNone(bot_permissions.manage_messages)
+        channel.send.assert_awaited_once()
+        sent_view = channel.send.await_args.kwargs["view"]
+        self.assertEqual(
+            [button.label for button in sent_view.children],
+            ["Manage inventory", "Refresh"],
+        )
+        sent_embeds = channel.send.await_args.kwargs["embeds"]
+        self.assertEqual([embed.title for embed in sent_embeds], ["Olof", "Olof's Inventory"])
+        self.assertIn("Money:", sent_embeds[1].description)
+        inventory_field = next(
+            field for field in sent_embeds[1].fields if field.name == "Inventory"
+        )
+        self.assertEqual(inventory_field.value, "Empty")
+        database.bind_character_sheet_channel.assert_called_once_with(3, 44, 56)
+        database.set_character_sheet_view_message.assert_called_once_with(3, 901)
+        self.assertIn("#character-olof", followup.send.await_args.args[0])
+
+    async def test_selecting_character_creates_both_private_channels(self) -> None:
+        selected = Character(7, "Olof", 12, 15, Stance.STEADY, character_id=3)
+        database = Mock()
+        database.get_character_inventory.return_value = InventoryState(3, 20, (), {})
+        database.get_character_sheet_view_state.return_value = None
+        database.get_player_view_state.return_value = PlayerViewState(
+            3, None, None, None, None
+        )
+        cog = CharacterCommands(database)
+        sheet_message = SimpleNamespace(id=901)
+        map_message = SimpleNamespace(id=902)
+        sheet_channel = SimpleNamespace(
+            id=56,
+            name="character-olof",
+            send=AsyncMock(return_value=sheet_message),
+            set_permissions=AsyncMock(
+                side_effect=AssertionError("redundant overwrite update")
+            ),
+            edit=AsyncMock(),
+        )
+        map_channel = SimpleNamespace(
+            id=57,
+            name="map-olof",
+            send=AsyncMock(return_value=map_message),
+            set_permissions=AsyncMock(
+                side_effect=AssertionError("redundant overwrite update")
+            ),
+            edit=AsyncMock(),
+        )
+        user = MagicMock()
+        user.id = 7
+        bot_member = MagicMock()
+        bot_member.guild_permissions.manage_channels = True
+        guild = MagicMock()
+        guild.id = 44
+        guild.me = bot_member
+        guild.default_role = MagicMock()
+        guild.get_channel.return_value = None
+        guild.create_text_channel = AsyncMock(
+            side_effect=(sheet_channel, map_channel)
+        )
+        interaction = SimpleNamespace(
+            user=user, guild=guild, client=MagicMock()
+        )
+
+        await cog.active_character_changed(interaction, None, selected)
+
+        self.assertEqual(
+            [call.args[0] for call in guild.create_text_channel.await_args_list],
+            ["character-olof", "map-olof"],
+        )
+        database.bind_character_sheet_channel.assert_called_once_with(3, 44, 56)
+        database.bind_player_view_channel.assert_called_once_with(3, 57)
+        database.set_character_sheet_view_message.assert_called_once_with(3, 901)
+        database.update_player_view_state.assert_any_call(
+            3, discord_message_id=902
+        )
+        sheet_channel.set_permissions.assert_not_awaited()
+        map_channel.set_permissions.assert_not_awaited()
+        sheet_channel.edit.assert_not_awaited()
+        map_channel.edit.assert_not_awaited()
+
+    async def test_character_switch_renames_and_refreshes_private_channels(self) -> None:
+        previous = Character(7, "Aria", 10, 10, Stance.STEADY, character_id=2)
+        selected = Character(7, "Olof", 12, 15, Stance.STEADY, character_id=3)
+        database = Mock()
+        database.get_character_inventory.return_value = InventoryState(3, 20, (), {})
+        database.get_character_sheet_view_state.return_value = CharacterSheetViewState(
+            3, 44, 56, 901
+        )
+        database.get_player_view_state.return_value = PlayerViewState(
+            3, None, None, 57, 902
+        )
+        cog = CharacterCommands(database)
+        sheet_message = SimpleNamespace(id=901, edit=AsyncMock())
+        map_message = SimpleNamespace(id=902, edit=AsyncMock())
+        sheet_channel = SimpleNamespace(
+            id=56,
+            name="character-aria",
+            edit=AsyncMock(),
+            set_permissions=AsyncMock(),
+            fetch_message=AsyncMock(return_value=sheet_message),
+        )
+        map_channel = SimpleNamespace(
+            id=57,
+            name="map-aria",
+            edit=AsyncMock(),
+            set_permissions=AsyncMock(),
+            fetch_message=AsyncMock(return_value=map_message),
+            send=AsyncMock(),
+        )
+        guild = SimpleNamespace(
+            id=44,
+            get_channel=Mock(
+                side_effect=lambda channel_id: {
+                    56: sheet_channel,
+                    57: map_channel,
+                }.get(channel_id)
+            ),
+        )
+        player = MagicMock()
+        player.id = 7
+        interaction = SimpleNamespace(
+            user=player, guild=guild, client=MagicMock()
+        )
+
+        await cog.active_character_changed(interaction, previous, selected)
+
+        self.assertEqual(
+            sheet_channel.edit.await_args.kwargs["name"], "character-olof"
+        )
+        self.assertEqual(map_channel.edit.await_args.kwargs["name"], "map-olof")
+        sheet_channel.set_permissions.assert_not_awaited()
+        map_channel.set_permissions.assert_not_awaited()
+        sheet_message.edit.assert_awaited_once()
+        self.assertIn(
+            "has not been placed",
+            map_message.edit.await_args.kwargs["content"],
+        )
+
+    async def test_sheet_failure_does_not_prevent_map_channel_creation(self) -> None:
+        selected = Character(7, "Olof", 12, 15, Stance.STEADY, character_id=3)
+        database = Mock()
+        database.get_player_view_state.return_value = PlayerViewState(
+            3, None, None, 57, None
+        )
+        cog = CharacterCommands(database)
+        cog._ensure_dedicated_sheet_channel = AsyncMock(
+            side_effect=ValueError("sheet refresh failed")
+        )
+        map_channel = SimpleNamespace(
+            id=57, set_permissions=AsyncMock(), edit=AsyncMock()
+        )
+        cog._ensure_dedicated_map_channel = AsyncMock(return_value=map_channel)
+        cog._show_unplaced_character_map = AsyncMock()
+        interaction = SimpleNamespace(
+            user=MagicMock(), guild=SimpleNamespace(id=44), client=MagicMock()
+        )
+
+        await cog.active_character_changed(interaction, None, selected)
+
+        cog._ensure_dedicated_map_channel.assert_awaited_once_with(
+            interaction, selected
+        )
+        cog._show_unplaced_character_map.assert_awaited_once_with(
+            map_channel, None, selected
+        )
+
+    async def test_unequip_deletes_private_channels_and_clears_bindings(self) -> None:
+        character = Character(7, "Olof", 12, 15, Stance.STEADY, character_id=3)
+        database = Mock()
+        database.get_character_sheet_view_state.return_value = CharacterSheetViewState(
+            3, 44, 56, 901
+        )
+        database.get_player_view_state.return_value = PlayerViewState(
+            3, None, None, 57, 902
+        )
+        cog = CharacterCommands(database)
+        sheet_channel = SimpleNamespace(id=56, delete=AsyncMock())
+        map_channel = SimpleNamespace(id=57, delete=AsyncMock())
+        guild = SimpleNamespace(
+            id=44,
+            get_channel=Mock(
+                side_effect=lambda channel_id: {
+                    56: sheet_channel,
+                    57: map_channel,
+                }.get(channel_id)
+            ),
+        )
+        player = MagicMock()
+        player.id = 7
+        interaction = SimpleNamespace(
+            user=player, guild=guild, client=MagicMock()
+        )
+
+        await cog.active_character_deactivated(interaction, character)
+
+        for channel in (sheet_channel, map_channel):
+            channel.delete.assert_awaited_once()
+        database.clear_character_sheet_view_state.assert_called_once_with(3)
+        database.clear_player_view_channel.assert_called_once_with(3)
 
     async def test_publishing_sheet_reuses_its_message_in_the_current_channel(self) -> None:
         character = Character(
@@ -357,9 +612,71 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Olof — active", call.args[0])
         self.assertIsInstance(call.kwargs["view"], CharacterManageView)
         self.assertEqual(
-            [option.value for option in call.kwargs["view"].children[0].options],
+            [
+                option.value
+                for option in call.kwargs["view"].children[0].item.options
+            ],
             ["1", "2"],
         )
+        self.assertTrue(call.kwargs["view"].is_persistent())
+        self.assertTrue(
+            all(item.custom_id for item in call.kwargs["view"].children)
+        )
+
+    async def test_cog_load_registers_dynamic_character_manage_items(self) -> None:
+        first = SimpleNamespace(
+            character_id=1,
+            discord_user_id=7,
+            name="Olof",
+            is_active=True,
+            is_archived=False,
+            portrait_key=None,
+        )
+        second = SimpleNamespace(
+            character_id=2,
+            discord_user_id=7,
+            name="Aria",
+            is_active=False,
+            is_archived=False,
+            portrait_key=None,
+        )
+        database = Mock()
+        database.list_all_characters.return_value = [first, second]
+        database.list_character_sheet_view_states.return_value = []
+        bot = SimpleNamespace(add_view=Mock(), add_dynamic_items=Mock())
+        cog = CharacterCommands(database, bot=bot)
+
+        await cog.cog_load()
+
+        bot.add_dynamic_items.assert_called_once_with(DynamicCharacterManageItem)
+        bot.add_view.assert_not_called()
+
+    async def test_dynamic_manage_item_rebuilds_from_component_id(self) -> None:
+        character = SimpleNamespace(
+            character_id=1,
+            discord_user_id=7,
+            name="Olof",
+            is_active=True,
+            is_archived=False,
+            portrait_key=None,
+        )
+        database = Mock()
+        database.list_characters.return_value = [character]
+        cog = CharacterCommands(database)
+        original = CharacterManageView(cog, 7, [character], selected_id=1)
+        dynamic = original.children[1]
+        interaction = interaction_for(7)
+        interaction.client = SimpleNamespace(get_cog=Mock(return_value=cog))
+        match = dynamic.template.fullmatch(dynamic.custom_id)
+        assert match is not None
+
+        rebuilt = await DynamicCharacterManageItem.from_custom_id(
+            interaction, dynamic.item, match
+        )
+
+        self.assertEqual(rebuilt.user_id, 7)
+        self.assertIsInstance(rebuilt.item, ActivateCharacterButton)
+        self.assertEqual(rebuilt.custom_id, dynamic.custom_id)
 
     async def test_manage_without_characters_offers_creation(self) -> None:
         database = Mock()
@@ -382,7 +699,10 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         cog = CharacterCommands(database)
         view = CharacterManageView(cog, 7, [character], selected_id=1)
         remove_button = next(
-            item for item in view.children if isinstance(item, ArchiveCharacterButton)
+            item.item
+            for item in view.children
+            if isinstance(item, DynamicCharacterManageItem)
+            and isinstance(item.item, ArchiveCharacterButton)
         )
         interaction = interaction_for(7)
 
@@ -564,9 +884,10 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         cog = CharacterCommands(database)
         view = CharacterManageView(cog, 7, [character], selected_id=1)
         unequip = next(
-            item
+            item.item
             for item in view.children
-            if isinstance(item, UnequipCharacterButton)
+            if isinstance(item, DynamicCharacterManageItem)
+            and isinstance(item.item, UnequipCharacterButton)
         )
         interaction = interaction_for(7)
 

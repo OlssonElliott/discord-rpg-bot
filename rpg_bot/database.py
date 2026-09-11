@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+from datetime import datetime, timezone
 import math
 import sqlite3
 from uuid import uuid4
@@ -13,8 +14,26 @@ from .dice_visuals import (
     DEFAULT_DICE_NUMBER_COLOR,
     normalize_dice_color,
 )
-from .models import Character, Stance
-from .inventory import EquipmentSlot, InventoryState, ItemInstance
+from .models import Character, CharacterSheetViewState, Stance
+from .dungeon import (
+    CharacterLocation,
+    CharacterRoomKnowledge,
+    ConnectionType,
+    Dungeon,
+    Floor,
+    GameLock,
+    KnowledgeSource,
+    KnowledgeState,
+    PlayerViewState,
+    RoomConnection,
+)
+from .inventory import (
+    DEFAULT_BASE_SLOTS,
+    DEFAULT_CLOTHING_TEMPLATE_ID,
+    EquipmentSlot,
+    InventoryState,
+    ItemInstance,
+)
 from .portraits import default_portrait_key
 from .world import (
     Area,
@@ -105,7 +124,50 @@ class Database:
                 """
                 CREATE TABLE IF NOT EXISTS character_inventories (
                     character_id INTEGER PRIMARY KEY,
-                    total_storage INTEGER NOT NULL DEFAULT 20 CHECK (total_storage >= 0),
+                    total_storage INTEGER NOT NULL DEFAULT 4 CHECK (total_storage >= 0),
+                    FOREIGN KEY (character_id) REFERENCES characters(id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_sheet_view_states (
+                    character_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    discord_channel_id INTEGER NOT NULL,
+                    discord_message_id INTEGER,
+                    FOREIGN KEY (character_id) REFERENCES characters(id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    name TEXT PRIMARY KEY
+                )
+                """
+            )
+            slots_migration = "inventory_base_slots_4"
+            if connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE name = ?",
+                (slots_migration,),
+            ).fetchone() is None:
+                connection.execute(
+                    "UPDATE character_inventories SET total_storage = ? "
+                    "WHERE total_storage = 20",
+                    (DEFAULT_BASE_SLOTS,),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations (name) VALUES (?)",
+                    (slots_migration,),
+                )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_wallets (
+                    character_id INTEGER PRIMARY KEY,
+                    copper INTEGER NOT NULL DEFAULT 0 CHECK (copper >= 0),
+                    silver INTEGER NOT NULL DEFAULT 0 CHECK (silver >= 0),
+                    gold INTEGER NOT NULL DEFAULT 0 CHECK (gold >= 0),
                     FOREIGN KEY (character_id) REFERENCES characters(id)
                 )
                 """
@@ -124,22 +186,104 @@ class Database:
                 )
                 """
             )
+            self._initialize_character_equipment(connection)
+            # The old model allowed nested item trees. Inventory is now flat and
+            # an equipped container contributes capacity instead.
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS character_equipment (
-                    character_id INTEGER NOT NULL,
-                    slot TEXT NOT NULL CHECK (
-                        slot IN ('main_hand', 'off_hand', 'armor', 'container')
-                    ),
-                    item_instance_id TEXT NOT NULL,
-                    PRIMARY KEY (character_id, slot),
-                    UNIQUE (character_id, item_instance_id),
-                    FOREIGN KEY (character_id) REFERENCES characters(id),
-                    FOREIGN KEY (item_instance_id) REFERENCES character_items(instance_id)
-                )
+                UPDATE character_items
+                SET parent_container_id = NULL
+                WHERE parent_container_id IS NOT NULL
                 """
             )
+            self._ensure_default_clothing(connection)
             connection.execute("PRAGMA optimize")
+
+    @staticmethod
+    def _create_character_equipment_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS character_equipment (
+                character_id INTEGER NOT NULL,
+                slot TEXT NOT NULL CHECK (
+                    slot IN ('main_hand', 'off_hand', 'clothing', 'armor', 'container')
+                ),
+                item_instance_id TEXT NOT NULL,
+                PRIMARY KEY (character_id, slot),
+                UNIQUE (character_id, item_instance_id),
+                FOREIGN KEY (character_id) REFERENCES characters(id),
+                FOREIGN KEY (item_instance_id) REFERENCES character_items(instance_id)
+            )
+            """
+        )
+
+    @classmethod
+    def _initialize_character_equipment(cls, connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            """
+            SELECT sql FROM sqlite_schema
+            WHERE type = 'table' AND name = 'character_equipment'
+            """
+        ).fetchone()
+        if row is None:
+            cls._create_character_equipment_table(connection)
+            return
+        if "'clothing'" in (row["sql"] or ""):
+            return
+        connection.execute(
+            "ALTER TABLE character_equipment RENAME TO character_equipment_legacy"
+        )
+        cls._create_character_equipment_table(connection)
+        connection.execute(
+            """
+            INSERT INTO character_equipment (character_id, slot, item_instance_id)
+            SELECT character_id, slot, item_instance_id
+            FROM character_equipment_legacy
+            """
+        )
+        connection.execute("DROP TABLE character_equipment_legacy")
+
+    @staticmethod
+    def _ensure_default_clothing(
+        connection: sqlite3.Connection, character_id: int | None = None
+    ) -> None:
+        parameters: tuple[int, ...] = ()
+        character_filter = ""
+        if character_id is not None:
+            character_filter = "WHERE id = ?"
+            parameters = (character_id,)
+        character_rows = connection.execute(
+            f"SELECT id FROM characters {character_filter} ORDER BY id",
+            parameters,
+        ).fetchall()
+        for character_row in character_rows:
+            existing = connection.execute(
+                """
+                SELECT instance_id FROM character_items
+                WHERE character_id = ? AND template_id = ?
+                ORDER BY rowid LIMIT 1
+                """,
+                (character_row["id"], DEFAULT_CLOTHING_TEMPLATE_ID),
+            ).fetchone()
+            if existing is not None:
+                continue
+            instance_id = uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO character_items (
+                    instance_id, character_id, template_id, quantity, durability
+                ) VALUES (?, ?, ?, 1, NULL)
+                """,
+                (instance_id, character_row["id"], DEFAULT_CLOTHING_TEMPLATE_ID),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO character_equipment (
+                    character_id, slot, item_instance_id
+                ) VALUES (?, 'clothing', ?)
+                """,
+                (character_row["id"], instance_id),
+            )
 
     @staticmethod
     def _create_character_tables(connection: sqlite3.Connection) -> None:
@@ -299,6 +443,12 @@ class Database:
                 area_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
+                floor_id TEXT,
+                width REAL NOT NULL DEFAULT 1,
+                height REAL NOT NULL DEFAULT 1,
+                scene_image_path TEXT,
+                scene_image_url TEXT,
+                scene_prompt TEXT,
                 FOREIGN KEY (area_id) REFERENCES areas(id)
             );
             CREATE TABLE IF NOT EXISTS room_exits (
@@ -343,6 +493,127 @@ class Database:
             CREATE INDEX IF NOT EXISTS characters_by_room ON characters(current_room_id);
             """
         )
+        room_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(rooms)")
+        }
+        room_migrations = {
+            "floor_id": "ALTER TABLE rooms ADD COLUMN floor_id TEXT",
+            "width": "ALTER TABLE rooms ADD COLUMN width REAL NOT NULL DEFAULT 1",
+            "height": "ALTER TABLE rooms ADD COLUMN height REAL NOT NULL DEFAULT 1",
+            "scene_image_path": "ALTER TABLE rooms ADD COLUMN scene_image_path TEXT",
+            "scene_image_url": "ALTER TABLE rooms ADD COLUMN scene_image_url TEXT",
+            "scene_prompt": "ALTER TABLE rooms ADD COLUMN scene_prompt TEXT",
+        }
+        for column, statement in room_migrations.items():
+            if column not in room_columns:
+                connection.execute(statement)
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS dungeon_floors (
+                id TEXT PRIMARY KEY,
+                dungeon_id TEXT NOT NULL,
+                floor_number INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                UNIQUE (dungeon_id, floor_number),
+                FOREIGN KEY (dungeon_id) REFERENCES areas(id)
+            );
+            CREATE TABLE IF NOT EXISTS room_connections (
+                id TEXT PRIMARY KEY,
+                from_room_id TEXT NOT NULL,
+                to_room_id TEXT NOT NULL,
+                exit_name TEXT NOT NULL,
+                return_exit_name TEXT,
+                connection_type TEXT NOT NULL,
+                hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0, 1)),
+                bidirectional INTEGER NOT NULL DEFAULT 0 CHECK (bidirectional IN (0, 1)),
+                FOREIGN KEY (from_room_id) REFERENCES rooms(id),
+                FOREIGN KEY (to_room_id) REFERENCES rooms(id)
+            );
+            CREATE TABLE IF NOT EXISTS character_room_knowledge (
+                character_id INTEGER NOT NULL,
+                room_id TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('known', 'visited')),
+                source TEXT NOT NULL CHECK (source IN ('discovered', 'shared')),
+                first_visited_at TEXT,
+                last_visited_at TEXT,
+                last_seen_scene_id TEXT,
+                shared_by_character_id INTEGER,
+                PRIMARY KEY (character_id, room_id),
+                FOREIGN KEY (character_id) REFERENCES characters(id),
+                FOREIGN KEY (room_id) REFERENCES rooms(id),
+                FOREIGN KEY (shared_by_character_id) REFERENCES characters(id)
+            );
+            CREATE TABLE IF NOT EXISTS character_known_connections (
+                character_id INTEGER NOT NULL,
+                connection_id TEXT NOT NULL,
+                PRIMARY KEY (character_id, connection_id),
+                FOREIGN KEY (character_id) REFERENCES characters(id),
+                FOREIGN KEY (connection_id) REFERENCES room_connections(id)
+            );
+            CREATE TABLE IF NOT EXISTS player_view_states (
+                character_id INTEGER PRIMARY KEY,
+                selected_floor_id TEXT,
+                focused_room_id TEXT,
+                discord_channel_id INTEGER,
+                discord_message_id INTEGER,
+                FOREIGN KEY (character_id) REFERENCES characters(id),
+                FOREIGN KEY (selected_floor_id) REFERENCES dungeon_floors(id),
+                FOREIGN KEY (focused_room_id) REFERENCES rooms(id)
+            );
+            CREATE TABLE IF NOT EXISTS game_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                lock_state TEXT NOT NULL CHECK (
+                    lock_state IN ('none', 'movement_locked', 'all_actions_locked')
+                )
+            );
+            INSERT OR IGNORE INTO game_state (id, lock_state) VALUES (1, 'none');
+            """
+        )
+        # Existing areas become dungeons with one default floor.  Existing room
+        # layouts are preserved and assigned to that floor.
+        for area in connection.execute("SELECT id, name FROM areas").fetchall():
+            floor_id = f"{area['id']}:floor:1"
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO dungeon_floors (id, dungeon_id, floor_number, name)
+                VALUES (?, ?, 1, 'Floor 1')
+                """,
+                (floor_id, area["id"]),
+            )
+            connection.execute(
+                "UPDATE rooms SET floor_id = ? WHERE area_id = ? AND floor_id IS NULL",
+                (floor_id, area["id"]),
+            )
+        # Give legacy exits stable connection IDs without changing movement data.
+        for exit_row in connection.execute(
+            "SELECT room_id, name, destination_room_id FROM room_exits"
+        ).fetchall():
+            exists = connection.execute(
+                """
+                SELECT 1 FROM room_connections
+                WHERE (from_room_id = ? AND exit_name = ? COLLATE NOCASE)
+                   OR (to_room_id = ? AND return_exit_name = ? COLLATE NOCASE)
+                """,
+                (
+                    exit_row["room_id"], exit_row["name"],
+                    exit_row["room_id"], exit_row["name"],
+                ),
+            ).fetchone()
+            if exists is None:
+                connection.execute(
+                    """
+                    INSERT INTO room_connections (
+                        id, from_room_id, to_room_id, exit_name, connection_type,
+                        hidden, bidirectional
+                    ) VALUES (?, ?, ?, ?, 'passage', 0, 0)
+                    """,
+                    (
+                        uuid4().hex,
+                        exit_row["room_id"],
+                        exit_row["destination_room_id"],
+                        exit_row["name"],
+                    ),
+                )
 
     def create_character(
         self,
@@ -370,6 +641,13 @@ class Database:
 
         try:
             with self._connect() as connection:
+                previous = connection.execute(
+                    """
+                    SELECT id FROM characters
+                    WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
+                    """,
+                    (discord_user_id,),
+                ).fetchone()
                 connection.execute(
                     """
                     UPDATE characters SET is_active = 0
@@ -409,6 +687,14 @@ class Database:
                     ),
                 )
                 character_id = cursor.lastrowid
+                if previous is not None:
+                    self._transfer_private_views(
+                        connection, previous["id"], character_id
+                    )
+                else:
+                    self._claim_private_views(
+                        connection, discord_user_id, character_id
+                    )
                 connection.executemany(
                     """
                     INSERT INTO character_skills (character_id, skill, rank)
@@ -419,6 +705,7 @@ class Database:
                         for skill, rank in (skills or {}).items()
                     ),
                 )
+                self._ensure_default_clothing(connection, character_id)
         except sqlite3.IntegrityError as error:
             raise CharacterAlreadyExistsError(
                 "You already have a selectable character with that name."
@@ -509,6 +796,13 @@ class Database:
             ).fetchone()
             if row is None:
                 raise CharacterNotFoundError("That character is not selectable.")
+            previous = connection.execute(
+                """
+                SELECT id FROM characters
+                WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
+                """,
+                (discord_user_id,),
+            ).fetchone()
             connection.execute(
                 "UPDATE characters SET is_active = 0 WHERE discord_user_id = ?",
                 (discord_user_id,),
@@ -517,10 +811,125 @@ class Database:
                 "UPDATE characters SET is_active = 1 WHERE id = ?",
                 (character_id,),
             )
+            if previous is not None and previous["id"] != character_id:
+                self._transfer_private_views(
+                    connection, previous["id"], character_id
+                )
+            elif previous is None:
+                self._claim_private_views(
+                    connection, discord_user_id, character_id
+                )
         character = self.get_character(discord_user_id)
         if character is None:
             raise RuntimeError("Selected character could not be loaded.")
         return character
+
+    @staticmethod
+    def _transfer_private_views(
+        connection: sqlite3.Connection,
+        previous_character_id: int,
+        new_character_id: int,
+    ) -> None:
+        """Move player-owned Discord HUD bindings while preserving knowledge."""
+        Database._transfer_map_view(
+            connection, previous_character_id, new_character_id
+        )
+        Database._transfer_sheet_view(
+            connection, previous_character_id, new_character_id
+        )
+
+    @staticmethod
+    def _claim_private_views(
+        connection: sqlite3.Connection,
+        discord_user_id: int,
+        new_character_id: int,
+    ) -> None:
+        map_owner = connection.execute(
+            """
+            SELECT state.character_id FROM player_view_states AS state
+            JOIN characters ON characters.id = state.character_id
+            WHERE characters.discord_user_id = ? AND state.character_id != ?
+            ORDER BY state.character_id DESC LIMIT 1
+            """,
+            (discord_user_id, new_character_id),
+        ).fetchone()
+        if map_owner is not None:
+            Database._transfer_map_view(
+                connection, map_owner["character_id"], new_character_id
+            )
+        sheet_owner = connection.execute(
+            """
+            SELECT state.character_id FROM character_sheet_view_states AS state
+            JOIN characters ON characters.id = state.character_id
+            WHERE characters.discord_user_id = ? AND state.character_id != ?
+            ORDER BY state.character_id DESC LIMIT 1
+            """,
+            (discord_user_id, new_character_id),
+        ).fetchone()
+        if sheet_owner is not None:
+            Database._transfer_sheet_view(
+                connection, sheet_owner["character_id"], new_character_id
+            )
+
+    @staticmethod
+    def _transfer_map_view(
+        connection: sqlite3.Connection,
+        previous_character_id: int,
+        new_character_id: int,
+    ) -> None:
+        previous_map = connection.execute(
+            "SELECT * FROM player_view_states WHERE character_id = ?",
+            (previous_character_id,),
+        ).fetchone()
+        if previous_map is not None:
+            connection.execute(
+                "DELETE FROM player_view_states WHERE character_id = ?",
+                (new_character_id,),
+            )
+            room = connection.execute(
+                """
+                SELECT rooms.id, rooms.floor_id FROM characters
+                LEFT JOIN rooms ON rooms.id = characters.current_room_id
+                WHERE characters.id = ?
+                """,
+                (new_character_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE player_view_states
+                SET character_id = ?, selected_floor_id = ?, focused_room_id = ?
+                WHERE character_id = ?
+                """,
+                (
+                    new_character_id,
+                    room["floor_id"] if room else None,
+                    room["id"] if room else None,
+                    previous_character_id,
+                ),
+            )
+
+    @staticmethod
+    def _transfer_sheet_view(
+        connection: sqlite3.Connection,
+        previous_character_id: int,
+        new_character_id: int,
+    ) -> None:
+        previous_sheet = connection.execute(
+            "SELECT 1 FROM character_sheet_view_states WHERE character_id = ?",
+            (previous_character_id,),
+        ).fetchone()
+        if previous_sheet is not None:
+            connection.execute(
+                "DELETE FROM character_sheet_view_states WHERE character_id = ?",
+                (new_character_id,),
+            )
+            connection.execute(
+                """
+                UPDATE character_sheet_view_states SET character_id = ?
+                WHERE character_id = ?
+                """,
+                (new_character_id, previous_character_id),
+            )
 
     def deactivate_character(self, discord_user_id: int) -> None:
         """Leave a Discord user without an equipped/active character."""
@@ -565,7 +974,94 @@ class Database:
                 (guild_id, channel_id, character_id, message_id),
             )
 
-    def get_character_inventory(self, character_id: int, total_storage: int = 20) -> InventoryState:
+    def get_character_sheet_view_state(
+        self, character_id: int
+    ) -> CharacterSheetViewState | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT character_id, guild_id, discord_channel_id, discord_message_id
+                FROM character_sheet_view_states WHERE character_id = ?
+                """,
+                (character_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return CharacterSheetViewState(
+            row["character_id"], row["guild_id"], row["discord_channel_id"],
+            row["discord_message_id"],
+        )
+
+    def bind_character_sheet_channel(
+        self, character_id: int, guild_id: int, channel_id: int
+    ) -> CharacterSheetViewState:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO character_sheet_view_states (
+                    character_id, guild_id, discord_channel_id, discord_message_id
+                ) VALUES (?, ?, ?, NULL)
+                ON CONFLICT(character_id) DO UPDATE SET
+                    guild_id = excluded.guild_id,
+                    discord_channel_id = excluded.discord_channel_id,
+                    discord_message_id = CASE
+                        WHEN character_sheet_view_states.guild_id = excluded.guild_id
+                         AND character_sheet_view_states.discord_channel_id = excluded.discord_channel_id
+                        THEN character_sheet_view_states.discord_message_id
+                        ELSE NULL
+                    END
+                """,
+                (character_id, guild_id, channel_id),
+            )
+        state = self.get_character_sheet_view_state(character_id)
+        assert state is not None
+        return state
+
+    def set_character_sheet_view_message(
+        self, character_id: int, message_id: int
+    ) -> CharacterSheetViewState:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE character_sheet_view_states SET discord_message_id = ?
+                WHERE character_id = ?
+                """,
+                (message_id, character_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("The character sheet channel is not configured.")
+        state = self.get_character_sheet_view_state(character_id)
+        assert state is not None
+        return state
+
+    def clear_character_sheet_view_state(self, character_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM character_sheet_view_states WHERE character_id = ?",
+                (character_id,),
+            )
+
+    def list_character_sheet_view_states(
+        self,
+    ) -> tuple[CharacterSheetViewState, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT character_id, guild_id, discord_channel_id, discord_message_id
+                FROM character_sheet_view_states ORDER BY character_id
+                """
+            ).fetchall()
+        return tuple(
+            CharacterSheetViewState(
+                row["character_id"], row["guild_id"], row["discord_channel_id"],
+                row["discord_message_id"],
+            )
+            for row in rows
+        )
+
+    def get_character_inventory(
+        self, character_id: int, total_storage: int = DEFAULT_BASE_SLOTS
+    ) -> InventoryState:
         with self._connect() as connection:
             connection.execute(
                 """
@@ -575,7 +1071,20 @@ class Database:
                 (character_id, total_storage),
             )
             inventory_row = connection.execute(
-                "SELECT total_storage FROM character_inventories WHERE character_id = ?",
+                """
+                SELECT inventory.total_storage, characters.strength
+                FROM character_inventories AS inventory
+                JOIN characters ON characters.id = inventory.character_id
+                WHERE inventory.character_id = ?
+                """,
+                (character_id,),
+            ).fetchone()
+            connection.execute(
+                "INSERT OR IGNORE INTO character_wallets (character_id) VALUES (?)",
+                (character_id,),
+            )
+            wallet_row = connection.execute(
+                "SELECT copper, silver, gold FROM character_wallets WHERE character_id = ?",
                 (character_id,),
             ).fetchone()
             item_rows = connection.execute(
@@ -612,7 +1121,43 @@ class Database:
                 EquipmentSlot(row["slot"]): row["item_instance_id"]
                 for row in equipment_rows
             },
+            strength=inventory_row["strength"],
+            copper=wallet_row["copper"],
+            silver=wallet_row["silver"],
+            gold=wallet_row["gold"],
         )
+
+    def add_currency(
+        self,
+        character_id: int,
+        *,
+        copper: int = 0,
+        silver: int = 0,
+        gold: int = 0,
+    ) -> InventoryState:
+        if copper < 0 or silver < 0 or gold < 0:
+            raise ValueError("Currency amounts cannot be negative.")
+        if copper == silver == gold == 0:
+            raise ValueError("At least one currency amount must be greater than zero.")
+        with self._connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone() is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            connection.execute(
+                "INSERT OR IGNORE INTO character_wallets (character_id) VALUES (?)",
+                (character_id,),
+            )
+            connection.execute(
+                """
+                UPDATE character_wallets
+                SET copper = copper + ?, silver = silver + ?, gold = gold + ?
+                WHERE character_id = ?
+                """,
+                (copper, silver, gold, character_id),
+            )
+        return self.get_character_inventory(character_id)
 
     def add_inventory_item(
         self,
@@ -800,6 +1345,9 @@ class Database:
                         "UPDATE characters SET is_active = 1 WHERE id = ?",
                         (replacement["id"],),
                     )
+                    self._transfer_private_views(
+                        connection, character_id, replacement["id"]
+                    )
         archived = self.get_character_by_id(
             discord_user_id, character_id, include_archived=True
         )
@@ -817,6 +1365,13 @@ class Database:
                 connection.execute(
                     "INSERT INTO areas (id, name, description) VALUES (?, ?, ?)",
                     (area_id, name, description),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO dungeon_floors (id, dungeon_id, floor_number, name)
+                    VALUES (?, ?, 1, 'Floor 1')
+                    """,
+                    (f"{area_id}:floor:1", area_id),
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError(f"Area '{area_id}' already exists.") from error
@@ -861,7 +1416,18 @@ class Database:
             )
 
     def create_room(
-        self, room_id: str, area_id: str, name: str, description: str | None = None
+        self,
+        room_id: str,
+        area_id: str,
+        name: str,
+        description: str | None = None,
+        *,
+        floor_id: str | None = None,
+        width: float = 1.0,
+        height: float = 1.0,
+        scene_image_path: str | None = None,
+        scene_image_url: str | None = None,
+        scene_prompt: str | None = None,
     ) -> Room:
         room_id = self._clean_identifier(room_id, "Room ID")
         name = self._clean_name(name, "Room name")
@@ -870,10 +1436,28 @@ class Database:
                 "SELECT 1 FROM areas WHERE id = ?", (area_id,)
             ).fetchone():
                 raise NotFoundError(f"Area '{area_id}' does not exist.")
+            floor_id = floor_id or f"{area_id}:floor:1"
+            floor = connection.execute(
+                "SELECT dungeon_id FROM dungeon_floors WHERE id = ?", (floor_id,)
+            ).fetchone()
+            if floor is None or floor["dungeon_id"] != area_id:
+                raise NotFoundError(
+                    f"Floor '{floor_id}' does not exist in dungeon '{area_id}'."
+                )
+            width = self._validate_room_dimension(width, "width")
+            height = self._validate_room_dimension(height, "height")
             try:
                 connection.execute(
-                    "INSERT INTO rooms (id, area_id, name, description) VALUES (?, ?, ?, ?)",
-                    (room_id, area_id, name, description),
+                    """
+                    INSERT INTO rooms (
+                        id, area_id, name, description, floor_id, width, height,
+                        scene_image_path, scene_image_url, scene_prompt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        room_id, area_id, name, description, floor_id, width, height,
+                        scene_image_path, scene_image_url, scene_prompt,
+                    ),
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError(f"Room '{room_id}' already exists.") from error
@@ -888,7 +1472,9 @@ class Database:
         destination_room_id: str,
         *,
         return_exit_name: str | None = None,
-    ) -> None:
+        connection_type: ConnectionType = ConnectionType.PASSAGE,
+        hidden: bool = False,
+    ) -> RoomConnection:
         exit_name = self._clean_name(exit_name, "Exit name")
         if return_exit_name is not None:
             return_exit_name = self._clean_name(return_exit_name, "Return exit name")
@@ -933,16 +1519,163 @@ class Database:
                     """,
                     (destination_room_id, return_exit_name, room_id),
                 )
+            connection_id = uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO room_connections (
+                    id, from_room_id, to_room_id, exit_name, return_exit_name,
+                    connection_type, hidden, bidirectional
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    connection_id,
+                    room_id,
+                    destination_room_id,
+                    exit_name,
+                    return_exit_name,
+                    connection_type.value,
+                    int(hidden),
+                    int(return_exit_name is not None),
+                ),
+            )
+        return RoomConnection(
+            connection_id,
+            room_id,
+            destination_room_id,
+            connection_type,
+            hidden,
+            return_exit_name is not None,
+        )
 
     def disconnect_rooms(self, room_id: str, exit_name: str) -> None:
+        """Backward-compatible alias for removing a complete passage."""
+        self.disconnect_connection(room_id, exit_name)
+
+    def set_connection_direction(
+        self,
+        room_id: str,
+        exit_name: str,
+        *,
+        bidirectional: bool,
+        return_exit_name: str | None = None,
+    ) -> None:
+        """Change a canonical connection between one-way and two-way."""
         with self._connect() as connection:
-            self._require_room(connection, room_id)
-            cursor = connection.execute(
-                "DELETE FROM room_exits WHERE room_id = ? AND name = ? COLLATE NOCASE",
+            row = connection.execute(
+                """
+                SELECT id, from_room_id, to_room_id, exit_name,
+                       return_exit_name, bidirectional
+                FROM room_connections
+                WHERE from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                """,
                 (room_id, exit_name),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(
+                    f"Connection '{exit_name}' does not exist on room '{room_id}'."
+                )
+
+            if row["bidirectional"] and row["return_exit_name"]:
+                connection.execute(
+                    """
+                    DELETE FROM room_exits
+                    WHERE room_id = ? AND name = ? COLLATE NOCASE
+                      AND destination_room_id = ?
+                    """,
+                    (
+                        row["to_room_id"],
+                        row["return_exit_name"],
+                        row["from_room_id"],
+                    ),
+                )
+
+            clean_return_name = None
+            if bidirectional:
+                clean_return_name = self._clean_name(
+                    return_exit_name or row["exit_name"], "Return exit name"
+                )
+                conflict = connection.execute(
+                    """
+                    SELECT 1 FROM room_exits
+                    WHERE room_id = ? AND (
+                        name = ? COLLATE NOCASE OR destination_room_id = ?
+                    )
+                    """,
+                    (
+                        row["to_room_id"],
+                        clean_return_name,
+                        row["from_room_id"],
+                    ),
+                ).fetchone()
+                if conflict is not None:
+                    raise InvalidMovementError(
+                        "That return connection conflicts with an existing exit."
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO room_exits (room_id, name, destination_room_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        row["to_room_id"],
+                        clean_return_name,
+                        row["from_room_id"],
+                    ),
+                )
+
+            connection.execute(
+                """
+                UPDATE room_connections
+                SET return_exit_name = ?, bidirectional = ?
+                WHERE id = ?
+                """,
+                (clean_return_name, int(bidirectional), row["id"]),
             )
-            if cursor.rowcount == 0:
-                raise NotFoundError(f"Exit '{exit_name}' does not exist on room '{room_id}'.")
+
+    def disconnect_connection(self, room_id: str, exit_name: str) -> None:
+        """Remove a canonical connection and both exits when applicable."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, from_room_id, to_room_id, exit_name,
+                       return_exit_name, bidirectional
+                FROM room_connections
+                WHERE from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                """,
+                (room_id, exit_name),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(
+                    f"Connection '{exit_name}' does not exist on room '{room_id}'."
+                )
+            connection.execute(
+                """
+                DELETE FROM room_exits
+                WHERE room_id = ? AND name = ? COLLATE NOCASE
+                  AND destination_room_id = ?
+                """,
+                (row["from_room_id"], row["exit_name"], row["to_room_id"]),
+            )
+            if row["bidirectional"] and row["return_exit_name"]:
+                connection.execute(
+                    """
+                    DELETE FROM room_exits
+                    WHERE room_id = ? AND name = ? COLLATE NOCASE
+                      AND destination_room_id = ?
+                    """,
+                    (
+                        row["to_room_id"],
+                        row["return_exit_name"],
+                        row["from_room_id"],
+                    ),
+                )
+            connection.execute(
+                "DELETE FROM character_known_connections WHERE connection_id = ?",
+                (row["id"],),
+            )
+            connection.execute(
+                "DELETE FROM room_connections WHERE id = ?", (row["id"],)
+            )
 
     def update_room(
         self, room_id: str, name: str, description: str | None = None
@@ -984,6 +1717,27 @@ class Database:
                 (room_id, room_id),
             )
             connection.execute(
+                "DELETE FROM character_room_knowledge WHERE room_id = ?", (room_id,)
+            )
+            connection.execute(
+                "UPDATE player_view_states SET focused_room_id = NULL WHERE focused_room_id = ?",
+                (room_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM character_known_connections
+                WHERE connection_id IN (
+                    SELECT id FROM room_connections
+                    WHERE from_room_id = ? OR to_room_id = ?
+                )
+                """,
+                (room_id, room_id),
+            )
+            connection.execute(
+                "DELETE FROM room_connections WHERE from_room_id = ? OR to_room_id = ?",
+                (room_id, room_id),
+            )
+            connection.execute(
                 "DELETE FROM room_editor_metadata WHERE room_id = ?", (room_id,)
             )
             connection.execute("DELETE FROM rooms WHERE id = ?", (room_id,))
@@ -1018,16 +1772,40 @@ class Database:
                 x = position["x"] if position else 120.0 + (index % 3) * 300.0
                 y = position["y"] if position else 100.0 + (index // 3) * 220.0
                 nodes.append(RoomEditorNode(room, x, y))
-                connections.extend(
-                    GraphConnection(room.id, exit.name, exit.destination_room_id)
-                    for exit in room.exits
+            connection_rows = connection.execute(
+                """
+                SELECT links.id, links.from_room_id, links.exit_name,
+                       links.to_room_id, links.return_exit_name,
+                       links.bidirectional, links.hidden
+                FROM room_connections AS links
+                JOIN rooms AS source ON source.id = links.from_room_id
+                WHERE source.area_id = ?
+                ORDER BY source.name COLLATE NOCASE, links.exit_name COLLATE NOCASE
+                """,
+                (area_id,),
+            ).fetchall()
+            connections = [
+                GraphConnection(
+                    row["from_room_id"],
+                    row["exit_name"],
+                    row["to_room_id"],
+                    row["id"],
+                    row["return_exit_name"],
+                    bool(row["bidirectional"]),
+                    bool(row["hidden"]),
                 )
+                for row in connection_rows
+            ]
         return AreaGraph(area, tuple(nodes), tuple(connections))
 
     def get_room(self, room_id: str) -> Room | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT id, area_id, name, description FROM rooms WHERE id = ?",
+                """
+                SELECT id, area_id, name, description, floor_id, width, height,
+                       scene_image_path, scene_image_url, scene_prompt
+                FROM rooms WHERE id = ?
+                """,
                 (room_id,),
             ).fetchone()
             return self._to_room(connection, row) if row else None
@@ -1043,7 +1821,11 @@ class Database:
             if row["current_room_id"] is None:
                 return None
             room_row = connection.execute(
-                "SELECT id, area_id, name, description FROM rooms WHERE id = ?",
+                """
+                SELECT id, area_id, name, description, floor_id, width, height,
+                       scene_image_path, scene_image_url, scene_prompt
+                FROM rooms WHERE id = ?
+                """,
                 (row["current_room_id"],),
             ).fetchone()
             return self._to_room(connection, room_row) if room_row else None
@@ -1057,9 +1839,35 @@ class Database:
             )
             if cursor.rowcount == 0:
                 raise CharacterNotFoundError("That character does not exist.")
+            self._record_room_visit(connection, character_id, room_id)
         room = self.get_room(room_id)
         assert room is not None
         return room
+
+    def ensure_character_location_knowledge(self, character_id: int) -> None:
+        """Repair legacy locations that predate player-specific map knowledge."""
+        with self._connect() as connection:
+            character = connection.execute(
+                """
+                SELECT current_room_id FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            if character is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            room_id = character["current_room_id"]
+            if room_id is None:
+                return
+            known = connection.execute(
+                """
+                SELECT 1 FROM character_room_knowledge
+                WHERE character_id = ? AND room_id = ?
+                """,
+                (character_id, room_id),
+            ).fetchone()
+            if known is None:
+                self._record_room_visit(connection, character_id, room_id)
 
     def move_character(self, character_id: int, destination: str) -> Room:
         destination = destination.strip()
@@ -1090,9 +1898,355 @@ class Database:
                 "UPDATE characters SET current_room_id = ? WHERE id = ?",
                 (destination_id, character_id),
             )
+            self._record_room_visit(connection, character_id, destination_id)
         room = self.get_room(destination_id)
         assert room is not None
         return room
+
+    def create_floor(
+        self, floor_id: str, dungeon_id: str, floor_number: int, name: str
+    ) -> Floor:
+        floor_id = self._clean_identifier(floor_id, "Floor ID")
+        name = self._clean_name(name, "Floor name")
+        if isinstance(floor_number, bool) or not isinstance(floor_number, int):
+            raise ValueError("Floor number must be an integer.")
+        with self._connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM areas WHERE id = ?", (dungeon_id,)
+            ).fetchone() is None:
+                raise NotFoundError(f"Dungeon '{dungeon_id}' does not exist.")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO dungeon_floors (id, dungeon_id, floor_number, name)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (floor_id, dungeon_id, floor_number, name),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("That floor ID or floor number already exists.") from error
+        return Floor(floor_id, dungeon_id, floor_number, name)
+
+    def get_floor(self, floor_id: str) -> Floor | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, dungeon_id, floor_number, name
+                FROM dungeon_floors WHERE id = ?
+                """,
+                (floor_id,),
+            ).fetchone()
+        return (
+            Floor(row["id"], row["dungeon_id"], row["floor_number"], row["name"])
+            if row else None
+        )
+
+    def list_floors(self, dungeon_id: str) -> tuple[Floor, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, dungeon_id, floor_number, name FROM dungeon_floors
+                WHERE dungeon_id = ? ORDER BY floor_number, id
+                """,
+                (dungeon_id,),
+            ).fetchall()
+        return tuple(
+            Floor(row["id"], row["dungeon_id"], row["floor_number"], row["name"])
+            for row in rows
+        )
+
+    def get_dungeon(self, dungeon_id: str) -> Dungeon | None:
+        area = self.get_area(dungeon_id)
+        if area is None:
+            return None
+        return Dungeon(area.id, area.name, self.list_floors(area.id))
+
+    def list_dungeons(self) -> tuple[Dungeon, ...]:
+        return tuple(
+            Dungeon(area.id, area.name, self.list_floors(area.id))
+            for area in self.list_areas()
+        )
+
+    def get_character_location(self, character_id: int) -> CharacterLocation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT current_room_id FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone()
+        if row is None:
+            raise CharacterNotFoundError("That character does not exist.")
+        if row["current_room_id"] is None:
+            return None
+        return CharacterLocation(character_id, row["current_room_id"])
+
+    def get_character_knowledge(
+        self, character_id: int, room_id: str
+    ) -> CharacterRoomKnowledge | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT character_id, room_id, state, source, first_visited_at,
+                       last_visited_at, last_seen_scene_id, shared_by_character_id
+                FROM character_room_knowledge
+                WHERE character_id = ? AND room_id = ?
+                """,
+                (character_id, room_id),
+            ).fetchone()
+            if row is None:
+                return None
+            connection_ids = tuple(
+                item["connection_id"]
+                for item in connection.execute(
+                    """
+                    SELECT connection_id FROM character_known_connections
+                    WHERE character_id = ? ORDER BY connection_id
+                    """,
+                    (character_id,),
+                )
+                if connection.execute(
+                    """
+                    SELECT 1 FROM room_connections
+                    WHERE id = ? AND (from_room_id = ? OR to_room_id = ?)
+                    """,
+                    (item["connection_id"], room_id, room_id),
+                ).fetchone()
+            )
+            return self._to_knowledge(row, connection_ids)
+
+    def list_character_knowledge(
+        self, character_id: int, *, floor_id: str | None = None
+    ) -> tuple[CharacterRoomKnowledge, ...]:
+        with self._connect() as connection:
+            parameters: list[object] = [character_id]
+            floor_clause = ""
+            if floor_id is not None:
+                floor_clause = " AND rooms.floor_id = ?"
+                parameters.append(floor_id)
+            rows = connection.execute(
+                """
+                SELECT k.character_id, k.room_id, k.state, k.source,
+                       k.first_visited_at, k.last_visited_at, k.last_seen_scene_id,
+                       k.shared_by_character_id
+                FROM character_room_knowledge AS k
+                JOIN rooms ON rooms.id = k.room_id
+                WHERE k.character_id = ?
+                """ + floor_clause + " ORDER BY k.room_id",
+                parameters,
+            ).fetchall()
+            known_connections = {
+                item["connection_id"]
+                for item in connection.execute(
+                    """
+                    SELECT connection_id FROM character_known_connections
+                    WHERE character_id = ?
+                    """,
+                    (character_id,),
+                )
+            }
+            result = []
+            for row in rows:
+                room_connection_ids = tuple(
+                    item["id"]
+                    for item in connection.execute(
+                        """
+                        SELECT id FROM room_connections
+                        WHERE from_room_id = ? OR to_room_id = ? ORDER BY id
+                        """,
+                        (row["room_id"], row["room_id"]),
+                    )
+                    if item["id"] in known_connections
+                )
+                result.append(self._to_knowledge(row, room_connection_ids))
+            return tuple(result)
+
+    def share_room_knowledge(
+        self, from_character_id: int, to_character_id: int, room_id: str
+    ) -> CharacterRoomKnowledge:
+        if from_character_id == to_character_id:
+            raise ValueError("A character cannot share room knowledge with itself.")
+        with self._connect() as connection:
+            source = connection.execute(
+                """
+                SELECT 1 FROM character_room_knowledge
+                WHERE character_id = ? AND room_id = ?
+                """,
+                (from_character_id, room_id),
+            ).fetchone()
+            if source is None:
+                raise ValueError("The sharing character does not know that room.")
+            if connection.execute(
+                "SELECT 1 FROM characters WHERE id = ? AND is_archived = 0",
+                (to_character_id,),
+            ).fetchone() is None:
+                raise CharacterNotFoundError("The receiving character does not exist.")
+            connection.execute(
+                """
+                INSERT INTO character_room_knowledge (
+                    character_id, room_id, state, source, shared_by_character_id
+                ) VALUES (?, ?, 'known', 'shared', ?)
+                ON CONFLICT(character_id, room_id) DO NOTHING
+                """,
+                (to_character_id, room_id, from_character_id),
+            )
+        knowledge = self.get_character_knowledge(to_character_id, room_id)
+        assert knowledge is not None
+        return knowledge
+
+    def list_known_connections(self, character_id: int) -> tuple[RoomConnection, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT c.id, c.from_room_id, c.to_room_id, c.connection_type,
+                       c.hidden, c.bidirectional
+                FROM room_connections AS c
+                JOIN character_known_connections AS known
+                  ON known.connection_id = c.id
+                JOIN character_room_knowledge AS source_room
+                  ON source_room.character_id = known.character_id
+                 AND source_room.room_id = c.from_room_id
+                JOIN character_room_knowledge AS target_room
+                  ON target_room.character_id = known.character_id
+                 AND target_room.room_id = c.to_room_id
+                WHERE known.character_id = ? AND c.hidden = 0
+                ORDER BY c.id
+                """,
+                (character_id,),
+            ).fetchall()
+        return tuple(
+            RoomConnection(
+                row["id"], row["from_room_id"], row["to_room_id"],
+                ConnectionType(row["connection_type"]), bool(row["hidden"]),
+                bool(row["bidirectional"]),
+            )
+            for row in rows
+        )
+
+    def get_player_view_state(self, character_id: int) -> PlayerViewState:
+        with self._connect() as connection:
+            character = connection.execute(
+                "SELECT current_room_id FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone()
+            if character is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            row = connection.execute(
+                """
+                SELECT character_id, selected_floor_id, focused_room_id,
+                       discord_channel_id, discord_message_id
+                FROM player_view_states WHERE character_id = ?
+                """,
+                (character_id,),
+            ).fetchone()
+            if row is None:
+                room = connection.execute(
+                    "SELECT floor_id FROM rooms WHERE id = ?",
+                    (character["current_room_id"],),
+                ).fetchone()
+                selected_floor_id = room["floor_id"] if room else None
+                connection.execute(
+                    """
+                    INSERT INTO player_view_states (
+                        character_id, selected_floor_id, focused_room_id
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (character_id, selected_floor_id, character["current_room_id"]),
+                )
+                return PlayerViewState(
+                    character_id, selected_floor_id, character["current_room_id"]
+                )
+            return PlayerViewState(
+                row["character_id"], row["selected_floor_id"], row["focused_room_id"],
+                row["discord_channel_id"], row["discord_message_id"],
+            )
+
+    def update_player_view_state(
+        self,
+        character_id: int,
+        *,
+        selected_floor_id: str | None = None,
+        focused_room_id: str | None = None,
+        discord_channel_id: int | None = None,
+        discord_message_id: int | None = None,
+    ) -> PlayerViewState:
+        current = self.get_player_view_state(character_id)
+        values = PlayerViewState(
+            character_id,
+            selected_floor_id if selected_floor_id is not None else current.selected_floor_id,
+            focused_room_id if focused_room_id is not None else current.focused_room_id,
+            discord_channel_id if discord_channel_id is not None else current.discord_channel_id,
+            discord_message_id if discord_message_id is not None else current.discord_message_id,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE player_view_states SET selected_floor_id = ?, focused_room_id = ?,
+                    discord_channel_id = ?, discord_message_id = ?
+                WHERE character_id = ?
+                """,
+                (
+                    values.selected_floor_id, values.focused_room_id,
+                    values.discord_channel_id, values.discord_message_id, character_id,
+                ),
+            )
+        return values
+
+    def bind_player_view_channel(
+        self, character_id: int, channel_id: int
+    ) -> PlayerViewState:
+        self.get_player_view_state(character_id)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE player_view_states
+                SET discord_channel_id = ?, discord_message_id = NULL
+                WHERE character_id = ?
+                """,
+                (channel_id, character_id),
+            )
+        return self.get_player_view_state(character_id)
+
+    def clear_player_view_channel(self, character_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE player_view_states
+                SET discord_channel_id = NULL, discord_message_id = NULL
+                WHERE character_id = ?
+                """,
+                (character_id,),
+            )
+
+    def list_player_view_states(self) -> tuple[PlayerViewState, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT character_id, selected_floor_id, focused_room_id,
+                       discord_channel_id, discord_message_id
+                FROM player_view_states ORDER BY character_id
+                """
+            ).fetchall()
+        return tuple(
+            PlayerViewState(
+                row["character_id"], row["selected_floor_id"],
+                row["focused_room_id"], row["discord_channel_id"],
+                row["discord_message_id"],
+            )
+            for row in rows
+        )
+
+    def get_game_lock(self) -> GameLock:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT lock_state FROM game_state WHERE id = 1"
+            ).fetchone()
+        return GameLock(row["lock_state"])
+
+    def set_game_lock(self, state: GameLock) -> GameLock:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE game_state SET lock_state = ? WHERE id = 1", (state.value,)
+            )
+        return state
 
     def create_world_entity(
         self,
@@ -1164,6 +2318,29 @@ class Database:
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError(f"Item '{item_id}' already exists.") from error
+        return Item(item_id, name, description, stackable)
+
+    def upsert_item(
+        self,
+        item_id: str,
+        name: str,
+        description: str | None = None,
+        *,
+        stackable: bool = True,
+    ) -> Item:
+        """Make a catalog item available to room and entity inventories."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO items (id, name, description, stackable)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    stackable = excluded.stackable
+                """,
+                (item_id, name, description, int(stackable)),
+            )
         return Item(item_id, name, description, stackable)
 
     def add_item(
@@ -1607,13 +2784,110 @@ class Database:
         return coordinate
 
     @staticmethod
+    def _validate_room_dimension(value: float, label: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Room {label} must be a number.")
+        dimension = float(value)
+        if not math.isfinite(dimension) or dimension <= 0 or dimension > 1_000_000:
+            raise ValueError(f"Room {label} must be a positive finite number.")
+        return dimension
+
+    @staticmethod
     def _require_room(connection: sqlite3.Connection, room_id: str) -> sqlite3.Row:
         row = connection.execute(
-            "SELECT id, area_id, name, description FROM rooms WHERE id = ?", (room_id,)
+            """
+            SELECT id, area_id, name, description, floor_id, width, height,
+                   scene_image_path, scene_image_url, scene_prompt
+            FROM rooms WHERE id = ?
+            """,
+            (room_id,),
         ).fetchone()
         if row is None:
             raise NotFoundError(f"Room '{room_id}' does not exist.")
         return row
+
+    @staticmethod
+    def _record_room_visit(
+        connection: sqlite3.Connection, character_id: int, room_id: str
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            """
+            INSERT INTO character_room_knowledge (
+                character_id, room_id, state, source, first_visited_at, last_visited_at
+            ) VALUES (?, ?, 'visited', 'discovered', ?, ?)
+            ON CONFLICT(character_id, room_id) DO UPDATE SET
+                state = 'visited',
+                source = 'discovered',
+                first_visited_at = COALESCE(
+                    character_room_knowledge.first_visited_at, excluded.first_visited_at
+                ),
+                last_visited_at = excluded.last_visited_at,
+                shared_by_character_id = NULL
+            """,
+            (character_id, room_id, now, now),
+        )
+        connection.execute(
+            """
+            UPDATE player_view_states
+            SET selected_floor_id = (SELECT floor_id FROM rooms WHERE id = ?),
+                focused_room_id = ?
+            WHERE character_id = ?
+            """,
+            (room_id, room_id, character_id),
+        )
+        connection_rows = connection.execute(
+            """
+            SELECT id, from_room_id, to_room_id, bidirectional
+            FROM room_connections
+            WHERE hidden = 0 AND (
+                from_room_id = ? OR (to_room_id = ? AND bidirectional = 1)
+            )
+            """,
+            (room_id, room_id),
+        ).fetchall()
+        for connection_row in connection_rows:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO character_known_connections (
+                    character_id, connection_id
+                ) VALUES (?, ?)
+                """,
+                (character_id, connection_row["id"]),
+            )
+            adjacent_room_id = (
+                connection_row["to_room_id"]
+                if connection_row["from_room_id"] == room_id
+                else connection_row["from_room_id"]
+            )
+            connection.execute(
+                """
+                INSERT INTO character_room_knowledge (
+                    character_id, room_id, state, source
+                ) VALUES (?, ?, 'known', 'discovered')
+                ON CONFLICT(character_id, room_id) DO NOTHING
+                """,
+                (character_id, adjacent_room_id),
+            )
+
+    @staticmethod
+    def _to_knowledge(
+        row: sqlite3.Row, connection_ids: tuple[str, ...]
+    ) -> CharacterRoomKnowledge:
+        def parsed(value: str | None) -> datetime | None:
+            return datetime.fromisoformat(value) if value else None
+
+        return CharacterRoomKnowledge(
+            row["character_id"],
+            row["room_id"],
+            KnowledgeState(row["state"]),
+            KnowledgeSource(row["source"]),
+            connection_ids,
+            parsed(row["first_visited_at"]),
+            parsed(row["last_visited_at"]),
+            row["last_seen_scene_id"],
+            row["shared_by_character_id"],
+        )
 
     @staticmethod
     def _require_item(connection: sqlite3.Connection, item_id: str) -> Item:
@@ -1703,6 +2977,9 @@ class Database:
 
     @classmethod
     def _to_room(cls, connection: sqlite3.Connection, row: sqlite3.Row) -> Room:
+        position = connection.execute(
+            "SELECT x, y FROM room_editor_metadata WHERE room_id = ?", (row["id"],)
+        ).fetchone()
         exits = tuple(
             Exit(exit_row["name"], exit_row["destination_room_id"])
             for exit_row in connection.execute(
@@ -1761,7 +3038,15 @@ class Database:
         )
         return Room(
             row["id"], row["area_id"], row["name"], row["description"],
-            exits, entities, characters, loose_items
+            exits, entities, characters, loose_items,
+            row["floor_id"],
+            position["x"] if position else 0.0,
+            position["y"] if position else 0.0,
+            row["width"],
+            row["height"],
+            row["scene_image_path"],
+            row["scene_image_url"],
+            row["scene_prompt"],
         )
 
     @contextmanager

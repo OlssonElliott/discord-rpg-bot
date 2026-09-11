@@ -33,10 +33,15 @@ copy the environment file with `cp .env.example .env`.
 4. Open **Installation**, make sure **Guild Install** is enabled under Installation
    Contexts, and choose **Discord Provided Link**. Under the Guild Install default
    settings, include the `bot` and `applications.commands` scopes. The only bot
-   permissions needed are **Send Messages**, **Embed Links**, **Connect**, and
-   **Speak**. The voice permissions allow the optional dice sounds. The older
-   portal UI exposes the equivalent settings under **OAuth2 > URL Generator**.
+   permissions needed are **Manage Channels**, **View Channels**, **Send Messages**,
+   **Embed Links**, **Attach Files**, **Read Message History**, **Connect**, and
+   **Speak**. Manage Channels lets `/map` create its private read-only HUD channel;
+   the voice permissions allow the optional dice sounds. The older portal UI
+   exposes the equivalent settings under **OAuth2 > URL Generator**.
 5. Use the generated install link, choose your server, and authorize the bot.
+   Changing the portal defaults later does not update an existing server install;
+   reauthorize the bot or update its server role once. On startup, Rollkeeper logs
+   missing permissions and a reauthorization link with the correct permission set.
 6. In Discord, enable **Developer Mode** under **User Settings > Advanced**,
    right-click the server, and select **Copy Server ID**. Put it in `.env` as
    `DISCORD_GUILD_ID`. This is recommended during development because guild
@@ -57,60 +62,74 @@ Create a role named exactly `DM` in **Server Settings > Roles**, then assign it 
 each Dungeon Master. To use another name, change `DM_ROLE_NAME` in `.env`. Role
 matching is case-sensitive.
 
-## Run the bot
+## Run the game
 
-With the virtual environment active:
+After installing both Python and dashboard dependencies, start the complete local
+development setup from the repository root:
 
 ```powershell
-python -m rpg_bot
+npm --prefix dashboard install
+npm run dev
 ```
 
+This one command starts the Discord bot, dashboard API, and web dashboard in the
+same terminal, then opens `http://localhost:3000`. Stop all processes with Ctrl+C.
 The console logs successful login and command synchronization. With
 `DISCORD_GUILD_ID` configured, commands are copied and synchronized to that server
 at startup. Without it, commands are registered globally; Discord may take up to
 about an hour to show global command changes.
 
-Stop the process with Ctrl+C. Character data is stored in `rpg_bot.db` by default
-and survives restarts. The database and `.env` are ignored by Git.
+Character data is stored in `rpg_bot.db` by default and survives restarts. The
+database and `.env` are ignored by Git.
 
 ## Run the DM location editor
 
 The local dashboard uses the same SQLite database and deterministic world service
-as Discord. Start its API from the repository root:
+as Discord and is included in `npm run dev`. Create or select an Area, add locations,
+drag them into place, and connect them by dragging from one node handle to another.
+Create reusable item types once in **Item library**; rooms can only receive items
+selected from that shared catalog, so anything taken with `/take` appears in the
+same interactive `/inventory`. Node positions are editor-only metadata; arrows are
+persisted directional gameplay exits. The API binds to localhost and is intended
+for the DM's local machine.
 
-```powershell
-python -m rpg_bot.dashboard_server --database rpg_bot.db
-```
+### Player-specific dungeon views
 
-In a second terminal, start the React dashboard:
-
-```powershell
-Set-Location dashboard
-npm install
-npm run dev
-```
-
-Open `http://localhost:3000`. Create or select an Area, add locations, drag them
-into place, and connect them by dragging from one node handle to another. Node
-positions are editor-only metadata; arrows are persisted directional gameplay
-exits. The API binds to localhost and is intended for the DM's local machine.
+Areas are also the persisted dungeon boundary and receive a default floor; more
+floors can be added through `WorldService.create_floor`. Character placement and
+movement record visited-room knowledge and discover visible adjoining rooms. Use
+`PlayerViewService.build_player_map(character_id, floor_id)` to obtain a filtered
+map containing only that character's known rooms and connections. A `KNOWN` room
+has an uncertain display label and never exposes its description or scene image;
+`VISITED` rooms may expose their persistent scene asset. Perception modifiers run
+after knowledge filtering, and `PlayerViewMessageService` provides the adapter
+boundary for editing or recreating one bot-owned Discord HUD message. Players use
+`/map` from the server to create or reopen that private read-only channel. Moving
+through `/move` refreshes an existing HUD automatically.
 
 ## Commands
 
 Player commands:
 
+- `/map` — create or reopen the active character's private, read-only dungeon HUD.
+  Use its floor and room selectors to inspect known locations without moving.
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
-- `/character sheet` — privately open the active character's full sheet, including
-  attribute scores and roll modifiers; use **Publish here** to create or update the
-  character's persistent sheet in whichever channel the command was used.
+  Switching characters retargets the player's existing map and character-sheet
+  channels, renames them, and refreshes both persistent messages automatically.
+  Choosing **Unequip active** deletes both private channels so they also disappear
+  for administrators; selecting or creating a character recreates them automatically.
+- `/character sheet` — create or reopen the active character's private, read-only
+  sheet channel. Its single persistent message includes equipment, portrait,
+  the full inventory immediately, plus Manage inventory and Refresh controls.
 - `/character portrait [image] [remove]` — view the active portrait, attach a file
   to replace it, or use `remove: True` to remove it directly. A DM with no active
   character manages their personal Dungeon Master portrait instead.
 - `/character removeportrait` — remove the active character's portrait.
 - `/character cancel` — discard the active creation session.
-- `/inventory` — privately open the active character's bag, equipment, nested
-  containers, item details, and inventory actions.
+- `/inventory` — privately open the active character's equipment, flat inventory,
+  item details, and inventory actions. An open view refreshes after taking or
+  dropping an item.
 - `/roll expression [mode]` — accepts forms such as `d20`, `1d20+4`, and
   `2d6-3`; mode can be Normal, Advantage, or Disadvantage.
 - `/dicecolor [color]` — view or set a personal six-digit hex dice color.
@@ -145,13 +164,29 @@ incomplete creation sessions are held in memory and need to be restarted after a
 restart.
 
 Inventory ownership and equipment are stored in SQLite, while reusable item
-templates live in `assets/items/items.json`. Item weight and regular inventory
-storage are separate measurements: equipped items still count toward carried
-weight but do not occupy regular storage. Consumables of the same type and location
-stack by quantity. Containers may contain other containers; their own weight and
-all nested contents recursively count against the parent container's capacity and
-the character's carried weight. Cycle checks prevent a container from being placed
-inside itself. The private character sheet links directly to the same inventory UI.
+templates are managed through the dashboard's **Item library** and persisted in
+`assets/items/items.json`. Item weight and inventory slots are separate
+measurements: equipped items still count toward carried weight but do not occupy
+slots. Characters start with four slots, while carried-weight capacity equals
+Strength (or 10 for legacy characters without Strength). A loose backpack is an
+ordinary inventory item; equipping it adds its capacity to the character's slot
+limit. Each item template has a `slot_cost`; weightless readable items default to
+zero slots, so notes need no space while books can still use a slot. Inventory is
+intentionally flat, and older nested contents are moved to that flat inventory
+automatically at startup.
+Every character starts with weightless **Common Clothing** in a separate clothing
+slot beneath armor. Removing armor leaves the clothing equipped; removing the
+clothing itself shows the character as **Nude** until clothing is equipped again.
+Consumables of the same type stack by quantity. The private character sheet links
+directly to the same inventory UI. Readable items keep their written `content`
+separate from their physical description. **Read** opens that text
+in a separate full-width panel below the inventory, with lossless pagination for
+longer books, letters, notes, journals, and other documents. While reading, the
+same button becomes **Close reading**; **Use** remains reserved for consumables.
+Character wallets store copper, silver, and gold independently from item slots.
+The first 50 coins across all denominations are weightless, and every started
+group of 50 coins after that adds one carried-weight unit. DMs can add money with
+`/givecoins`; the private inventory shows both the wallet and coin weight.
 
 Character portraits accept PNG, JPEG, and WebP files up to 5 MB. They are safely
 cropped to a 256×256 WebP, stripped of uploaded metadata, and stored below
@@ -355,6 +390,10 @@ rpg_bot/commands/inventory.py   private interactive inventory browser
 rpg_bot/character_creation/     UI-independent rules, state machine, and persistence service
 rpg_bot/world.py                area, room, entity, inventory, and graph domain types
 rpg_bot/world_service.py        deterministic world and editor application service
+rpg_bot/dungeon.py              dungeon knowledge, floor, connection, and view types
+rpg_bot/player_view_service.py  filtered player maps and persistent HUD message lifecycle
+rpg_bot/map_renderer.py         filtered dungeon-map PNG renderer
+rpg_bot/discord_player_view.py  private Discord channel, embeds, and map controls
 assets/items/items.json         reusable item template catalog
 rpg_bot/dashboard_api.py        framework-neutral DM dashboard JSON API
 rpg_bot/dashboard_server.py     localhost API server for the React dashboard

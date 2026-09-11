@@ -14,6 +14,18 @@ from .database import Database
 LOGGER = logging.getLogger(__name__)
 
 
+REQUIRED_BOT_PERMISSIONS = discord.Permissions(
+    manage_channels=True,
+    view_channel=True,
+    send_messages=True,
+    embed_links=True,
+    attach_files=True,
+    read_message_history=True,
+    connect=True,
+    speak=True,
+)
+
+
 class RPGBot(commands.Bot):
     def __init__(self, config: Config, database: Database) -> None:
         intents = discord.Intents.default()
@@ -40,6 +52,27 @@ class RPGBot(commands.Bot):
     async def on_ready(self) -> None:
         if self.user is not None:
             LOGGER.info("Logged in as %s (ID: %s)", self.user, self.user.id)
+            for guild in self.guilds:
+                member = guild.me
+                if member is None:
+                    continue
+                missing = [
+                    name.replace("_", " ").title()
+                    for name, required in REQUIRED_BOT_PERMISSIONS
+                    if required and not getattr(member.guild_permissions, name)
+                ]
+                if missing:
+                    install_url = discord.utils.oauth_url(
+                        self.user.id,
+                        permissions=REQUIRED_BOT_PERMISSIONS,
+                        scopes=("bot", "applications.commands"),
+                    )
+                    LOGGER.warning(
+                        "Bot is missing permissions in %s: %s. Reauthorize with: %s",
+                        guild.name,
+                        ", ".join(missing),
+                        install_url,
+                    )
 
 
 def configure_error_handling(bot: RPGBot) -> None:

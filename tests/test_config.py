@@ -4,9 +4,24 @@ from unittest.mock import patch
 
 from rpg_bot.config import Config
 from rpg_bot.dice_assets import InvalidDiceThemeError
+from rpg_bot.__main__ import REQUIRED_BOT_PERMISSIONS
 
 
 class ConfigTests(unittest.TestCase):
+    def test_required_bot_permissions_cover_private_map_and_dice_audio(self) -> None:
+        for permission in (
+            "manage_channels",
+            "view_channel",
+            "send_messages",
+            "embed_links",
+            "attach_files",
+            "read_message_history",
+            "connect",
+            "speak",
+        ):
+            with self.subTest(permission=permission):
+                self.assertTrue(getattr(REQUIRED_BOT_PERMISSIONS, permission))
+
     def test_dice_theme_defaults_to_classic_and_normalizes(self) -> None:
         with patch("rpg_bot.config.load_dotenv"), patch.dict(
             os.environ, {"DISCORD_TOKEN": "token"}, clear=True

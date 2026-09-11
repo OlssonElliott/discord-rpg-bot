@@ -13,6 +13,29 @@ export type CharacterSummary = {
   is_active: boolean;
 };
 
+export type CatalogItem = {
+  id: string;
+  item_type: 'weapon' | 'armor' | 'clothing' | 'container' | 'consumable' | 'readable' | 'misc';
+  name: string;
+  rarity: string;
+  value: number;
+  description: string;
+  weight: number;
+  slot_cost: number;
+  stackable: boolean;
+  content: string | null;
+  grip?: string;
+  durability?: number;
+  damage?: number;
+  damage_type?: string;
+  protection?: number;
+  dodge_penalty?: number;
+  strength_requirement?: number | null;
+  capacity?: number;
+  can_equip?: boolean;
+  affected_amount?: number;
+};
+
 export type RoomData = {
   id: string;
   area_id: string;
@@ -28,9 +51,13 @@ export type RoomData = {
 };
 
 export type ConnectionData = {
+  connection_id: string | null;
   source_room_id: string;
   exit_name: string;
   destination_room_id: string;
+  return_exit_name: string | null;
+  bidirectional: boolean;
+  hidden: boolean;
 };
 
 export type AreaGraphData = {

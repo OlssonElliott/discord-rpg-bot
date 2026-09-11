@@ -1,0 +1,7 @@
+{
+  "name": "discord-rpg-bot",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix dashboard run dev"
+  }
+}

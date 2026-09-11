@@ -56,6 +56,7 @@ import {
   identifier,
   type AreaGraphData,
   type AreaSummary,
+  type CatalogItem,
   type CharacterSummary,
   type ConnectionData,
   type RoomData,
@@ -93,7 +94,7 @@ function graphNodes(graph: AreaGraphData): Node<RoomNodeData>[] {
 }
 
 function edgeId(connection: ConnectionData): string {
-  return `${connection.source_room_id}::${connection.exit_name}`;
+  return connection.connection_id || `${connection.source_room_id}::${connection.exit_name}`;
 }
 
 function graphEdges(graph: AreaGraphData): Edge[] {
@@ -101,7 +102,10 @@ function graphEdges(graph: AreaGraphData): Edge[] {
     id: edgeId(connection),
     source: connection.source_room_id,
     target: connection.destination_room_id,
-    label: connection.exit_name,
+    label: connection.bidirectional && connection.return_exit_name
+      ? `${connection.exit_name} ↔ ${connection.return_exit_name}`
+      : connection.exit_name,
+    markerStart: connection.bidirectional ? { type: MarkerType.ArrowClosed } : undefined,
     markerEnd: { type: MarkerType.ArrowClosed },
   }));
 }
@@ -109,6 +113,7 @@ function graphEdges(graph: AreaGraphData): Edge[] {
 export function DungeonEditor() {
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [areaId, setAreaId] = useState('');
   const [graph, setGraph] = useState<AreaGraphData | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RoomNodeData>>([]);
@@ -123,6 +128,7 @@ export function DungeonEditor() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [contentKind, setContentKind] = useState<ContentKind | null>(null);
+  const [itemLibraryOpen, setItemLibraryOpen] = useState(false);
 
   const selectedRoom = useMemo(
     () => graph?.nodes.find((room) => room.id === selectedRoomId) ?? null,
@@ -176,20 +182,71 @@ export function DungeonEditor() {
     }
   }, []);
 
+  const loadCatalogItems = useCallback(async () => {
+    try {
+      setCatalogItems(await api<CatalogItem[]>('/items'));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load items.');
+    }
+  }, []);
+
   useEffect(() => {
     queueMicrotask(() => {
       void loadAreas();
       void loadCharacters();
+      void loadCatalogItems();
     });
-  }, [loadAreas, loadCharacters]);
+  }, [loadAreas, loadCatalogItems, loadCharacters]);
   useEffect(() => {
     if (areaId) queueMicrotask(() => void loadGraph(areaId));
   }, [areaId, loadGraph]);
 
+  useEffect(() => {
+    if (!areaId) return;
+    let cancelled = false;
+    let refreshing = false;
+
+    const refreshLiveState = async () => {
+      if (refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      try {
+        const [nextGraph, nextCharacters] = await Promise.all([
+          api<AreaGraphData>(`/areas/${areaId}/graph`),
+          api<CharacterSummary[]>('/characters'),
+        ]);
+        if (cancelled) return;
+        setGraph(nextGraph);
+        setCharacters(nextCharacters);
+        const liveRooms = new globalThis.Map(
+          nextGraph.nodes.map((room) => [room.id, room]),
+        );
+        setNodes((current) => current.map((node) => {
+          const liveRoom = liveRooms.get(node.id);
+          return liveRoom ? { ...node, data: liveRoom } : node;
+        }));
+      } catch {
+        // Initial/manual loads surface errors; background synchronization stays quiet.
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const interval = window.setInterval(() => void refreshLiveState(), 2000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshLiveState();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [areaId, setNodes]);
+
   const mutate = useCallback(async (action: () => Promise<unknown>, message: string) => {
     try {
       await action();
-      await Promise.all([loadGraph(areaId), loadAreas(areaId), loadCharacters()]);
+      await Promise.all([loadGraph(areaId), loadAreas(areaId), loadCharacters(), loadCatalogItems()]);
       setNotice(message);
       setError('');
       window.setTimeout(() => setNotice(''), 1800);
@@ -198,7 +255,7 @@ export function DungeonEditor() {
       setError(requestError instanceof Error ? requestError.message : 'The change was rejected.');
       return false;
     }
-  }, [areaId, loadAreas, loadCharacters, loadGraph]);
+  }, [areaId, loadAreas, loadCatalogItems, loadCharacters, loadGraph]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -241,13 +298,15 @@ export function DungeonEditor() {
     register({
       name: 'connect_locations',
       title: 'Connect locations',
-      description: 'Create a directional gameplay exit between two rooms in the selected area.',
+      description: 'Connect two rooms with a two-way passage by default.',
       inputSchema: {
         type: 'object',
         properties: {
           source_room_id: { type: 'string', minLength: 1 },
           destination_room_id: { type: 'string', minLength: 1 },
           exit_name: { type: 'string', minLength: 1 },
+          return_exit_name: { type: 'string', minLength: 1 },
+          bidirectional: { type: 'boolean', default: true },
         },
         required: ['source_room_id', 'destination_room_id', 'exit_name'],
         additionalProperties: false,
@@ -261,12 +320,19 @@ export function DungeonEditor() {
             throw new Error(`${field} is required.`);
           }
         }
+        const payload = {
+          ...values,
+          bidirectional: typeof values.bidirectional === 'boolean' ? values.bidirectional : true,
+          return_exit_name: typeof values.return_exit_name === 'string'
+            ? values.return_exit_name
+            : values.exit_name,
+        };
         const ok = await mutate(
-          () => api('/connections', { method: 'POST', body: JSON.stringify(values) }),
+          () => api('/connections', { method: 'POST', body: JSON.stringify(payload) }),
           'Connection created',
         );
         if (!ok) throw new Error('The backend rejected the connection.');
-        return values;
+        return payload;
       },
     });
     return () => lifecycle.abort();
@@ -320,6 +386,9 @@ export function DungeonEditor() {
         </NativeSelect>
         <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
           <Plus /> Area
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
+          <Box /> Item library
         </Button>
         <div className="header-status"><span /> {notice || 'Saved'}</div>
         <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
@@ -387,8 +456,21 @@ export function DungeonEditor() {
             />
           ) : selectedConnection ? (
             <ConnectionInspector
+              key={`${edgeId(selectedConnection)}:${selectedConnection.bidirectional}:${selectedConnection.return_exit_name || ''}`}
               connection={selectedConnection}
               rooms={graph?.nodes ?? []}
+              onSave={(bidirectional, returnExitName) => mutate(
+                () => api('/connections', {
+                  method: 'PATCH',
+                  body: JSON.stringify({
+                    source_room_id: selectedConnection.source_room_id,
+                    exit_name: selectedConnection.exit_name,
+                    bidirectional,
+                    return_exit_name: bidirectional ? returnExitName : null,
+                  }),
+                }),
+                'Connection updated',
+              )}
               onRemove={() => void mutate(
                 () => api('/connections', { method: 'DELETE', body: JSON.stringify({ source_room_id: selectedConnection.source_room_id, exit_name: selectedConnection.exit_name }) }),
                 'Connection removed',
@@ -419,19 +501,19 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
-      <ConnectionDialog connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName) => {
+      <ConnectionDialog connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
-          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName }) }),
+          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
           'Connection created',
         );
         if (ok) setConnection(null);
       }} />
-      <ContentDialog kind={contentKind} onOpenChange={(open) => { if (!open) setContentKind(null); }} onCreate={async (name, quantity) => {
+      <ContentDialog kind={contentKind} catalogItems={catalogItems} onOpenChange={(open) => { if (!open) setContentKind(null); }} onCreate={async (name, quantity) => {
         if (!selectedRoom || !contentKind) return;
         const path = contentKind === 'item' ? 'items' : 'entities';
         const payload = contentKind === 'item'
-          ? { id: identifier(name), name, quantity }
+          ? { item_id: name, quantity }
           : { id: identifier(name), name, kind: contentKind };
         const ok = await mutate(
           () => api(`/rooms/${selectedRoom.id}/${path}`, { method: 'POST', body: JSON.stringify(payload) }),
@@ -439,6 +521,21 @@ export function DungeonEditor() {
         );
         if (ok) setContentKind(null);
       }} />
+      <ItemLibraryDialog
+        open={itemLibraryOpen}
+        items={catalogItems}
+        onOpenChange={setItemLibraryOpen}
+        onSave={async (record, itemId) => {
+          const ok = await mutate(
+            () => api(itemId ? `/items/${itemId}` : '/items', {
+              method: itemId ? 'PUT' : 'POST',
+              body: JSON.stringify(itemId ? record : { ...record, id: identifier(record.name) }),
+            }),
+            `${record.name} ${itemId ? 'updated' : 'created'}`,
+          );
+          if (ok) setItemLibraryOpen(false);
+        }}
+      />
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -552,14 +649,23 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onAddCont
   );
 }
 
-function ConnectionInspector({ connection, rooms, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onRemove: () => void }) {
+function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onSave: (bidirectional: boolean, returnExitName: string) => Promise<boolean>; onRemove: () => void }) {
   const roomName = (id: string) => rooms.find((room) => room.id === id)?.name || id;
+  const [bidirectional, setBidirectional] = useState(connection.bidirectional);
+  const [returnExitName, setReturnExitName] = useState(connection.return_exit_name || connection.exit_name);
   return (
     <>
-      <div className="inspector__topline"><span>Selected connection</span><Badge>One-way</Badge></div>
+      <div className="inspector__topline"><span>Selected connection</span><Badge>{connection.bidirectional ? 'Two-way' : 'One-way'}</Badge></div>
       <h2>{connection.exit_name}</h2>
-      <div className="route-card"><strong>{roomName(connection.source_room_id)}</strong><span>→</span><strong>{roomName(connection.destination_room_id)}</strong></div>
-      <p className="inspector-note">This arrow is a gameplay exit. Removing it immediately changes movement rules.</p>
+      <div className="route-card"><strong>{roomName(connection.source_room_id)}</strong><span>{connection.bidirectional ? '↔' : '→'}</span><strong>{roomName(connection.destination_room_id)}</strong></div>
+      <label className="dialog-label" htmlFor="connection-direction">Direction</label>
+      <NativeSelect id="connection-direction" value={bidirectional ? 'two-way' : 'one-way'} onChange={(event) => setBidirectional(event.target.value === 'two-way')}>
+        <NativeSelectOption value="two-way">Two-way passage</NativeSelectOption>
+        <NativeSelectOption value="one-way">One-way passage</NativeSelectOption>
+      </NativeSelect>
+      {bidirectional && <><label className="dialog-label" htmlFor="return-exit-name">Return exit name</label><Input id="return-exit-name" value={returnExitName} onChange={(event) => setReturnExitName(event.target.value)} /></>}
+      <p className="inspector-note">Movement rules update immediately when this passage is saved.</p>
+      <Button disabled={bidirectional && !returnExitName.trim()} onClick={() => void onSave(bidirectional, returnExitName)}><Save /> Save direction</Button>
       <Button variant="destructive" onClick={onRemove}><Trash2 /> Remove connection</Button>
     </>
   );
@@ -593,31 +699,140 @@ function EditorDialog({ open, onOpenChange, title, description, name, setName, d
   );
 }
 
-function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string) => Promise<void> }) {
+function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, bidirectional: boolean, returnName: string) => Promise<void> }) {
   const [name, setName] = useState('passage');
+  const [bidirectional, setBidirectional] = useState(true);
+  const [returnName, setReturnName] = useState('passage');
   return (
     <Dialog open={Boolean(connection)} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Name this exit</DialogTitle><DialogDescription>The arrow remains directional and is saved as a real gameplay connection.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Create passage</DialogTitle><DialogDescription>Passages work in both directions by default. Choose one-way only when the return path should be blocked.</DialogDescription></DialogHeader>
         <label className="dialog-label" htmlFor="connection-name">Exit name</label>
-        <Input id="connection-name" value={name} onChange={(event) => setName(event.target.value)} />
-        <DialogFooter><Button disabled={!name.trim()} onClick={() => void onCreate(name)}>Create connection</Button></DialogFooter>
+        <Input id="connection-name" value={name} onChange={(event) => { const next = event.target.value; setReturnName((current) => current === name ? next : current); setName(next); }} />
+        <label className="dialog-label" htmlFor="new-connection-direction">Direction</label>
+        <NativeSelect id="new-connection-direction" value={bidirectional ? 'two-way' : 'one-way'} onChange={(event) => setBidirectional(event.target.value === 'two-way')}>
+          <NativeSelectOption value="two-way">Two-way passage</NativeSelectOption>
+          <NativeSelectOption value="one-way">One-way passage</NativeSelectOption>
+        </NativeSelect>
+        {bidirectional && <><label className="dialog-label" htmlFor="new-return-exit-name">Return exit name</label><Input id="new-return-exit-name" value={returnName} onChange={(event) => setReturnName(event.target.value)} /></>}
+        <DialogFooter><Button disabled={!name.trim() || (bidirectional && !returnName.trim())} onClick={() => void onCreate(name, bidirectional, returnName)}>Create connection</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function ContentDialog({ kind, onOpenChange, onCreate }: { kind: ContentKind | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, quantity: number) => Promise<void> }) {
+function ContentDialog({ kind, catalogItems, onOpenChange, onCreate }: { kind: ContentKind | null; catalogItems: CatalogItem[]; onOpenChange: (open: boolean) => void; onCreate: (name: string, quantity: number) => Promise<void> }) {
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState(1);
   return (
     <Dialog open={Boolean(kind)} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Add {kind}</DialogTitle><DialogDescription>This creates a persisted world object in the selected location.</DialogDescription></DialogHeader>
-        <label className="dialog-label" htmlFor="content-name">Name</label>
-        <Input id="content-name" value={name} onChange={(event) => setName(event.target.value)} />
+        <DialogHeader><DialogTitle>Add {kind}</DialogTitle><DialogDescription>{kind === 'item' ? 'Choose an existing item from the shared library.' : 'This creates a persisted world object in the selected location.'}</DialogDescription></DialogHeader>
+        <label className="dialog-label" htmlFor="content-name">{kind === 'item' ? 'Item' : 'Name'}</label>
+        {kind === 'item' ? (
+          <NativeSelect id="content-name" value={name} onChange={(event) => setName(event.target.value)}>
+            <NativeSelectOption value="">Choose an item…</NativeSelectOption>
+            {catalogItems.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.name} · {item.item_type}</NativeSelectOption>)}
+          </NativeSelect>
+        ) : <Input id="content-name" value={name} onChange={(event) => setName(event.target.value)} />}
         {kind === 'item' && <><label className="dialog-label" htmlFor="content-quantity">Quantity</label><Input id="content-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></>}
         <DialogFooter><Button disabled={!name.trim() || quantity < 1} onClick={() => void onCreate(name, quantity)}>Add {kind}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type ItemDraft = {
+  name: string;
+  item_type: CatalogItem['item_type'];
+  description: string;
+  rarity: string;
+  value: number;
+  weight: number;
+  slot_cost: number;
+  grip?: string;
+  durability?: number;
+  damage?: number;
+  damage_type?: string;
+  protection?: number;
+  dodge_penalty?: number;
+  strength_requirement?: number;
+  capacity?: number;
+  can_equip?: boolean;
+  affected_amount?: number;
+  content?: string;
+};
+
+function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open: boolean; items: CatalogItem[]; onOpenChange: (open: boolean) => void; onSave: (record: ItemDraft, itemId?: string) => Promise<void> }) {
+  const [editingId, setEditingId] = useState<string | undefined>();
+  const [name, setName] = useState('');
+  const [itemType, setItemType] = useState<CatalogItem['item_type']>('misc');
+  const [description, setDescription] = useState('');
+  const [rarity, setRarity] = useState('Common');
+  const [value, setValue] = useState(0);
+  const [weight, setWeight] = useState(0);
+  const [slotCost, setSlotCost] = useState(1);
+  const [power, setPower] = useState(1);
+  const [damageType, setDamageType] = useState('physical');
+  const [grip, setGrip] = useState('one_handed');
+  const [canEquip, setCanEquip] = useState(false);
+  const [readableContent, setReadableContent] = useState('');
+
+  const editingItem = items.find((item) => item.id === editingId);
+  const record: ItemDraft = { name, item_type: itemType, description, rarity, value, weight, slot_cost: slotCost };
+  if (itemType === 'weapon') Object.assign(record, { grip, durability: editingItem?.durability ?? 40, damage: power, damage_type: damageType });
+  if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: editingItem?.dodge_penalty ?? 0, strength_requirement: editingItem?.strength_requirement ?? 0 });
+  if (itemType === 'container') Object.assign(record, { capacity: power, can_equip: canEquip });
+  if (itemType === 'consumable') Object.assign(record, { affected_amount: power });
+  if (itemType === 'readable') Object.assign(record, { content: readableContent });
+
+  const editItem = (item?: CatalogItem) => {
+    setEditingId(item?.id);
+    setName(item?.name ?? '');
+    setItemType(item?.item_type ?? 'misc');
+    setDescription(item?.description ?? '');
+    setRarity(item?.rarity ?? 'Common');
+    setValue(item?.value ?? 0);
+    setWeight(item?.weight ?? 0);
+    setSlotCost(item?.slot_cost ?? (item?.item_type === 'readable' && item.weight === 0 ? 0 : 1));
+    setReadableContent(item?.content ?? '');
+    setGrip(item?.grip ?? 'one_handed');
+    setDamageType(item?.damage_type ?? 'physical');
+    setCanEquip(item?.can_equip ?? false);
+    setPower(
+      item?.damage
+      ?? item?.protection
+      ?? item?.capacity
+      ?? item?.affected_amount
+      ?? 1
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Item library</DialogTitle><DialogDescription>Create and edit item types here. Rooms and containers can only use entries from this shared library.</DialogDescription></DialogHeader>
+        <div className="catalog-heading"><div className="catalog-count">{items.length} item types available</div><button type="button" onClick={() => editItem()}>New item</button></div>
+        <div className="catalog-list" aria-label="Existing item types">
+          {items.map((item) => (
+            <button type="button" className={editingId === item.id ? 'selected' : ''} key={item.id} onClick={() => editItem(item)}><span>{item.name}</span><Badge variant="outline">{item.item_type}</Badge></button>
+          ))}
+        </div>
+        <div className="catalog-grid">
+          <label className="dialog-label" htmlFor="item-name">Name<Input id="item-name" value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} disabled={Boolean(editingId)} onChange={(event) => { const nextType = event.target.value as CatalogItem['item_type']; setItemType(nextType); if (nextType === 'readable' && weight === 0) setSlotCost(0); }}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption><NativeSelectOption value="readable">Readable</NativeSelectOption></NativeSelect></label>
+          <label className="dialog-label" htmlFor="item-rarity">Rarity<Input id="item-rarity" value={rarity} onChange={(event) => setRarity(event.target.value)} /></label>
+          <label className="dialog-label" htmlFor="item-value">Value<Input id="item-value" type="number" min={0} value={value} onChange={(event) => setValue(Number(event.target.value))} /></label>
+          <label className="dialog-label" htmlFor="item-weight">Weight<Input id="item-weight" type="number" min={0} value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
+          <label className="dialog-label" htmlFor="item-slots">Storage slots<Input id="item-slots" type="number" min={0} value={slotCost} onChange={(event) => setSlotCost(Number(event.target.value))} /></label>
+          {!['misc', 'clothing', 'readable'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
+          {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
+          {itemType === 'container' && <label className="catalog-check"><input type="checkbox" checked={canEquip} onChange={(event) => setCanEquip(event.target.checked)} /> Can be equipped</label>}
+        </div>
+        <label className="dialog-label" htmlFor="item-description">Description</label>
+        <Textarea id="item-description" value={description} onChange={(event) => setDescription(event.target.value)} />
+        {itemType === 'readable' && <label className="dialog-label" htmlFor="item-readable-content">Readable content<Textarea className="readable-content-input" id="item-readable-content" value={readableContent} onChange={(event) => setReadableContent(event.target.value)} /></label>}
+        <DialogFooter><Button disabled={!name.trim() || !rarity.trim() || value < 0 || weight < 0 || slotCost < 0 || power < 1} onClick={() => void onSave(record, editingId)}>{editingId ? 'Save item type' : 'Create item type'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

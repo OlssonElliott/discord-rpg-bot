@@ -83,6 +83,14 @@ class Room:
     entities: tuple[WorldEntity, ...] = ()
     characters: tuple[Character, ...] = ()
     loose_items: tuple[ItemStack, ...] = ()
+    floor_id: str | None = None
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 1.0
+    height: float = 1.0
+    scene_image_path: str | None = None
+    scene_image_url: str | None = None
+    scene_prompt: str | None = None
 
     @property
     def enemies(self) -> tuple[WorldEntity, ...]:
@@ -113,6 +121,10 @@ class GraphConnection:
     source_room_id: str
     exit_name: str
     destination_room_id: str
+    connection_id: str | None = None
+    return_exit_name: str | None = None
+    bidirectional: bool = False
+    hidden: bool = False
 
 
 @dataclass(frozen=True, slots=True)

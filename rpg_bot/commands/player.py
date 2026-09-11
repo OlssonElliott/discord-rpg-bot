@@ -503,12 +503,13 @@ class PlayerCommands(commands.Cog):
             )
             return
         embed = character_status_embed(character)
-        portrait_path = self.portrait_store.path_for(character.portrait_key)
+        portrait_path = apply_character_identity(
+            embed, character, self.portrait_store
+        )
         if portrait_path is None:
             await interaction.response.send_message(embed=embed)
             return
         filename = portrait_attachment_name(portrait_path)
-        embed.set_thumbnail(url=f"attachment://{filename}")
         portrait_file = discord.File(
             portrait_path, filename=filename
         )

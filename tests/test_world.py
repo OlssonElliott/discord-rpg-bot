@@ -79,38 +79,74 @@ class WorldServiceTests(unittest.TestCase):
 
     def test_takes_and_drops_loose_stacked_items_without_duplication(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)
-        self.world.create_item("copper", "Copper Coin")
+        self.world.create_item("health_potion", "Health Potion")
         room_holder = InventoryHolder.room(self.entrance.id)
-        player_holder = InventoryHolder.character(self.character_id)
-        self.world.place_item(room_holder, "copper", 3)
+        self.world.place_item(room_holder, "health_potion", 3)
 
-        moved = self.world.take_loose_item(self.character_id, "copper", 2)
+        moved = self.world.take_loose_item(self.character_id, "health_potion", 2)
 
-        self.assertEqual((moved.item.name, moved.quantity), ("Copper Coin", 2))
+        self.assertEqual((moved.item.name, moved.quantity), ("Health Potion", 2))
         self.assertEqual(self.world.inventory(room_holder)[0].quantity, 1)
-        self.assertEqual(self.world.inventory(player_holder)[0].quantity, 2)
+        rich_inventory = self.database.get_character_inventory(self.character_id)
+        potion = next(
+            item for item in rich_inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 2)
 
-        self.world.drop_item(self.character_id, "Copper Coin", 1)
+        self.world.drop_item(self.character_id, "Health Potion", 1)
 
         self.assertEqual(self.world.inventory(room_holder)[0].quantity, 2)
-        self.assertEqual(self.world.inventory(player_holder)[0].quantity, 1)
+        rich_inventory = self.database.get_character_inventory(self.character_id)
+        potion = next(
+            item for item in rich_inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
         self.assertEqual(
             sum(stack.quantity for stack in self.world.inventory(room_holder))
-            + sum(stack.quantity for stack in self.world.inventory(player_holder)),
+            + sum(
+                item.quantity
+                for item in rich_inventory.items
+                if item.template_id != "common_clothing"
+            ),
             3,
         )
 
     def test_item_disappears_from_room_after_full_transfer(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)
-        self.world.create_item("key", "Rusty Key", stackable=False)
-        self.world.place_item(InventoryHolder.room(self.entrance.id), "key")
+        self.world.create_item("rusty_sword", "Rusty Sword", stackable=False)
+        self.world.place_item(InventoryHolder.room(self.entrance.id), "rusty_sword")
 
-        self.world.take_loose_item(self.character_id, "Rusty Key")
+        self.world.take_loose_item(self.character_id, "Rusty Sword")
 
         self.assertEqual(self.world.get_room(self.entrance.id).loose_items, ())
-        inventory = self.world.inventory(InventoryHolder.character(self.character_id))
+        inventory = self.database.get_character_inventory(self.character_id)
         self.assertEqual(
-            [(stack.item.id, stack.quantity) for stack in inventory], [("key", 1)]
+            [
+                (item.template_id, item.quantity)
+                for item in inventory.items
+                if item.template_id != "common_clothing"
+            ],
+            [("rusty_sword", 1)],
+        )
+
+    def test_uncatalogued_item_cannot_enter_character_inventory(self) -> None:
+        self.world.place_character(self.character_id, self.entrance.id)
+        self.world.create_item("old_key", "Unregistered Key", stackable=False)
+        room_holder = InventoryHolder.room(self.entrance.id)
+        self.world.place_item(room_holder, "old_key")
+
+        with self.assertRaisesRegex(InvalidTransferError, "shared item library"):
+            self.world.take_loose_item(self.character_id, "old_key")
+
+        self.assertEqual(self.world.inventory(room_holder)[0].item.id, "old_key")
+        self.assertEqual(
+            [
+                item.template_id
+                for item in self.database.get_character_inventory(
+                    self.character_id
+                ).items
+            ],
+            ["common_clothing"],
         )
 
     def test_catalog_loot_uses_the_interactive_character_inventory(self) -> None:
@@ -125,14 +161,21 @@ class WorldServiceTests(unittest.TestCase):
         self.assertEqual(self.world.get_room(self.entrance.id).loose_items, ())
         inventory = self.database.get_character_inventory(self.character_id)
         self.assertEqual(
-            [(item.template_id, item.quantity) for item in inventory.items],
+            [
+                (item.template_id, item.quantity)
+                for item in inventory.items
+                if item.template_id != "common_clothing"
+            ],
             [("health_potion", 2)],
         )
 
         self.world.drop_item(self.character_id, "Health Potion")
 
         inventory = self.database.get_character_inventory(self.character_id)
-        self.assertEqual(inventory.items[0].quantity, 1)
+        potion = next(
+            item for item in inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
         self.assertEqual(
             [(stack.item.id, stack.quantity) for stack in self.world.get_room(self.entrance.id).loose_items],
             [("health_potion", 1)],
@@ -142,34 +185,38 @@ class WorldServiceTests(unittest.TestCase):
         chest = self.world.create_entity(
             "wooden_chest", self.hall.id, EntityKind.CONTAINER, "Wooden Chest"
         )
-        self.world.create_item("potion", "Healing Potion")
+        self.world.create_item("health_potion", "Health Potion")
         chest_holder = InventoryHolder.entity(chest.id)
-        player_holder = InventoryHolder.character(self.character_id)
-        self.world.place_item(chest_holder, "potion", 2)
+        self.world.place_character(self.character_id, self.hall.id)
+        self.world.place_item(chest_holder, "health_potion", 2)
 
-        self.world.transfer_item(chest_holder, player_holder, "Healing Potion")
+        self.world.take_from_container(self.character_id, chest.id, "Health Potion")
 
         self.assertEqual(self.world.inventory(chest_holder)[0].quantity, 1)
-        self.assertEqual(self.world.inventory(player_holder)[0].quantity, 1)
+        inventory = self.database.get_character_inventory(self.character_id)
+        potion = next(
+            item for item in inventory.items if item.template_id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
         self.assertEqual(self.world.get_room(self.hall.id).containers, (chest,))
 
     def test_player_can_only_take_from_a_container_in_their_room(self) -> None:
         chest = self.world.create_entity(
             "remote_chest", self.hall.id, EntityKind.CONTAINER, "Remote Chest"
         )
-        self.world.create_item("gem", "Gem")
-        self.world.place_item(InventoryHolder.entity(chest.id), "gem")
+        self.world.create_item("iron_dagger", "Iron Dagger", stackable=False)
+        self.world.place_item(InventoryHolder.entity(chest.id), "iron_dagger")
         self.world.place_character(self.character_id, self.entrance.id)
 
         with self.assertRaises(InvalidTransferError):
-            self.world.take_from_container(self.character_id, chest.id, "gem")
+            self.world.take_from_container(self.character_id, chest.id, "iron_dagger")
 
         self.world.move_character(self.character_id, "north")
-        self.world.take_from_container(self.character_id, chest.id, "gem")
+        self.world.take_from_container(self.character_id, chest.id, "iron_dagger")
         self.assertEqual(self.world.inventory(InventoryHolder.entity(chest.id)), ())
-        self.assertEqual(
-            self.world.inventory(InventoryHolder.character(self.character_id))[0].item.id,
-            "gem",
+        inventory = self.database.get_character_inventory(self.character_id)
+        self.assertTrue(
+            any(item.template_id == "iron_dagger" for item in inventory.items)
         )
 
     def test_location_and_room_contents_survive_restart(self) -> None:
@@ -255,7 +302,7 @@ class WorldServiceTests(unittest.TestCase):
                 for connection in graph.connections
             ],
         )
-        self.assertIn(
+        self.assertNotIn(
             (self.hall.id, "south", self.entrance.id),
             [
                 (
@@ -266,6 +313,31 @@ class WorldServiceTests(unittest.TestCase):
                 for connection in graph.connections
             ],
         )
+
+    def test_changes_connection_between_one_way_and_two_way(self) -> None:
+        self.world.set_connection_direction(
+            self.entrance.id, "north", bidirectional=False
+        )
+
+        self.assertEqual(self.world.get_room(self.hall.id).exits, ())
+        connection = self.world.area_graph(self.area.id).connections[0]
+        self.assertFalse(connection.bidirectional)
+        self.assertIsNone(connection.return_exit_name)
+
+        self.world.set_connection_direction(
+            self.entrance.id,
+            "north",
+            bidirectional=True,
+            return_exit_name="back",
+        )
+
+        self.assertEqual(
+            [(exit.name, exit.destination_room_id) for exit in self.world.get_room(self.hall.id).exits],
+            [("back", self.entrance.id)],
+        )
+        connection = self.world.area_graph(self.area.id).connections[0]
+        self.assertTrue(connection.bidirectional)
+        self.assertEqual(connection.return_exit_name, "back")
 
     def test_deleting_empty_room_removes_all_attached_edges(self) -> None:
         self.world.connect_rooms(self.hall.id, "down", self.crypt.id)

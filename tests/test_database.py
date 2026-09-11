@@ -68,6 +68,23 @@ class DatabaseTests(unittest.TestCase):
             reopened.get_character_sheet_message(44, 66, character.character_id)
         )
 
+    def test_dedicated_character_sheet_channel_and_message_persist(self) -> None:
+        character = self.database.create_character(123, "Olof", 22)
+        assert character.character_id is not None
+
+        self.database.bind_character_sheet_channel(
+            character.character_id, guild_id=9, channel_id=70
+        )
+        self.database.set_character_sheet_view_message(character.character_id, 110)
+
+        reopened = Database(self.database_path)
+        reopened.initialize()
+        state = reopened.get_character_sheet_view_state(character.character_id)
+        self.assertEqual(
+            (state.guild_id, state.discord_channel_id, state.discord_message_id),
+            (9, 70, 110),
+        )
+
     def test_invalid_operations_are_rejected(self) -> None:
         self.database.create_character(123, "Olof", 22)
         with self.assertRaises(CharacterAlreadyExistsError):
@@ -99,6 +116,59 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertIsNone(self.database.get_character(123))
         self.assertEqual(len(self.database.list_characters(123)), 2)
+
+    def test_switching_character_transfers_private_channel_ownership(self) -> None:
+        first = self.database.create_character(123, "Olof", 22)
+        second = self.database.create_character(123, "Aria", 12)
+        assert first.character_id is not None
+        assert second.character_id is not None
+        self.database.bind_player_view_channel(second.character_id, 80)
+        self.database.update_player_view_state(
+            second.character_id, discord_message_id=120
+        )
+        self.database.bind_character_sheet_channel(second.character_id, 9, 81)
+        self.database.set_character_sheet_view_message(second.character_id, 121)
+
+        self.database.select_character(123, first.character_id)
+
+        self.assertIsNone(self.database.get_character_sheet_view_state(second.character_id))
+        sheet = self.database.get_character_sheet_view_state(first.character_id)
+        self.assertEqual(
+            (sheet.discord_channel_id, sheet.discord_message_id), (81, 121)
+        )
+        self.assertFalse(
+            any(
+                state.character_id == second.character_id
+                for state in self.database.list_player_view_states()
+            )
+        )
+        player_map = self.database.get_player_view_state(first.character_id)
+        self.assertEqual(
+            (player_map.discord_channel_id, player_map.discord_message_id),
+            (80, 120),
+        )
+
+        self.database.deactivate_character(123)
+        self.database.select_character(123, second.character_id)
+
+        reclaimed_map = self.database.get_player_view_state(second.character_id)
+        reclaimed_sheet = self.database.get_character_sheet_view_state(
+            second.character_id
+        )
+        self.assertEqual(reclaimed_map.discord_channel_id, 80)
+        self.assertEqual(reclaimed_sheet.discord_channel_id, 81)
+
+        third = self.database.create_character(123, "Mira", 18)
+        self.assertEqual(
+            self.database.get_player_view_state(third.character_id).discord_channel_id,
+            80,
+        )
+        self.assertEqual(
+            self.database.get_character_sheet_view_state(
+                third.character_id
+            ).discord_channel_id,
+            81,
+        )
 
     def test_archiving_keeps_data_but_removes_character_from_selection(self) -> None:
         first = self.database.create_character(123, "Olof", 22)

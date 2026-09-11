@@ -13,6 +13,7 @@ from ..database import (
 from ..models import Character, Stance
 from ..inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
 from ..inventory_service import InventoryError, InventoryService
+from .inventory import refresh_open_inventory
 
 
 def result_embed(title: str, character: Character) -> discord.Embed:
@@ -75,6 +76,52 @@ class DMCommands(commands.Cog):
             f"Gave **{template.name}{quantity_text}** to **{character.name}**.",
             ephemeral=True,
         )
+        assert character.character_id is not None
+        await refresh_open_inventory(user.id, character.character_id)
+
+    @app_commands.command(name="givecoins", description="Give coins to a character.")
+    @app_commands.describe(
+        user="Discord user",
+        copper="Copper coins",
+        silver="Silver coins",
+        gold="Gold coins",
+    )
+    @dm_only()
+    async def give_coins(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        copper: app_commands.Range[int, 0, 9999] = 0,
+        silver: app_commands.Range[int, 0, 9999] = 0,
+        gold: app_commands.Range[int, 0, 9999] = 0,
+    ) -> None:
+        character = self.database.get_character(user.id)
+        if character is None:
+            await send_error(
+                interaction,
+                CharacterNotFoundError(
+                    "That Discord user does not have an active character."
+                ),
+            )
+            return
+        try:
+            wallet = self.inventory_service.grant_currency(
+                character,
+                copper=copper,
+                silver=silver,
+                gold=gold,
+            )
+        except InventoryError as error:
+            await send_error(interaction, error)
+            return
+        await interaction.response.send_message(
+            f"Gave coins to **{character.name}**. Wallet: "
+            f"**{wallet.gold} gold • {wallet.silver} silver • "
+            f"{wallet.copper} copper**.",
+            ephemeral=True,
+        )
+        assert character.character_id is not None
+        await refresh_open_inventory(user.id, character.character_id)
 
     @app_commands.command(name="damage", description="Damage a user's character.")
     @app_commands.describe(user="Discord user", amount="Amount of damage")
