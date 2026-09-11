@@ -243,18 +243,49 @@ class DashboardAPI:
             return 201, _stack_data(stack)
 
         if path == "/api/connections" and method == "POST":
+            exit_name = self._text(body, "exit_name")
+            bidirectional = self._boolean(body, "bidirectional", default=True)
+            return_exit_name = (
+                self._optional_text(body, "return_exit_name") or exit_name
+                if bidirectional
+                else None
+            )
             self.world.connect_rooms(
                 self._text(body, "source_room_id"),
-                self._text(body, "exit_name"),
+                exit_name,
                 self._text(body, "destination_room_id"),
+                return_exit_name=return_exit_name,
             )
             return 201, {
                 "source_room_id": body["source_room_id"],
-                "exit_name": body["exit_name"],
+                "exit_name": exit_name,
                 "destination_room_id": body["destination_room_id"],
+                "return_exit_name": return_exit_name,
+                "bidirectional": bidirectional,
+            }
+        if path == "/api/connections" and method == "PATCH":
+            source_room_id = self._text(body, "source_room_id")
+            exit_name = self._text(body, "exit_name")
+            bidirectional = self._boolean(body, "bidirectional", default=True)
+            return_exit_name = (
+                self._optional_text(body, "return_exit_name") or exit_name
+                if bidirectional
+                else None
+            )
+            self.world.set_connection_direction(
+                source_room_id,
+                exit_name,
+                bidirectional=bidirectional,
+                return_exit_name=return_exit_name,
+            )
+            return 200, {
+                "source_room_id": source_room_id,
+                "exit_name": exit_name,
+                "bidirectional": bidirectional,
+                "return_exit_name": return_exit_name,
             }
         if path == "/api/connections" and method == "DELETE":
-            self.world.disconnect_rooms(
+            self.world.disconnect_connection(
                 self._text(body, "source_room_id"), self._text(body, "exit_name")
             )
             return 200, {"deleted": True}

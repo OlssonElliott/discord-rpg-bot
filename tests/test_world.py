@@ -302,7 +302,7 @@ class WorldServiceTests(unittest.TestCase):
                 for connection in graph.connections
             ],
         )
-        self.assertIn(
+        self.assertNotIn(
             (self.hall.id, "south", self.entrance.id),
             [
                 (
@@ -313,6 +313,31 @@ class WorldServiceTests(unittest.TestCase):
                 for connection in graph.connections
             ],
         )
+
+    def test_changes_connection_between_one_way_and_two_way(self) -> None:
+        self.world.set_connection_direction(
+            self.entrance.id, "north", bidirectional=False
+        )
+
+        self.assertEqual(self.world.get_room(self.hall.id).exits, ())
+        connection = self.world.area_graph(self.area.id).connections[0]
+        self.assertFalse(connection.bidirectional)
+        self.assertIsNone(connection.return_exit_name)
+
+        self.world.set_connection_direction(
+            self.entrance.id,
+            "north",
+            bidirectional=True,
+            return_exit_name="back",
+        )
+
+        self.assertEqual(
+            [(exit.name, exit.destination_room_id) for exit in self.world.get_room(self.hall.id).exits],
+            [("back", self.entrance.id)],
+        )
+        connection = self.world.area_graph(self.area.id).connections[0]
+        self.assertTrue(connection.bidirectional)
+        self.assertEqual(connection.return_exit_name, "back")
 
     def test_deleting_empty_room_removes_all_attached_edges(self) -> None:
         self.world.connect_rooms(self.hall.id, "down", self.crypt.id)

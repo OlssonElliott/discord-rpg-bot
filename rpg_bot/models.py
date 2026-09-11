@@ -32,3 +32,11 @@ class Character:
     is_archived: bool = False
     portrait_key: str | None = None
     current_room_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterSheetViewState:
+    character_id: int
+    guild_id: int
+    discord_channel_id: int
+    discord_message_id: int | None = None

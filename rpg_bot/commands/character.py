@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+import logging
+import re
 
 import discord
 from discord import app_commands
@@ -18,6 +20,7 @@ from ..character_creation.rules import ATTRIBUTES, STANDARD_ARRAY, apply_modifie
 from ..character_creation.service import CharacterCreationService
 from ..checks import is_dm
 from ..database import CharacterAlreadyExistsError, CharacterNotFoundError, Database
+from ..discord_player_view import DiscordPlayerViewAdapter, private_map_channel_name
 from ..models import Character
 from ..inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
 from ..inventory_service import InventoryService
@@ -29,6 +32,10 @@ from ..portraits import (
     default_portrait_key,
     is_default_portrait_key,
 )
+from ..player_view_service import PlayerViewMessageService, PlayerViewService
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def creation_prompt(flow: CharacterCreationFlow) -> str:
@@ -146,8 +153,14 @@ def character_sheet_embed(
 
 
 class OwnedView(discord.ui.View):
-    def __init__(self, cog: CharacterCommands, user_id: int) -> None:
-        super().__init__(timeout=15 * 60)
+    def __init__(
+        self,
+        cog: CharacterCommands,
+        user_id: int,
+        *,
+        timeout: float | None = 15 * 60,
+    ) -> None:
+        super().__init__(timeout=timeout)
         self.cog = cog
         self.user_id = user_id
 
@@ -527,6 +540,7 @@ class CharacterSelect(discord.ui.Select):
     ) -> None:
         self.manage_view = manage_view
         super().__init__(
+            custom_id=manage_view.component_id("select"),
             placeholder="Choose a character",
             options=[
                 discord.SelectOption(
@@ -567,6 +581,7 @@ class ActivateCharacterButton(discord.ui.Button):
             None,
         )
         super().__init__(
+            custom_id=manage_view.component_id("activate"),
             label="Use character",
             style=discord.ButtonStyle.primary,
             disabled=selected is None or selected.is_active,
@@ -577,13 +592,20 @@ class ActivateCharacterButton(discord.ui.Button):
         selected_id = self.manage_view.selected_id
         if selected_id is None:
             return
+        await interaction.response.defer()
         try:
-            self.manage_view.cog.database.select_character(
+            previous = self.manage_view.cog.database.get_character(
+                self.manage_view.user_id
+            )
+            selected = self.manage_view.cog.database.select_character(
                 self.manage_view.user_id, selected_id
             )
         except CharacterNotFoundError as error:
-            await interaction.response.edit_message(content=str(error), view=None)
+            await interaction.edit_original_response(content=str(error), view=None)
             return
+        await self.manage_view.cog.active_character_changed(
+            interaction, previous, selected
+        )
         characters = self.manage_view.cog.database.list_characters(
             self.manage_view.user_id
         )
@@ -593,7 +615,7 @@ class ActivateCharacterButton(discord.ui.Button):
             characters,
             selected_id,
         )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=management_prompt(characters, selected_id), view=view
         )
 
@@ -602,6 +624,7 @@ class UnequipCharacterButton(discord.ui.Button):
     def __init__(self, manage_view: CharacterManageView) -> None:
         self.manage_view = manage_view
         super().__init__(
+            custom_id=manage_view.component_id("unequip"),
             label="Unequip active",
             style=discord.ButtonStyle.secondary,
             disabled=not any(
@@ -611,6 +634,14 @@ class UnequipCharacterButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        active = next(
+            (
+                character
+                for character in self.manage_view.characters
+                if character.is_active
+            ),
+            None,
+        )
         self.manage_view.cog.database.deactivate_character(
             self.manage_view.user_id
         )
@@ -630,12 +661,17 @@ class UnequipCharacterButton(discord.ui.Button):
             ),
             view=view,
         )
+        if active is not None:
+            await self.manage_view.cog.active_character_deactivated(
+                interaction, active
+            )
 
 
 class ArchiveCharacterButton(discord.ui.Button):
     def __init__(self, manage_view: CharacterManageView) -> None:
         self.manage_view = manage_view
         super().__init__(
+            custom_id=manage_view.component_id("archive"),
             label="Remove from Discord",
             style=discord.ButtonStyle.danger,
             disabled=manage_view.selected_id is None,
@@ -672,6 +708,7 @@ class RemovePortraitButton(discord.ui.Button):
             None,
         )
         super().__init__(
+            custom_id=manage_view.component_id("remove-portrait"),
             label="Remove portrait",
             style=discord.ButtonStyle.secondary,
             disabled=(
@@ -817,6 +854,10 @@ class ConfirmArchiveButton(discord.ui.Button):
                 content=f"Archived **{archived.name}**. You have no selectable characters.",
                 view=None,
             )
+            if self.character.is_active:
+                await self.manage_view.cog.active_character_deactivated(
+                    interaction, self.character
+                )
             return
         view = CharacterManageView(
             self.manage_view.cog,
@@ -830,6 +871,14 @@ class ConfirmArchiveButton(discord.ui.Button):
             ),
             view=view,
         )
+        if self.character.is_active:
+            replacement = self.manage_view.cog.database.get_character(
+                self.manage_view.user_id
+            )
+            if replacement is not None:
+                await self.manage_view.cog.active_character_changed(
+                    interaction, self.character, replacement
+                )
 
 
 class CancelArchiveButton(discord.ui.Button):
@@ -870,14 +919,69 @@ class CharacterManageView(OwnedView):
         characters: list[Character],
         selected_id: int | None = None,
     ) -> None:
-        super().__init__(cog, user_id)
+        super().__init__(cog, user_id, timeout=None)
         self.characters = characters
         self.selected_id = selected_id
-        self.add_item(CharacterSelect(self, characters))
-        self.add_item(ActivateCharacterButton(self))
-        self.add_item(UnequipCharacterButton(self))
-        self.add_item(ArchiveCharacterButton(self))
-        self.add_item(RemovePortraitButton(self))
+        self.add_item(DynamicCharacterManageItem(CharacterSelect(self, characters)))
+        self.add_item(DynamicCharacterManageItem(ActivateCharacterButton(self)))
+        self.add_item(DynamicCharacterManageItem(UnequipCharacterButton(self)))
+        self.add_item(DynamicCharacterManageItem(ArchiveCharacterButton(self)))
+        self.add_item(DynamicCharacterManageItem(RemovePortraitButton(self)))
+
+    def component_id(self, action: str) -> str:
+        selected = self.selected_id if self.selected_id is not None else "none"
+        return f"character-manage:{action}:{self.user_id}:{selected}"
+
+
+class DynamicCharacterManageItem(
+    discord.ui.DynamicItem[discord.ui.Item],
+    template=(
+        r"character-manage:(?P<action>select|activate|unequip|archive|remove-portrait):"
+        r"(?P<user_id>\d+):(?P<selected_id>none|\d+)"
+    ),
+):
+    """Rebuild a manage callback from its ID after a process restart."""
+
+    def __init__(self, item: discord.ui.Item, user_id: int | None = None) -> None:
+        super().__init__(item)
+        if user_id is None:
+            match = self.template.fullmatch(self.custom_id)
+            if match is None:
+                raise ValueError("Invalid character management component ID.")
+            user_id = int(match.group("user_id"))
+        self.user_id = user_id
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Item,
+        match: re.Match[str],
+    ) -> DynamicCharacterManageItem:
+        cog = interaction.client.get_cog("CharacterCommands")
+        if not isinstance(cog, CharacterCommands):
+            raise RuntimeError("Character commands are not loaded.")
+        user_id = int(match.group("user_id"))
+        selected_value = match.group("selected_id")
+        selected_id = None if selected_value == "none" else int(selected_value)
+        characters = cog.database.list_characters(user_id)
+        manage_view = CharacterManageView(cog, user_id, characters, selected_id)
+        rebuilt = next(
+            child.item
+            for child in manage_view.children
+            if isinstance(child, DynamicCharacterManageItem)
+            and child.custom_id == item.custom_id
+        )
+        return cls(rebuilt, user_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.user_id:
+            return True
+        await interaction.response.send_message(
+            "This character management panel belongs to another player.",
+            ephemeral=True,
+        )
+        return False
 
 
 def creation_view(
@@ -959,6 +1063,74 @@ class CharacterSheetView(discord.ui.View):
         )
 
 
+class DedicatedCharacterSheetView(discord.ui.View):
+    """Persistent controls attached to the private character-sheet channel."""
+
+    def __init__(
+        self, cog: CharacterCommands, user_id: int, character_id: int
+    ) -> None:
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.user_id = user_id
+        self.character_id = character_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.user_id:
+            return True
+        await interaction.response.send_message(
+            "This character sheet belongs to another player.", ephemeral=True
+        )
+        return False
+
+    @discord.ui.button(
+        label="Manage inventory",
+        style=discord.ButtonStyle.secondary,
+        emoji="🎒",
+        custom_id="character-sheet:inventory",
+    )
+    async def inventory(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        del button
+        from .inventory import show_inventory
+
+        character = self.cog.database.get_character_by_id(
+            self.user_id, self.character_id
+        )
+        if character is None:
+            await interaction.response.send_message(
+                "That character is no longer available.", ephemeral=True
+            )
+            return
+        await show_inventory(
+            interaction, self.cog.inventory_service, character, edit=False
+        )
+
+    @discord.ui.button(
+        label="Refresh",
+        style=discord.ButtonStyle.primary,
+        emoji="🔄",
+        custom_id="character-sheet:refresh",
+    )
+    async def refresh(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        del button
+        character = self.cog.database.get_character_by_id(
+            self.user_id, self.character_id
+        )
+        if character is None:
+            await interaction.response.send_message(
+                "That character is no longer available.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        if interaction.message is not None:
+            await self.cog._edit_dedicated_sheet_message(
+                interaction.message, character
+            )
+
+
 class CharacterCommands(commands.GroupCog, group_name="character"):
     """Tracks transient flows per Discord user; only results are persisted."""
 
@@ -966,20 +1138,198 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         self,
         database: Database,
         portrait_store: CharacterPortraitStore | None = None,
+        bot: commands.Bot | None = None,
     ) -> None:
         self.database = database
+        self.bot = bot
         self.portrait_store = portrait_store or CharacterPortraitStore()
         self.service = CharacterCreationService(database)
         self.item_catalog = ItemCatalog.load(DEFAULT_ITEM_CATALOG_PATH)
         self.inventory_service = InventoryService(database, self.item_catalog)
         self.sessions: dict[int, CharacterCreationFlow] = {}
 
+    async def cog_load(self) -> None:
+        if self.bot is None:
+            return
+        self.bot.add_dynamic_items(DynamicCharacterManageItem)
+        all_characters = self.database.list_all_characters()
+        characters = {
+            character.character_id: character
+            for character in all_characters
+        }
+        for state in self.database.list_character_sheet_view_states():
+            character = characters.get(state.character_id)
+            if character is None or state.discord_message_id is None:
+                continue
+            self.bot.add_view(
+                DedicatedCharacterSheetView(
+                    self,
+                    character.discord_user_id,
+                    state.character_id,
+                ),
+                message_id=state.discord_message_id,
+            )
+
+
+    async def active_character_changed(
+        self,
+        interaction: discord.Interaction,
+        previous: Character | None,
+        selected: Character,
+    ) -> None:
+        """Retarget the player's private channels to the new active character."""
+        if (
+            (previous is not None and previous.character_id == selected.character_id)
+            or getattr(interaction, "guild", None) is None
+        ):
+            return
+        try:
+            sheet_channel = await self._ensure_dedicated_sheet_channel(
+                interaction, selected
+            )
+            await self._rename_private_channel(
+                sheet_channel, self._sheet_channel_name(selected)
+            )
+            await self._refresh_dedicated_sheet(sheet_channel, selected)
+        except (discord.HTTPException, OSError, ValueError):
+            LOGGER.exception(
+                "Could not refresh the character-sheet channel after switching "
+                "from %s to %s",
+                previous.character_id if previous is not None else None,
+                selected.character_id,
+            )
+
+        try:
+            map_channel = await self._ensure_dedicated_map_channel(
+                interaction, selected
+            )
+            await self._rename_private_channel(
+                map_channel,
+                private_map_channel_name(selected.name, selected.character_id),
+            )
+            map_state = self.database.get_player_view_state(selected.character_id)
+            if selected.current_room_id is None:
+                await self._show_unplaced_character_map(
+                    map_channel, map_state.discord_message_id, selected
+                )
+            else:
+                self.database.ensure_character_location_knowledge(
+                    selected.character_id
+                )
+                views = PlayerViewService(self.database)
+                adapter = DiscordPlayerViewAdapter(
+                    self.database, views, interaction.client
+                )
+                await PlayerViewMessageService(views, adapter).refresh(
+                    selected.character_id
+                )
+        except (discord.HTTPException, OSError, ValueError):
+            LOGGER.exception(
+                "Could not refresh the private map channel after switching from "
+                "%s to %s",
+                previous.character_id if previous is not None else None,
+                selected.character_id,
+            )
+
+    async def active_character_deactivated(
+        self, interaction: discord.Interaction, character: Character
+    ) -> None:
+        """Delete the player's private channels while no character is active."""
+        if getattr(interaction, "guild", None) is None:
+            return
+        sheet_state = self.database.get_character_sheet_view_state(
+            character.character_id
+        )
+        if sheet_state is not None and sheet_state.guild_id == interaction.guild.id:
+            if await self._delete_private_channel(
+                interaction, sheet_state.discord_channel_id
+            ):
+                self.database.clear_character_sheet_view_state(
+                    character.character_id
+                )
+
+        map_state = self.database.get_player_view_state(character.character_id)
+        if map_state.discord_channel_id is not None:
+            if await self._delete_private_channel(
+                interaction, map_state.discord_channel_id
+            ):
+                self.database.clear_player_view_channel(character.character_id)
+
+    @staticmethod
+    async def _delete_private_channel(
+        interaction: discord.Interaction, channel_id: int
+    ) -> bool:
+        channel = interaction.guild.get_channel(channel_id)
+        if channel is None:
+            try:
+                fetched = await interaction.client.fetch_channel(channel_id)
+                fetched_guild_id = getattr(
+                    getattr(fetched, "guild", None), "id", None
+                )
+                if fetched_guild_id != interaction.guild.id:
+                    return False
+                channel = fetched
+            except discord.NotFound:
+                return True
+            except discord.HTTPException:
+                LOGGER.exception(
+                    "Could not resolve private player channel %s", channel_id
+                )
+                return False
+        try:
+            await channel.delete(reason="Player unequipped their active character")
+            return True
+        except discord.HTTPException:
+            LOGGER.exception("Could not delete private player channel %s", channel_id)
+            return False
+
+    @staticmethod
+    async def _rename_private_channel(channel, desired_name: str) -> None:
+        """Rename a reused HUD channel without blocking its content refresh."""
+        if getattr(channel, "name", desired_name) == desired_name:
+            return
+        if not hasattr(channel, "edit"):
+            return
+        try:
+            await channel.edit(
+                name=desired_name,
+                reason="Active character changed",
+            )
+        except discord.HTTPException:
+            LOGGER.warning(
+                "Could not rename private player channel %s to %s; continuing",
+                getattr(channel, "id", "unknown"),
+                desired_name,
+            )
+
+    async def _show_unplaced_character_map(
+        self, channel, message_id: int | None, character: Character
+    ) -> None:
+        message = None
+        if message_id is not None and hasattr(channel, "fetch_message"):
+            try:
+                message = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                message = None
+        content = (
+            f"**{character.name}** has not been placed in a dungeon room yet. "
+            "The map will appear after the DM places the character."
+        )
+        if message is not None:
+            await message.edit(content=content, embeds=[], attachments=[], view=None)
+        elif hasattr(channel, "send"):
+            message = await channel.send(content)
+            self.database.update_player_view_state(
+                character.character_id, discord_message_id=message.id
+            )
+
     def _sheet_presentation(
-        self, character: Character
+        self, character: Character, *, include_inventory_summary: bool = True
     ) -> tuple[discord.Embed, discord.File | None]:
         portrait_path = self.portrait_store.path_for(character.portrait_key)
         embed = character_sheet_embed(character)
-        if character.character_id is not None:
+        embed.set_author(name=character.name)
+        if character.character_id is not None and include_inventory_summary:
             inventory = self.database.get_character_inventory(character.character_id)
             equipment = []
             for slot in ("main_hand", "off_hand", "clothing", "armor", "container"):
@@ -1004,6 +1354,22 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             embed.add_field(
                 name="Equipment", value="\n".join(equipment), inline=False
             )
+            equipped_ids = set(inventory.equipment.values())
+            carried = []
+            for item in inventory.items:
+                if item.instance_id in equipped_ids:
+                    continue
+                try:
+                    item_name = self.item_catalog.get(item.template_id).name
+                except ValueError:
+                    item_name = item.template_id
+                carried.append(
+                    item_name if item.quantity == 1 else f"{item.quantity} × {item_name}"
+                )
+            inventory_text = "\n".join(carried) or "Empty"
+            if len(inventory_text) > 1024:
+                inventory_text = inventory_text[:1021] + "..."
+            embed.add_field(name="Inventory", value=inventory_text, inline=False)
         if portrait_path is None:
             return embed, None
         filename = f"character_sheet_portrait{portrait_path.suffix.lower()}"
@@ -1012,6 +1378,219 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             embed,
             discord.File(portrait_path, filename=filename),
         )
+
+    def _dedicated_sheet_presentation(
+        self, character: Character
+    ) -> tuple[list[discord.Embed], discord.File | None]:
+        """Render the permanent channel with sheet and inventory visible at once."""
+        from .inventory import inventory_embed
+
+        sheet, portrait_file = self._sheet_presentation(
+            character, include_inventory_summary=False
+        )
+        assert character.character_id is not None
+        inventory = self.database.get_character_inventory(character.character_id)
+        return [
+            sheet,
+            inventory_embed(character, inventory, self.item_catalog),
+        ], portrait_file
+
+    @staticmethod
+    def _sheet_channel_name(character: Character) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", character.name.casefold()).strip("-")
+        return f"character-{slug or character.character_id}"[:100]
+
+    async def _ensure_dedicated_sheet_channel(
+        self, interaction: discord.Interaction, character: Character
+    ):
+        assert character.character_id is not None
+        guild = interaction.guild
+        state = self.database.get_character_sheet_view_state(character.character_id)
+        channel = None
+        if state is not None and state.guild_id == guild.id:
+            channel = guild.get_channel(state.discord_channel_id)
+            if channel is None:
+                try:
+                    fetched = await interaction.client.fetch_channel(
+                        state.discord_channel_id
+                    )
+                    if getattr(getattr(fetched, "guild", None), "id", None) == guild.id:
+                        channel = fetched
+                except discord.NotFound:
+                    pass
+        if channel is not None:
+            self._require_sheet_message_permissions(
+                channel, getattr(guild, "me", None)
+            )
+            return channel
+
+        bot_member = guild.me
+        if bot_member is None:
+            raise ValueError("I could not resolve my server member permissions.")
+        if not bot_member.guild_permissions.manage_channels:
+            raise ValueError(
+                "I need the **Manage Channels** server permission before I can "
+                "create your private character-sheet channel."
+            )
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(
+                view_channel=True,
+                read_message_history=True,
+                send_messages=False,
+                add_reactions=False,
+                create_public_threads=False,
+                create_private_threads=False,
+                send_messages_in_threads=False,
+            ),
+            bot_member: discord.PermissionOverwrite(
+                view_channel=True,
+                read_message_history=True,
+                send_messages=True,
+                embed_links=True,
+                attach_files=True,
+            ),
+        }
+        channel = await guild.create_text_channel(
+            self._sheet_channel_name(character),
+            overwrites=overwrites,
+            reason=f"Private character sheet for character {character.character_id}",
+        )
+        self.database.bind_character_sheet_channel(
+            character.character_id, guild.id, channel.id
+        )
+        return channel
+
+    async def _ensure_dedicated_map_channel(
+        self, interaction: discord.Interaction, character: Character
+    ):
+        assert character.character_id is not None
+        guild = interaction.guild
+        state = self.database.get_player_view_state(character.character_id)
+        channel = None
+        if state.discord_channel_id is not None:
+            channel = guild.get_channel(state.discord_channel_id)
+            if channel is None:
+                try:
+                    fetched = await interaction.client.fetch_channel(
+                        state.discord_channel_id
+                    )
+                    if getattr(getattr(fetched, "guild", None), "id", None) == guild.id:
+                        channel = fetched
+                except discord.NotFound:
+                    pass
+        if channel is not None:
+            self._require_sheet_message_permissions(
+                channel, getattr(guild, "me", None)
+            )
+            return channel
+
+        bot_member = guild.me
+        if bot_member is None:
+            raise ValueError("I could not resolve my server member permissions.")
+        if not bot_member.guild_permissions.manage_channels:
+            raise ValueError(
+                "I need the **Manage Channels** server permission before I can "
+                "create your private map channel."
+            )
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(
+                view_channel=True,
+                read_message_history=True,
+                send_messages=False,
+                add_reactions=False,
+                create_public_threads=False,
+                create_private_threads=False,
+                send_messages_in_threads=False,
+            ),
+            bot_member: discord.PermissionOverwrite(
+                view_channel=True,
+                read_message_history=True,
+                send_messages=True,
+                embed_links=True,
+                attach_files=True,
+            ),
+        }
+        channel = await guild.create_text_channel(
+            private_map_channel_name(character.name, character.character_id),
+            overwrites=overwrites,
+            reason=f"Private dungeon HUD for character {character.character_id}",
+        )
+        PlayerViewService(self.database).bind_discord_channel(
+            character.character_id, channel.id
+        )
+        return channel
+
+    @staticmethod
+    def _require_sheet_message_permissions(channel, bot_member) -> None:
+        if bot_member is None or not hasattr(channel, "permissions_for"):
+            return
+        permissions = channel.permissions_for(bot_member)
+        required = {
+            "View Channel": permissions.view_channel,
+            "Send Messages": permissions.send_messages,
+            "Embed Links": permissions.embed_links,
+            "Attach Files": permissions.attach_files,
+            "Read Message History": permissions.read_message_history,
+        }
+        missing = [name for name, enabled in required.items() if not enabled]
+        if missing:
+            raise ValueError(
+                "I cannot update the existing character-sheet channel. Missing: "
+                + ", ".join(f"**{name}**" for name in missing)
+                + "."
+            )
+
+    async def _edit_dedicated_sheet_message(
+        self, message: discord.Message, character: Character
+    ) -> None:
+        embeds, portrait_file = self._dedicated_sheet_presentation(character)
+        try:
+            await message.edit(
+                embeds=embeds,
+                attachments=[portrait_file] if portrait_file is not None else [],
+                view=DedicatedCharacterSheetView(
+                    self, character.discord_user_id, character.character_id
+                ),
+            )
+        finally:
+            if portrait_file is not None:
+                portrait_file.close()
+
+    async def _refresh_dedicated_sheet(
+        self, channel, character: Character
+    ) -> int:
+        assert character.character_id is not None
+        state = self.database.get_character_sheet_view_state(character.character_id)
+        existing_message = None
+        if state is not None and state.discord_message_id is not None:
+            try:
+                existing_message = await channel.fetch_message(state.discord_message_id)
+            except discord.NotFound:
+                existing_message = None
+        if existing_message is not None:
+            await self._edit_dedicated_sheet_message(existing_message, character)
+            return existing_message.id
+
+        embeds, portrait_file = self._dedicated_sheet_presentation(character)
+        try:
+            arguments = {
+                "embeds": embeds,
+                "view": DedicatedCharacterSheetView(
+                    self, character.discord_user_id, character.character_id
+                ),
+            }
+            if portrait_file is not None:
+                arguments["file"] = portrait_file
+            message = await channel.send(**arguments)
+        finally:
+            if portrait_file is not None:
+                portrait_file.close()
+        self.database.set_character_sheet_view_message(
+            character.character_id, message.id
+        )
+        return message.id
 
     async def publish_character_sheet(
         self,
@@ -1227,6 +1806,43 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         if character is None or character.character_id is None:
             await interaction.response.send_message(
                 "You do not have an active character. Use `/character manage` first.",
+                ephemeral=True,
+            )
+            return
+        if getattr(interaction, "guild", None) is not None:
+            await interaction.response.defer(ephemeral=True)
+            try:
+                channel = await self._ensure_dedicated_sheet_channel(
+                    interaction, character
+                )
+                await self._refresh_dedicated_sheet(channel, character)
+            except ValueError as error:
+                await interaction.followup.send(str(error), ephemeral=True)
+                return
+            except discord.Forbidden as error:
+                LOGGER.exception("Discord refused private character-sheet operation")
+                await interaction.followup.send(
+                    "Discord refused the character-sheet operation. The bot needs "
+                    "**Manage Channels**, **View Channel**, **Send Messages**, "
+                    "**Embed Links**, and **Attach Files**. "
+                    f"Discord error code: `{error.code}`.",
+                    ephemeral=True,
+                )
+                return
+            except (discord.HTTPException, OSError) as error:
+                LOGGER.exception("Could not update private character sheet")
+                detail = (
+                    f"HTTP {error.status}, Discord error code `{error.code}`"
+                    if isinstance(error, discord.HTTPException)
+                    else "the portrait asset could not be read"
+                )
+                await interaction.followup.send(
+                    f"I could not update the private character sheet ({detail}).",
+                    ephemeral=True,
+                )
+                return
+            await interaction.followup.send(
+                f"Your private character sheet is ready: {channel.mention}",
                 ephemeral=True,
             )
             return
@@ -1481,6 +2097,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         result = flow.result
         if result is None:
             raise RuntimeError("Completed creation flow has no result.")
+        previous = self.database.get_character(user_id)
         try:
             character = self.service.persist(user_id, result)
         except CharacterAlreadyExistsError as error:
@@ -1495,6 +2112,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             ),
             view=None,
         )
+        await self.active_character_changed(interaction, previous, character)
 
     async def back_component(
         self, interaction: discord.Interaction, user_id: int
@@ -1541,5 +2159,6 @@ async def setup(bot: commands.Bot) -> None:
                     "data/characters",
                 )
             ),
+            bot,
         )
     )

@@ -9,10 +9,19 @@ from .inventory import (
     ItemTemplate,
 )
 from .models import Character
+from .dungeon import (
+    CharacterLocation,
+    ConnectionType,
+    Dungeon,
+    Floor,
+    GameLock,
+    RoomConnection,
+)
 from .world import (
     Area,
     AreaGraph,
     EntityKind,
+    InvalidMovementError,
     InvalidTransferError,
     InventoryHolder,
     Item,
@@ -43,8 +52,25 @@ class WorldService:
         *,
         editor_x: float | None = None,
         editor_y: float | None = None,
+        floor_id: str | None = None,
+        width: float = 1.0,
+        height: float = 1.0,
+        scene_image_path: str | None = None,
+        scene_image_url: str | None = None,
+        scene_prompt: str | None = None,
     ) -> Room:
-        room = self.database.create_room(room_id, area_id, name, description)
+        room = self.database.create_room(
+            room_id,
+            area_id,
+            name,
+            description,
+            floor_id=floor_id,
+            width=width,
+            height=height,
+            scene_image_path=scene_image_path,
+            scene_image_url=scene_image_url,
+            scene_prompt=scene_prompt,
+        )
         if editor_x is not None or editor_y is not None:
             if editor_x is None or editor_y is None:
                 self.database.delete_room(room.id)
@@ -76,13 +102,49 @@ class WorldService:
         destination_room_id: str,
         *,
         return_exit_name: str | None = None,
-    ) -> None:
-        self.database.connect_rooms(
+        connection_type: ConnectionType = ConnectionType.PASSAGE,
+        hidden: bool = False,
+    ) -> RoomConnection:
+        return self.database.connect_rooms(
             room_id,
             exit_name,
             destination_room_id,
             return_exit_name=return_exit_name,
+            connection_type=connection_type,
+            hidden=hidden,
         )
+
+    def set_connection_direction(
+        self,
+        room_id: str,
+        exit_name: str,
+        *,
+        bidirectional: bool,
+        return_exit_name: str | None = None,
+    ) -> None:
+        self.database.set_connection_direction(
+            room_id,
+            exit_name,
+            bidirectional=bidirectional,
+            return_exit_name=return_exit_name,
+        )
+
+    def disconnect_connection(self, room_id: str, exit_name: str) -> None:
+        self.database.disconnect_connection(room_id, exit_name)
+
+    def create_floor(
+        self, floor_id: str, dungeon_id: str, floor_number: int, name: str
+    ) -> Floor:
+        return self.database.create_floor(floor_id, dungeon_id, floor_number, name)
+
+    def list_floors(self, dungeon_id: str) -> tuple[Floor, ...]:
+        return self.database.list_floors(dungeon_id)
+
+    def get_dungeon(self, dungeon_id: str) -> Dungeon | None:
+        return self.database.get_dungeon(dungeon_id)
+
+    def list_dungeons(self) -> tuple[Dungeon, ...]:
+        return self.database.list_dungeons()
 
     def disconnect_rooms(self, room_id: str, exit_name: str) -> None:
         self.database.disconnect_rooms(room_id, exit_name)
@@ -93,6 +155,9 @@ class WorldService:
     def get_character_room(self, character_id: int) -> Room | None:
         return self.database.get_character_room(character_id)
 
+    def get_character_location(self, character_id: int) -> CharacterLocation | None:
+        return self.database.get_character_location(character_id)
+
     def list_characters(self) -> tuple[Character, ...]:
         return tuple(self.database.list_all_characters())
 
@@ -100,7 +165,18 @@ class WorldService:
         return self.database.place_character(character_id, room_id)
 
     def move_character(self, character_id: int, destination: str) -> Room:
+        if self.database.get_game_lock() in (
+            GameLock.MOVEMENT_LOCKED,
+            GameLock.ALL_ACTIONS_LOCKED,
+        ):
+            raise InvalidMovementError("Movement is currently locked by the DM.")
         return self.database.move_character(character_id, destination)
+
+    def game_lock(self) -> GameLock:
+        return self.database.get_game_lock()
+
+    def set_game_lock(self, state: GameLock) -> GameLock:
+        return self.database.set_game_lock(state)
 
     def create_item(
         self,

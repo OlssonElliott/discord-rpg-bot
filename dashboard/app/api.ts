@@ -51,9 +51,13 @@ export type RoomData = {
 };
 
 export type ConnectionData = {
+  connection_id: string | null;
   source_room_id: string;
   exit_name: string;
   destination_room_id: string;
+  return_exit_name: string | null;
+  bidirectional: boolean;
+  hidden: boolean;
 };
 
 export type AreaGraphData = {

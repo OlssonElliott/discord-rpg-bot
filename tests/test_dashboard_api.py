@@ -56,7 +56,93 @@ class DashboardAPITests(unittest.TestCase):
             [(node["id"], node["position"]["x"]) for node in graph["nodes"]],
             [("entrance", 100.0), ("hall", 420.0)],
         )
+        self.assertEqual(len(graph["connections"]), 1)
         self.assertEqual(graph["connections"][0]["exit_name"], "north")
+        self.assertEqual(graph["connections"][0]["return_exit_name"], "north")
+        self.assertTrue(graph["connections"][0]["bidirectional"])
+        self.assertEqual(
+            [(exit.name, exit.destination_room_id) for exit in self.world.get_room("hall").exits],
+            [("north", "entrance")],
+        )
+
+    def test_connection_direction_can_be_changed_through_api(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+        self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "north",
+            },
+        )
+
+        one_way_status, one_way = self.api.handle(
+            "PATCH",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "exit_name": "north",
+                "bidirectional": False,
+            },
+        )
+        self.assertEqual(one_way_status, 200)
+        self.assertFalse(one_way["bidirectional"])
+        self.assertEqual(self.world.get_room("hall").exits, ())
+
+        two_way_status, two_way = self.api.handle(
+            "PATCH",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "exit_name": "north",
+                "bidirectional": True,
+                "return_exit_name": "south",
+            },
+        )
+        self.assertEqual(two_way_status, 200)
+        self.assertTrue(two_way["bidirectional"])
+        self.assertEqual(two_way["return_exit_name"], "south")
+        self.assertEqual(
+            [(exit.name, exit.destination_room_id) for exit in self.world.get_room("hall").exits],
+            [("south", "entrance")],
+        )
+
+        _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+        self.assertEqual(len(graph["connections"]), 1)
+        self.assertTrue(graph["connections"][0]["bidirectional"])
+        self.assertEqual(graph["connections"][0]["return_exit_name"], "south")
+
+    def test_connection_can_be_created_explicitly_one_way(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+
+        status, created = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "drop",
+                "bidirectional": False,
+            },
+        )
+
+        self.assertEqual(status, 201)
+        self.assertFalse(created["bidirectional"])
+        self.assertIsNone(created["return_exit_name"])
+        self.assertEqual(self.world.get_room("hall").exits, ())
 
     def test_rejected_connection_does_not_appear_in_graph(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "one", "name": "One"})

@@ -33,10 +33,15 @@ copy the environment file with `cp .env.example .env`.
 4. Open **Installation**, make sure **Guild Install** is enabled under Installation
    Contexts, and choose **Discord Provided Link**. Under the Guild Install default
    settings, include the `bot` and `applications.commands` scopes. The only bot
-   permissions needed are **Send Messages**, **Embed Links**, **Connect**, and
-   **Speak**. The voice permissions allow the optional dice sounds. The older
-   portal UI exposes the equivalent settings under **OAuth2 > URL Generator**.
+   permissions needed are **Manage Channels**, **View Channels**, **Send Messages**,
+   **Embed Links**, **Attach Files**, **Read Message History**, **Connect**, and
+   **Speak**. Manage Channels lets `/map` create its private read-only HUD channel;
+   the voice permissions allow the optional dice sounds. The older portal UI
+   exposes the equivalent settings under **OAuth2 > URL Generator**.
 5. Use the generated install link, choose your server, and authorize the bot.
+   Changing the portal defaults later does not update an existing server install;
+   reauthorize the bot or update its server role once. On startup, Rollkeeper logs
+   missing permissions and a reauthorization link with the correct permission set.
 6. In Discord, enable **Developer Mode** under **User Settings > Advanced**,
    right-click the server, and select **Copy Server ID**. Put it in `.env` as
    `DISCORD_GUILD_ID`. This is recommended during development because guild
@@ -88,15 +93,35 @@ same interactive `/inventory`. Node positions are editor-only metadata; arrows a
 persisted directional gameplay exits. The API binds to localhost and is intended
 for the DM's local machine.
 
+### Player-specific dungeon views
+
+Areas are also the persisted dungeon boundary and receive a default floor; more
+floors can be added through `WorldService.create_floor`. Character placement and
+movement record visited-room knowledge and discover visible adjoining rooms. Use
+`PlayerViewService.build_player_map(character_id, floor_id)` to obtain a filtered
+map containing only that character's known rooms and connections. A `KNOWN` room
+has an uncertain display label and never exposes its description or scene image;
+`VISITED` rooms may expose their persistent scene asset. Perception modifiers run
+after knowledge filtering, and `PlayerViewMessageService` provides the adapter
+boundary for editing or recreating one bot-owned Discord HUD message. Players use
+`/map` from the server to create or reopen that private read-only channel. Moving
+through `/move` refreshes an existing HUD automatically.
+
 ## Commands
 
 Player commands:
 
+- `/map` — create or reopen the active character's private, read-only dungeon HUD.
+  Use its floor and room selectors to inspect known locations without moving.
 - `/character create` — start a private, step-by-step character creation session.
 - `/character manage` — choose an active character or archive one from Discord.
-- `/character sheet` — privately open the active character's full sheet, including
-  attribute scores and roll modifiers; use **Publish here** to create or update the
-  character's persistent sheet in whichever channel the command was used.
+  Switching characters retargets the player's existing map and character-sheet
+  channels, renames them, and refreshes both persistent messages automatically.
+  Choosing **Unequip active** deletes both private channels so they also disappear
+  for administrators; selecting or creating a character recreates them automatically.
+- `/character sheet` — create or reopen the active character's private, read-only
+  sheet channel. Its single persistent message includes equipment, portrait,
+  the full inventory immediately, plus Manage inventory and Refresh controls.
 - `/character portrait [image] [remove]` — view the active portrait, attach a file
   to replace it, or use `remove: True` to remove it directly. A DM with no active
   character manages their personal Dungeon Master portrait instead.
@@ -365,6 +390,10 @@ rpg_bot/commands/inventory.py   private interactive inventory browser
 rpg_bot/character_creation/     UI-independent rules, state machine, and persistence service
 rpg_bot/world.py                area, room, entity, inventory, and graph domain types
 rpg_bot/world_service.py        deterministic world and editor application service
+rpg_bot/dungeon.py              dungeon knowledge, floor, connection, and view types
+rpg_bot/player_view_service.py  filtered player maps and persistent HUD message lifecycle
+rpg_bot/map_renderer.py         filtered dungeon-map PNG renderer
+rpg_bot/discord_player_view.py  private Discord channel, embeds, and map controls
 assets/items/items.json         reusable item template catalog
 rpg_bot/dashboard_api.py        framework-neutral DM dashboard JSON API
 rpg_bot/dashboard_server.py     localhost API server for the React dashboard

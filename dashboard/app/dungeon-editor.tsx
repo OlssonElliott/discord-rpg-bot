@@ -94,7 +94,7 @@ function graphNodes(graph: AreaGraphData): Node<RoomNodeData>[] {
 }
 
 function edgeId(connection: ConnectionData): string {
-  return `${connection.source_room_id}::${connection.exit_name}`;
+  return connection.connection_id || `${connection.source_room_id}::${connection.exit_name}`;
 }
 
 function graphEdges(graph: AreaGraphData): Edge[] {
@@ -102,7 +102,10 @@ function graphEdges(graph: AreaGraphData): Edge[] {
     id: edgeId(connection),
     source: connection.source_room_id,
     target: connection.destination_room_id,
-    label: connection.exit_name,
+    label: connection.bidirectional && connection.return_exit_name
+      ? `${connection.exit_name} ↔ ${connection.return_exit_name}`
+      : connection.exit_name,
+    markerStart: connection.bidirectional ? { type: MarkerType.ArrowClosed } : undefined,
     markerEnd: { type: MarkerType.ArrowClosed },
   }));
 }
@@ -198,6 +201,48 @@ export function DungeonEditor() {
     if (areaId) queueMicrotask(() => void loadGraph(areaId));
   }, [areaId, loadGraph]);
 
+  useEffect(() => {
+    if (!areaId) return;
+    let cancelled = false;
+    let refreshing = false;
+
+    const refreshLiveState = async () => {
+      if (refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      try {
+        const [nextGraph, nextCharacters] = await Promise.all([
+          api<AreaGraphData>(`/areas/${areaId}/graph`),
+          api<CharacterSummary[]>('/characters'),
+        ]);
+        if (cancelled) return;
+        setGraph(nextGraph);
+        setCharacters(nextCharacters);
+        const liveRooms = new globalThis.Map(
+          nextGraph.nodes.map((room) => [room.id, room]),
+        );
+        setNodes((current) => current.map((node) => {
+          const liveRoom = liveRooms.get(node.id);
+          return liveRoom ? { ...node, data: liveRoom } : node;
+        }));
+      } catch {
+        // Initial/manual loads surface errors; background synchronization stays quiet.
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const interval = window.setInterval(() => void refreshLiveState(), 2000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshLiveState();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [areaId, setNodes]);
+
   const mutate = useCallback(async (action: () => Promise<unknown>, message: string) => {
     try {
       await action();
@@ -253,13 +298,15 @@ export function DungeonEditor() {
     register({
       name: 'connect_locations',
       title: 'Connect locations',
-      description: 'Create a directional gameplay exit between two rooms in the selected area.',
+      description: 'Connect two rooms with a two-way passage by default.',
       inputSchema: {
         type: 'object',
         properties: {
           source_room_id: { type: 'string', minLength: 1 },
           destination_room_id: { type: 'string', minLength: 1 },
           exit_name: { type: 'string', minLength: 1 },
+          return_exit_name: { type: 'string', minLength: 1 },
+          bidirectional: { type: 'boolean', default: true },
         },
         required: ['source_room_id', 'destination_room_id', 'exit_name'],
         additionalProperties: false,
@@ -273,12 +320,19 @@ export function DungeonEditor() {
             throw new Error(`${field} is required.`);
           }
         }
+        const payload = {
+          ...values,
+          bidirectional: typeof values.bidirectional === 'boolean' ? values.bidirectional : true,
+          return_exit_name: typeof values.return_exit_name === 'string'
+            ? values.return_exit_name
+            : values.exit_name,
+        };
         const ok = await mutate(
-          () => api('/connections', { method: 'POST', body: JSON.stringify(values) }),
+          () => api('/connections', { method: 'POST', body: JSON.stringify(payload) }),
           'Connection created',
         );
         if (!ok) throw new Error('The backend rejected the connection.');
-        return values;
+        return payload;
       },
     });
     return () => lifecycle.abort();
@@ -402,8 +456,21 @@ export function DungeonEditor() {
             />
           ) : selectedConnection ? (
             <ConnectionInspector
+              key={`${edgeId(selectedConnection)}:${selectedConnection.bidirectional}:${selectedConnection.return_exit_name || ''}`}
               connection={selectedConnection}
               rooms={graph?.nodes ?? []}
+              onSave={(bidirectional, returnExitName) => mutate(
+                () => api('/connections', {
+                  method: 'PATCH',
+                  body: JSON.stringify({
+                    source_room_id: selectedConnection.source_room_id,
+                    exit_name: selectedConnection.exit_name,
+                    bidirectional,
+                    return_exit_name: bidirectional ? returnExitName : null,
+                  }),
+                }),
+                'Connection updated',
+              )}
               onRemove={() => void mutate(
                 () => api('/connections', { method: 'DELETE', body: JSON.stringify({ source_room_id: selectedConnection.source_room_id, exit_name: selectedConnection.exit_name }) }),
                 'Connection removed',
@@ -434,10 +501,10 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
-      <ConnectionDialog connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName) => {
+      <ConnectionDialog connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
-          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName }) }),
+          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
           'Connection created',
         );
         if (ok) setConnection(null);
@@ -582,14 +649,23 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onAddCont
   );
 }
 
-function ConnectionInspector({ connection, rooms, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onRemove: () => void }) {
+function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onSave: (bidirectional: boolean, returnExitName: string) => Promise<boolean>; onRemove: () => void }) {
   const roomName = (id: string) => rooms.find((room) => room.id === id)?.name || id;
+  const [bidirectional, setBidirectional] = useState(connection.bidirectional);
+  const [returnExitName, setReturnExitName] = useState(connection.return_exit_name || connection.exit_name);
   return (
     <>
-      <div className="inspector__topline"><span>Selected connection</span><Badge>One-way</Badge></div>
+      <div className="inspector__topline"><span>Selected connection</span><Badge>{connection.bidirectional ? 'Two-way' : 'One-way'}</Badge></div>
       <h2>{connection.exit_name}</h2>
-      <div className="route-card"><strong>{roomName(connection.source_room_id)}</strong><span>→</span><strong>{roomName(connection.destination_room_id)}</strong></div>
-      <p className="inspector-note">This arrow is a gameplay exit. Removing it immediately changes movement rules.</p>
+      <div className="route-card"><strong>{roomName(connection.source_room_id)}</strong><span>{connection.bidirectional ? '↔' : '→'}</span><strong>{roomName(connection.destination_room_id)}</strong></div>
+      <label className="dialog-label" htmlFor="connection-direction">Direction</label>
+      <NativeSelect id="connection-direction" value={bidirectional ? 'two-way' : 'one-way'} onChange={(event) => setBidirectional(event.target.value === 'two-way')}>
+        <NativeSelectOption value="two-way">Two-way passage</NativeSelectOption>
+        <NativeSelectOption value="one-way">One-way passage</NativeSelectOption>
+      </NativeSelect>
+      {bidirectional && <><label className="dialog-label" htmlFor="return-exit-name">Return exit name</label><Input id="return-exit-name" value={returnExitName} onChange={(event) => setReturnExitName(event.target.value)} /></>}
+      <p className="inspector-note">Movement rules update immediately when this passage is saved.</p>
+      <Button disabled={bidirectional && !returnExitName.trim()} onClick={() => void onSave(bidirectional, returnExitName)}><Save /> Save direction</Button>
       <Button variant="destructive" onClick={onRemove}><Trash2 /> Remove connection</Button>
     </>
   );
@@ -623,15 +699,23 @@ function EditorDialog({ open, onOpenChange, title, description, name, setName, d
   );
 }
 
-function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string) => Promise<void> }) {
+function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, bidirectional: boolean, returnName: string) => Promise<void> }) {
   const [name, setName] = useState('passage');
+  const [bidirectional, setBidirectional] = useState(true);
+  const [returnName, setReturnName] = useState('passage');
   return (
     <Dialog open={Boolean(connection)} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Name this exit</DialogTitle><DialogDescription>The arrow remains directional and is saved as a real gameplay connection.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Create passage</DialogTitle><DialogDescription>Passages work in both directions by default. Choose one-way only when the return path should be blocked.</DialogDescription></DialogHeader>
         <label className="dialog-label" htmlFor="connection-name">Exit name</label>
-        <Input id="connection-name" value={name} onChange={(event) => setName(event.target.value)} />
-        <DialogFooter><Button disabled={!name.trim()} onClick={() => void onCreate(name)}>Create connection</Button></DialogFooter>
+        <Input id="connection-name" value={name} onChange={(event) => { const next = event.target.value; setReturnName((current) => current === name ? next : current); setName(next); }} />
+        <label className="dialog-label" htmlFor="new-connection-direction">Direction</label>
+        <NativeSelect id="new-connection-direction" value={bidirectional ? 'two-way' : 'one-way'} onChange={(event) => setBidirectional(event.target.value === 'two-way')}>
+          <NativeSelectOption value="two-way">Two-way passage</NativeSelectOption>
+          <NativeSelectOption value="one-way">One-way passage</NativeSelectOption>
+        </NativeSelect>
+        {bidirectional && <><label className="dialog-label" htmlFor="new-return-exit-name">Return exit name</label><Input id="new-return-exit-name" value={returnName} onChange={(event) => setReturnName(event.target.value)} /></>}
+        <DialogFooter><Button disabled={!name.trim() || (bidirectional && !returnName.trim())} onClick={() => void onCreate(name, bidirectional, returnName)}>Create connection</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
