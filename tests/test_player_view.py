@@ -214,6 +214,63 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         self.assertEqual(first.getvalue(), second.getvalue())
 
+    def test_new_connection_from_current_room_reveals_connector_and_unknown_room(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+
+        connection = self.world.connect_rooms(
+            self.entrance.id,
+            "south",
+            self.unknown.id,
+            return_exit_name="north",
+        )
+        view = self.views.build_player_map(self.alice_id)
+
+        unknown = next(room for room in view.rooms if room.id == self.unknown.id)
+        self.assertEqual(unknown.knowledge_state, KnowledgeState.KNOWN)
+        self.assertEqual(unknown.display_name, "? Sealed Vault")
+        self.assertIn(connection.id, [item.id for item in view.connections])
+
+    def test_new_hidden_connection_is_not_revealed_to_current_character(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+
+        connection = self.world.connect_rooms(
+            self.entrance.id,
+            "secret",
+            self.unknown.id,
+            return_exit_name="hidden return",
+            hidden=True,
+        )
+        view = self.views.build_player_map(self.alice_id)
+
+        self.assertNotIn(connection.id, [item.id for item in view.connections])
+        self.assertNotIn(self.unknown.id, [room.id for room in view.rooms])
+
+    def test_ensure_location_knowledge_repairs_a_missing_current_room_connector(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+        connection = self.world.connect_rooms(
+            self.entrance.id,
+            "south",
+            self.unknown.id,
+            return_exit_name="north",
+        )
+        with self.database._connect() as database_connection:
+            database_connection.execute(
+                "DELETE FROM character_known_connections "
+                "WHERE character_id = ? AND connection_id = ?",
+                (self.alice_id, connection.id),
+            )
+            database_connection.execute(
+                "DELETE FROM character_room_knowledge "
+                "WHERE character_id = ? AND room_id = ?",
+                (self.alice_id, self.unknown.id),
+            )
+
+        self.database.ensure_character_location_knowledge(self.alice_id)
+        view = self.views.build_player_map(self.alice_id)
+
+        self.assertIn(connection.id, [item.id for item in view.connections])
+        self.assertIn(self.unknown.id, [room.id for room in view.rooms])
+
     def test_layout_preserves_world_spacing_and_centers_focus(self) -> None:
         rooms = tuple(
             PlayerMapRoom(

@@ -1566,6 +1566,47 @@ class Database:
                     int(return_exit_name is not None),
                 ),
             )
+            if not hidden:
+                visible_endpoints = [room_id]
+                if return_exit_name is not None:
+                    visible_endpoints.append(destination_room_id)
+                placeholders = ", ".join("?" for _ in visible_endpoints)
+                present_characters = connection.execute(
+                    f"""
+                    SELECT id, current_room_id
+                    FROM characters
+                    WHERE is_archived = 0
+                      AND current_room_id IN ({placeholders})
+                    """,
+                    visible_endpoints,
+                ).fetchall()
+                for character_row in present_characters:
+                    character_id = character_row["id"]
+                    current_room_id = character_row["current_room_id"]
+                    adjacent_room_id = (
+                        destination_room_id
+                        if current_room_id == room_id
+                        else room_id
+                    )
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO character_known_connections (
+                            character_id, connection_id
+                        ) VALUES (?, ?)
+                        """,
+                        (character_id, connection_id),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO character_room_knowledge (
+                            character_id, room_id, state, source
+                        ) VALUES (?, ?, 'known', 'discovered')
+                        ON CONFLICT(character_id, room_id) DO NOTHING
+                        """,
+                        (character_id, adjacent_room_id),
+                    )
+                for endpoint_room_id in visible_endpoints:
+                    self._queue_map_refresh_for_room(connection, endpoint_room_id)
         return RoomConnection(
             connection_id,
             room_id,
@@ -1902,7 +1943,7 @@ class Database:
         return room
 
     def ensure_character_location_knowledge(self, character_id: int) -> None:
-        """Repair legacy locations that predate player-specific map knowledge."""
+        """Ensure the current room and its presently visible exits are known."""
         with self._connect() as connection:
             character = connection.execute(
                 """
@@ -1925,6 +1966,10 @@ class Database:
             ).fetchone()
             if known is None:
                 self._record_room_visit(connection, character_id, room_id)
+            else:
+                self._record_visible_connections(
+                    connection, character_id, room_id
+                )
 
     def move_character(self, character_id: int, destination: str) -> Room:
         destination = destination.strip()
@@ -2969,6 +3014,13 @@ class Database:
             """,
             (room_id, room_id, character_id),
         )
+        Database._record_visible_connections(connection, character_id, room_id)
+
+    @staticmethod
+    def _record_visible_connections(
+        connection: sqlite3.Connection, character_id: int, room_id: str
+    ) -> None:
+        """Reveal every currently visible exit from a character's room."""
         connection_rows = connection.execute(
             """
             SELECT id, from_room_id, to_room_id, bidirectional
