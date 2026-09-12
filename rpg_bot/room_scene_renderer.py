@@ -13,15 +13,18 @@ from .dungeon import FocusedRoomView, KnowledgeState
 
 ROOM_PANEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "panel.png"
 PANEL_SIZE = (1448, 1086)
-SCENE_VIEWPORT = (143, 128, 1306, 600)
+SCENE_APERTURE_BOUNDS = (118, 105, 1330, 620)
 SCENE_UNDERLAY = 18
 SCENE_LAYER_BOUNDS = (
-    SCENE_VIEWPORT[0] - SCENE_UNDERLAY,
-    SCENE_VIEWPORT[1] - SCENE_UNDERLAY,
-    SCENE_VIEWPORT[2] + SCENE_UNDERLAY,
-    SCENE_VIEWPORT[3] + SCENE_UNDERLAY,
+    SCENE_APERTURE_BOUNDS[0] - SCENE_UNDERLAY,
+    SCENE_APERTURE_BOUNDS[1] - SCENE_UNDERLAY,
+    SCENE_APERTURE_BOUNDS[2] + SCENE_UNDERLAY,
+    SCENE_APERTURE_BOUNDS[3] + SCENE_UNDERLAY,
 )
-SCENE_CORNER_RADIUS = 48
+SCENE_CORNER_RADIUS = 64
+SCENE_INNER_SHADOW_WIDTH = 7
+TOP_FRAME_ORNAMENT = ((724, 20), (781, 76), (724, 139), (667, 76))
+BOTTOM_FRAME_ORNAMENT = ((724, 581), (770, 627), (724, 671), (678, 627))
 INFO_BOUNDS = (150, 670, 1298, 995)
 INFO_COLUMN_PROPORTIONS = (0.36, 0.22, 0.42)
 INFO_COLUMN_GAP = 28
@@ -110,12 +113,16 @@ def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> boo
         card.paste(scene_layer, (0, 0), scene_mask)
 
         frame_mask = Image.new("L", PANEL_SIZE, 255)
-        ImageDraw.Draw(frame_mask).rounded_rectangle(
-            SCENE_VIEWPORT,
+        frame_draw = ImageDraw.Draw(frame_mask)
+        frame_draw.rounded_rectangle(
+            SCENE_APERTURE_BOUNDS,
             radius=SCENE_CORNER_RADIUS,
             fill=0,
         )
+        frame_draw.polygon(TOP_FRAME_ORNAMENT, fill=255)
+        frame_draw.polygon(BOTTOM_FRAME_ORNAMENT, fill=255)
         card.paste(panel, (0, 0), frame_mask)
+        _draw_inner_scene_shadow(card)
     finally:
         scene.close()
         for image in (scene_layer, scene_mask, frame_mask):
@@ -124,13 +131,33 @@ def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> boo
     return True
 
 
+def _draw_inner_scene_shadow(card: Image.Image) -> None:
+    """Add a narrow dark lip where the foreground frame meets the scene."""
+    shadow = Image.new("RGBA", PANEL_SIZE, (0, 0, 0, 0))
+    try:
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            (
+                SCENE_APERTURE_BOUNDS[0] + 2,
+                SCENE_APERTURE_BOUNDS[1] + 2,
+                SCENE_APERTURE_BOUNDS[2] - 2,
+                SCENE_APERTURE_BOUNDS[3] - 2,
+            ),
+            radius=SCENE_CORNER_RADIUS - 2,
+            outline=(0, 0, 0, 72),
+            width=SCENE_INNER_SHADOW_WIDTH,
+        )
+        card.alpha_composite(shadow)
+    finally:
+        shadow.close()
+
+
 def _draw_scene_placeholder(
     draw: ImageDraw.ImageDraw,
     *,
     known: bool,
     unavailable: bool,
 ) -> None:
-    left, top, right, bottom = SCENE_VIEWPORT
+    left, top, right, bottom = SCENE_APERTURE_BOUNDS
     draw.rounded_rectangle(
         (left, top, right, bottom),
         radius=SCENE_CORNER_RADIUS,
