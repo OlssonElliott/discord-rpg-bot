@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from contextlib import closing
+from io import BytesIO
 from pathlib import Path
 import sqlite3
 from unittest.mock import Mock
@@ -11,6 +12,7 @@ from rpg_bot.database import Database
 from rpg_bot.discord_player_view import DiscordPlayerViewAdapter
 from rpg_bot.dungeon import ConnectionType, GameLock, KnowledgeSource, KnowledgeState
 from rpg_bot.player_view_service import PlayerViewMessageService, PlayerViewService
+from rpg_bot.room_images import RoomImageStore
 from rpg_bot.map_renderer import (
     MAP_BACKGROUND_PATH,
     MAP_HEIGHT,
@@ -223,6 +225,7 @@ class PlayerViewServiceTests(unittest.TestCase):
         self.assertEqual(view.rooms[0].knowledge_state, KnowledgeState.KNOWN)
         self.assertEqual(view.rooms[0].display_name, "? Chapel")
         self.assertIsNone(view.focused_room.scene_image_url)
+        self.assertIsNone(view.focused_room.scene_image_path)
         self.assertIsNone(view.focused_room.description)
 
     def test_known_room_hud_never_renders_hidden_details(self) -> None:
@@ -266,6 +269,78 @@ class PlayerViewServiceTests(unittest.TestCase):
         self.assertEqual(
             self.world.get_character_room(self.alice_id).id, self.chapel.id
         )
+        recalled = self.views.build_player_map(self.alice_id).focused_room
+        self.assertEqual(recalled.scene_image_path, self.entrance.scene_image_path)
+
+    def test_missing_focus_defaults_room_preview_to_current_room(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+        with self.database._connect() as connection:
+            connection.execute(
+                "UPDATE player_view_states SET focused_room_id = NULL "
+                "WHERE character_id = ?",
+                (self.alice_id,),
+            )
+
+        view = self.views.build_player_map(self.alice_id)
+
+        self.assertEqual(view.focused_room_id, self.entrance.id)
+        self.assertEqual(view.focused_room.room_id, self.entrance.id)
+        entrance = next(room for room in view.rooms if room.id == self.entrance.id)
+        self.assertTrue(entrance.is_focused)
+
+    def test_local_room_image_is_framed_for_a_visited_room(self) -> None:
+        store = RoomImageStore(Path(self.temporary_directory.name) / "room_images")
+        source = BytesIO()
+        Image.new("RGB", (800, 450), "purple").save(source, format="PNG")
+        key = store.save(source.getvalue(), "image/png")
+        self.database.set_room_scene_image(self.chapel.id, key)
+        self.world.place_character(self.alice_id, self.chapel.id)
+        view = self.views.build_player_map(self.alice_id)
+        adapter = DiscordPlayerViewAdapter(
+            self.database, self.views, Mock(), room_images=store
+        )
+
+        embeds, files, _controls = adapter._message_parts(view)
+        try:
+            self.assertEqual(embeds[1].image.url, "attachment://room-scene.webp")
+            self.assertEqual(files[1].filename, "room-scene.webp")
+            self.assertEqual(embeds[1].footer.text, "Visual memory")
+        finally:
+            for file in files:
+                file.close()
+
+    def test_visited_room_without_image_has_tasteful_fallback(self) -> None:
+        self.database.set_room_scene_image(self.chapel.id, None)
+        self.world.place_character(self.alice_id, self.chapel.id)
+        view = self.views.build_player_map(self.alice_id)
+        adapter = DiscordPlayerViewAdapter(self.database, self.views, Mock())
+
+        embeds, files, _controls = adapter._message_parts(view)
+        try:
+            self.assertIsNone(embeds[1].image.url)
+            self.assertEqual(
+                embeds[1].footer.text, "No visual record available."
+            )
+        finally:
+            for file in files:
+                file.close()
+
+    def test_missing_room_image_file_does_not_break_player_view(self) -> None:
+        self.database.set_room_scene_image(self.chapel.id, f"{'0' * 32}.webp")
+        self.world.place_character(self.alice_id, self.chapel.id)
+        view = self.views.build_player_map(self.alice_id)
+        adapter = DiscordPlayerViewAdapter(self.database, self.views, Mock())
+
+        embeds, files, _controls = adapter._message_parts(view)
+        try:
+            self.assertIsNone(embeds[1].image.url)
+            self.assertEqual(
+                embeds[1].footer.text,
+                "The remembered scene is currently unavailable.",
+            )
+        finally:
+            for file in files:
+                file.close()
 
     def test_cross_floor_connection_keeps_both_floor_ids(self) -> None:
         self.world.place_character(self.alice_id, self.chapel.id)
@@ -320,6 +395,19 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         self.world.create_item("key", "Iron Key")
         self.world.place_item(InventoryHolder.room(self.entrance.id), "key")
+
+        self.assertEqual(
+            self.database.pending_player_map_refreshes(), (self.alice_id,)
+        )
+
+    def test_room_image_change_refreshes_a_previously_visited_focus(self) -> None:
+        self.views.bind_discord_channel(self.alice_id, 77)
+        self.world.place_character(self.alice_id, self.entrance.id)
+        self.world.move_character(self.alice_id, "east")
+        self.views.focus_room(self.alice_id, self.entrance.id)
+        self.database.clear_player_map_refresh(self.alice_id)
+
+        self.database.set_room_scene_image(self.entrance.id, "memory.webp")
 
         self.assertEqual(
             self.database.pending_player_map_refreshes(), (self.alice_id,)

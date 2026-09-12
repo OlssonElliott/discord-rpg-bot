@@ -1859,6 +1859,26 @@ class Database:
         assert room is not None
         return room
 
+    def set_room_scene_image(
+        self, room_id: str, scene_image_path: str | None
+    ) -> Room:
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            connection.execute(
+                """
+                UPDATE rooms
+                SET scene_image_path = ?, scene_image_url = NULL
+                WHERE id = ?
+                """,
+                (scene_image_path, room_id),
+            )
+            self._queue_map_refresh_for_room(
+                connection, room_id, include_focused=True
+            )
+        room = self.get_room(room_id)
+        assert room is not None
+        return room
+
     def ensure_character_location_knowledge(self, character_id: int) -> None:
         """Repair legacy locations that predate player-specific map knowledge."""
         with self._connect() as connection:
@@ -2292,7 +2312,11 @@ class Database:
 
     @classmethod
     def _queue_map_refresh_for_room(
-        cls, connection: sqlite3.Connection, room_id: str
+        cls,
+        connection: sqlite3.Connection,
+        room_id: str,
+        *,
+        include_focused: bool = False,
     ) -> None:
         rows = connection.execute(
             """
@@ -2300,11 +2324,14 @@ class Database:
             FROM characters
             JOIN player_view_states
               ON player_view_states.character_id = characters.id
-            WHERE characters.current_room_id = ?
+            WHERE (
+                    characters.current_room_id = ?
+                    OR (? = 1 AND player_view_states.focused_room_id = ?)
+                  )
               AND characters.is_archived = 0
               AND player_view_states.discord_channel_id IS NOT NULL
             """,
-            (room_id,),
+            (room_id, int(include_focused), room_id),
         ).fetchall()
         for row in rows:
             cls._queue_player_map_refresh(connection, row["id"])

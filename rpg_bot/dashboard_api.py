@@ -1,11 +1,21 @@
 """Framework-neutral JSON API for the local DM dashboard."""
 
 from dataclasses import asdict
+from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import quote
 
 from .inventory import ItemTemplate, ItemType, WeaponGrip
-from .world import AreaGraph, EntityKind, InventoryHolder, RoomEditorNode, WorldError
+from .room_images import InvalidRoomImageError, RoomImageStore
+from .world import (
+    AreaGraph,
+    EntityKind,
+    InventoryHolder,
+    Room,
+    RoomEditorNode,
+    WorldError,
+)
 from .world_service import WorldService
 
 
@@ -22,13 +32,23 @@ def _stack_data(stack: object) -> JsonObject:
     }
 
 
-def _node_data(node: RoomEditorNode) -> JsonObject:
+def _node_data(node: RoomEditorNode, room_images: RoomImageStore) -> JsonObject:
     room = node.room
+    stored_image = room_images.path_for(room.scene_image_path)
+    if stored_image is not None:
+        image_version = stored_image.stem
+        room_image_url = (
+            f"/api/rooms/{quote(room.id, safe='')}/image"
+            f"?version={quote(image_version, safe='')}"
+        )
+    else:
+        room_image_url = room.scene_image_url
     return {
         "id": room.id,
         "area_id": room.area_id,
         "name": room.name,
         "description": room.description or "",
+        "room_image_url": room_image_url,
         "position": {"x": node.x, "y": node.y},
         "counts": {
             "players": len(room.characters),
@@ -47,14 +67,14 @@ def _node_data(node: RoomEditorNode) -> JsonObject:
     }
 
 
-def _graph_data(graph: AreaGraph) -> JsonObject:
+def _graph_data(graph: AreaGraph, room_images: RoomImageStore) -> JsonObject:
     return {
         "area": {
             "id": graph.area.id,
             "name": graph.area.name,
             "description": graph.area.description or "",
         },
-        "nodes": [_node_data(node) for node in graph.nodes],
+        "nodes": [_node_data(node, room_images) for node in graph.nodes],
         "connections": [asdict(connection) for connection in graph.connections],
     }
 
@@ -109,8 +129,44 @@ def _template_data(template: ItemTemplate) -> JsonObject:
 class DashboardAPI:
     """Translate HTTP-shaped requests into deterministic service calls."""
 
-    def __init__(self, world: WorldService) -> None:
+    def __init__(
+        self,
+        world: WorldService,
+        room_images: RoomImageStore | None = None,
+    ) -> None:
         self.world = world
+        self.room_images = room_images or RoomImageStore()
+
+    def upload_room_image(
+        self,
+        room_id: str,
+        content: bytes,
+        content_type: str,
+        original_filename: str | None = None,
+    ) -> ApiResponse:
+        """Validate, persist, and atomically associate a room image."""
+        room = self.world.get_room(room_id)
+        if room is None:
+            return 404, {"error": f"Room '{room_id}' does not exist."}
+        try:
+            new_key = self.room_images.save(
+                content, content_type, original_filename
+            )
+            try:
+                updated = self.world.set_room_scene_image(room_id, new_key)
+            except Exception:
+                self.room_images.remove(new_key)
+                raise
+            self.room_images.remove(room.scene_image_path)
+            return 200, self._room_image_data(updated)
+        except (InvalidRoomImageError, ValueError, WorldError) as error:
+            return 400, {"error": str(error)}
+
+    def room_image_path(self, room_id: str) -> Path | None:
+        room = self.world.get_room(room_id)
+        if room is None:
+            return None
+        return self.room_images.path_for(room.scene_image_path)
 
     def handle(
         self,
@@ -179,7 +235,9 @@ class DashboardAPI:
 
         match = re.fullmatch(r"/api/areas/([^/]+)/graph", path)
         if method == "GET" and match:
-            return 200, _graph_data(self.world.area_graph(match.group(1)))
+            return 200, _graph_data(
+                self.world.area_graph(match.group(1)), self.room_images
+            )
 
         match = re.fullmatch(r"/api/areas/([^/]+)/rooms", path)
         if method == "POST" and match:
@@ -193,6 +251,15 @@ class DashboardAPI:
             )
             return 201, {"id": room.id}
 
+        match = re.fullmatch(r"/api/rooms/([^/]+)/image", path)
+        if match and method == "DELETE":
+            room = self.world.get_room(match.group(1))
+            if room is None:
+                return 404, {"error": f"Room '{match.group(1)}' does not exist."}
+            self.world.set_room_scene_image(room.id, None)
+            self.room_images.remove(room.scene_image_path)
+            return 200, {"id": room.id, "room_image_url": None}
+
         match = re.fullmatch(r"/api/rooms/([^/]+)", path)
         if match and method == "PATCH":
             room = self.world.update_room(
@@ -202,7 +269,10 @@ class DashboardAPI:
             )
             return 200, {"id": room.id, "name": room.name, "description": room.description or ""}
         if match and method == "DELETE":
+            room = self.world.get_room(match.group(1))
             self.world.delete_room(match.group(1))
+            if room is not None:
+                self.room_images.remove(room.scene_image_path)
             return 200, {"deleted": match.group(1)}
 
         match = re.fullmatch(r"/api/rooms/([^/]+)/position", path)
@@ -291,6 +361,18 @@ class DashboardAPI:
             return 200, {"deleted": True}
 
         return 404, {"error": "Not found."}
+
+    def _room_image_data(self, room: Room) -> JsonObject:
+        path = self.room_images.path_for(room.scene_image_path)
+        return {
+            "id": room.id,
+            "room_image_url": (
+                f"/api/rooms/{quote(room.id, safe='')}/image"
+                f"?version={quote(path.stem, safe='')}"
+                if path is not None
+                else room.scene_image_url
+            ),
+        }
 
     @staticmethod
     def _text(body: JsonObject, field: str) -> str:

@@ -1,10 +1,14 @@
+from io import BytesIO
 import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from rpg_bot.dashboard_api import DashboardAPI
 from rpg_bot.database import Database
 from rpg_bot.inventory import ItemCatalog
+from rpg_bot.room_images import RoomImageStore
 from rpg_bot.world import InventoryHolder
 from rpg_bot.world_service import WorldService
 
@@ -17,7 +21,10 @@ class DashboardAPITests(unittest.TestCase):
         self.catalog_path = Path(self.temp_directory.name) / "items.json"
         self.catalog_path.write_text("[]\n", encoding="utf-8")
         self.world = WorldService(self.database, ItemCatalog.load(self.catalog_path))
-        self.api = DashboardAPI(self.world)
+        self.room_images = RoomImageStore(
+            Path(self.temp_directory.name) / "room_images"
+        )
+        self.api = DashboardAPI(self.world, self.room_images)
 
     def tearDown(self) -> None:
         self.temp_directory.cleanup()
@@ -64,6 +71,74 @@ class DashboardAPITests(unittest.TestCase):
             [(exit.name, exit.destination_room_id) for exit in self.world.get_room("hall").exits],
             [("north", "entrance")],
         )
+
+    def test_room_image_can_be_uploaded_replaced_persisted_and_removed(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+
+        first_status, first = self.api.upload_room_image(
+            "hall", self._image_bytes("red"), "image/png"
+        )
+        first_key = self.world.get_room("hall").scene_image_path
+        first_path = self.room_images.path_for(first_key)
+
+        self.assertEqual(first_status, 200)
+        self.assertIn("/api/rooms/hall/image?version=", first["room_image_url"])
+        self.assertIsNotNone(first_path)
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        self.assertEqual(reopened.get_room("hall").scene_image_path, first_key)
+
+        second_status, _ = self.api.upload_room_image(
+            "hall", self._image_bytes("blue"), "image/jpeg"
+        )
+        second_key = self.world.get_room("hall").scene_image_path
+
+        self.assertEqual(second_status, 200)
+        self.assertNotEqual(second_key, first_key)
+        self.assertIsNone(self.room_images.path_for(first_key))
+        self.assertIsNotNone(self.room_images.path_for(second_key))
+
+        remove_status, removed = self.api.handle(
+            "DELETE", "/api/rooms/hall/image"
+        )
+
+        self.assertEqual(remove_status, 200)
+        self.assertIsNone(removed["room_image_url"])
+        self.assertIsNone(self.world.get_room("hall").scene_image_path)
+        self.assertIsNone(self.room_images.path_for(second_key))
+
+    def test_room_image_rejects_invalid_type_and_content(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+
+        wrong_type_status, wrong_type = self.api.upload_room_image(
+            "hall", self._image_bytes("red"), "text/plain"
+        )
+        fake_image_status, fake_image = self.api.upload_room_image(
+            "hall", b"not an image", "image/png"
+        )
+
+        self.assertEqual(wrong_type_status, 400)
+        self.assertIn("PNG, JPEG, or WebP", wrong_type["error"])
+        self.assertEqual(fake_image_status, 400)
+        self.assertIn("not a readable", fake_image["error"])
+        self.assertIsNone(self.world.get_room("hall").scene_image_path)
+
+    @staticmethod
+    def _image_bytes(colour: str) -> bytes:
+        output = BytesIO()
+        image_format = "JPEG" if colour == "blue" else "PNG"
+        Image.new("RGB", (640, 360), colour).save(output, format=image_format)
+        return output.getvalue()
 
     def test_connection_direction_can_be_changed_through_api(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})

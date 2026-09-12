@@ -89,6 +89,11 @@ class WorldService:
     ) -> Room:
         return self.database.update_room(room_id, name, description)
 
+    def set_room_scene_image(
+        self, room_id: str, scene_image_path: str | None
+    ) -> Room:
+        return self.database.set_room_scene_image(room_id, scene_image_path)
+
     def delete_room(self, room_id: str) -> None:
         self.database.delete_room(room_id)
 

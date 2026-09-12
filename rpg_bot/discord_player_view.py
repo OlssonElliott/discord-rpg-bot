@@ -9,6 +9,8 @@ from .database import Database
 from .dungeon import KnowledgeState, PlayerMap
 from .map_renderer import render_player_map
 from .player_view_service import PlayerViewService
+from .room_images import RoomImageStore
+from .room_scene_renderer import render_room_scene_panel
 
 
 def private_map_channel_name(character_name: str, character_id: int) -> str:
@@ -24,10 +26,12 @@ class DiscordPlayerViewAdapter:
         database: Database,
         views: PlayerViewService,
         client: discord.Client,
+        room_images: RoomImageStore | None = None,
     ) -> None:
         self.database = database
         self.views = views
         self.client = client
+        self.room_images = room_images or RoomImageStore()
 
     async def edit_view_message(
         self, channel_id: int, message_id: int, view: PlayerMap
@@ -149,16 +153,30 @@ class DiscordPlayerViewAdapter:
                     room_embed.set_image(url=focused.scene_image_url)
                     room_embed.set_footer(text="Visual memory")
                 elif focused.scene_image_path:
-                    scene_path = Path(focused.scene_image_path)
+                    scene_path = self.room_images.path_for(
+                        focused.scene_image_path
+                    ) or Path(focused.scene_image_path)
                     if scene_path.is_file():
-                        filename = f"room-scene{scene_path.suffix or '.png'}"
-                        files.append(discord.File(scene_path, filename=filename))
+                        framed_scene = render_room_scene_panel(scene_path)
+                        filename = (
+                            "room-scene.webp"
+                            if framed_scene is not None
+                            else f"room-scene{scene_path.suffix or '.png'}"
+                        )
+                        files.append(
+                            discord.File(
+                                framed_scene or scene_path,
+                                filename=filename,
+                            )
+                        )
                         room_embed.set_image(url=f"attachment://{filename}")
                         room_embed.set_footer(text="Visual memory")
                     else:
                         room_embed.set_footer(
                             text="The remembered scene is currently unavailable."
                         )
+                else:
+                    room_embed.set_footer(text="No visual record available.")
             embeds.append(room_embed)
         return embeds, files, self.controls(view)
 

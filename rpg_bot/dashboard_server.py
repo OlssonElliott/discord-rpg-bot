@@ -3,39 +3,75 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from .dashboard_api import DashboardAPI
 from .database import Database
+from .room_images import MAX_ROOM_IMAGE_BYTES
 from .world_service import WorldService
 
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     api: DashboardAPI
 
+    def _send_json(self, status: int, payload: object) -> None:
+        encoded = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Access-Control-Allow-Origin", "http://localhost:3000")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def _handle_api(self) -> None:
+        path = urlsplit(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
+        image_match = re.fullmatch(r"/api/rooms/([^/]+)/image", path)
+        if self.command == "POST" and image_match:
+            if length > MAX_ROOM_IMAGE_BYTES:
+                self.close_connection = True
+                self._send_json(413, {"error": "Room images may be at most 8 MB."})
+                return
+            status, payload = self.api.upload_room_image(
+                unquote(image_match.group(1)),
+                self.rfile.read(length),
+                self.headers.get("Content-Type", ""),
+                unquote(self.headers.get("X-File-Name", "")) or None,
+            )
+            self._send_json(status, payload)
+            return
         try:
             body: dict[str, Any] = (
                 json.loads(self.rfile.read(length)) if length else {}
             )
             if not isinstance(body, dict):
                 raise ValueError("Request body must be a JSON object.")
-            status, payload = self.api.handle(self.command, self.path, body)
+            status, payload = self.api.handle(self.command, path, body)
         except (json.JSONDecodeError, ValueError) as error:
             status, payload = 400, {"error": str(error)}
-        encoded = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header("Access-Control-Allow-Origin", "http://localhost:3000")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-        self.end_headers()
-        self.wfile.write(encoded)
+        self._send_json(status, payload)
 
     def do_GET(self) -> None:
-        if self.path.startswith("/api/"):
+        path = urlsplit(self.path).path
+        image_match = re.fullmatch(r"/api/rooms/([^/]+)/image", path)
+        if image_match:
+            image_path = self.api.room_image_path(unquote(image_match.group(1)))
+            if image_path is None:
+                self._send_json(404, {"error": "Room image not found."})
+                return
+            content = image_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/webp")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.send_header("Access-Control-Allow-Origin", "http://localhost:3000")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(content)
+        elif path.startswith("/api/"):
             self._handle_api()
         else:
             self.send_error(404)
@@ -52,7 +88,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "http://localhost:3000")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header(
+            "Access-Control-Allow-Headers", "Content-Type, X-File-Name"
+        )
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         self.end_headers()
 

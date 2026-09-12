@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Image from 'next/image';
 import {
   Background,
   Controls,
@@ -20,12 +21,14 @@ import '@xyflow/react/dist/style.css';
 import {
   Box,
   CircleAlert,
+  ImageIcon,
   Map,
   Plus,
   Save,
   Skull,
   Sparkles,
   Trash2,
+  Upload,
   Users,
 } from 'lucide-react';
 import {
@@ -53,7 +56,9 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import {
   api,
+  apiAssetUrl,
   identifier,
+  uploadRoomImage,
   type AreaGraphData,
   type AreaSummary,
   type CatalogItem,
@@ -434,7 +439,7 @@ export function DungeonEditor() {
         <aside className="inspector">
           {selectedRoom ? (
             <RoomInspector
-              key={`${selectedRoom.id}:${selectedRoom.name}:${selectedRoom.description}`}
+              key={`${selectedRoom.id}:${selectedRoom.name}:${selectedRoom.description}:${selectedRoom.room_image_url || ''}`}
               room={selectedRoom}
               connections={graph?.connections ?? []}
               rooms={graph?.nodes ?? []}
@@ -442,6 +447,14 @@ export function DungeonEditor() {
               onSave={(name, description) => mutate(
                 () => api(`/rooms/${selectedRoom.id}`, { method: 'PATCH', body: JSON.stringify({ name, description }) }),
                 'Location saved',
+              )}
+              onUploadImage={(file) => mutate(
+                () => uploadRoomImage(selectedRoom.id, file),
+                'Room image saved',
+              )}
+              onRemoveImage={() => mutate(
+                () => api(`/rooms/${selectedRoom.id}/image`, { method: 'DELETE' }),
+                'Room image removed',
               )}
               onAddContent={setContentKind}
               onPlaceCharacter={(characterId) => mutate(
@@ -554,12 +567,14 @@ export function DungeonEditor() {
   );
 }
 
-function RoomInspector({ room, connections, rooms, characters, onSave, onAddContent, onPlaceCharacter, onDelete, onSelectConnection }: {
+function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onPlaceCharacter, onDelete, onSelectConnection }: {
   room: RoomData;
   connections: ConnectionData[];
   rooms: RoomData[];
   characters: CharacterSummary[];
   onSave: (name: string, description: string) => Promise<boolean>;
+  onUploadImage: (file: File) => Promise<boolean>;
+  onRemoveImage: () => Promise<boolean>;
   onAddContent: (kind: ContentKind) => void;
   onPlaceCharacter: (characterId: number) => Promise<boolean>;
   onDelete: () => void;
@@ -568,6 +583,9 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onAddCont
   const [name, setName] = useState(room.name);
   const [description, setDescription] = useState(room.description);
   const [characterId, setCharacterId] = useState('');
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const imageInput = useRef<HTMLInputElement>(null);
   const attached = connections.filter((connection) => connection.source_room_id === room.id);
   const roomName = (id: string) => rooms.find((item) => item.id === id)?.name || id;
   const selectedCharacter = characters.find((character) => String(character.id) === characterId);
@@ -582,6 +600,80 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onAddCont
         <label htmlFor="room-description">Description</label>
         <Textarea id="room-description" value={description} onChange={(event) => setDescription(event.target.value)} />
         <Button size="sm" onClick={() => void onSave(name, description)}><Save /> Save details</Button>
+      </div>
+      <div className="inspector__section room-image-editor">
+        <h3>Room image</h3>
+        {room.room_image_url ? (
+          <div className="room-image-preview">
+            <Image
+              src={apiAssetUrl(room.room_image_url)}
+              alt={`Visual preview for ${room.name}`}
+              fill
+              sizes="340px"
+              unoptimized
+              onLoad={() => setImageError('')}
+              onError={() => setImageError('The stored image could not be previewed.')}
+            />
+          </div>
+        ) : (
+          <div className="room-image-empty"><ImageIcon size={22} /><span>No visual record uploaded</span></div>
+        )}
+        <input
+          ref={imageInput}
+          className="room-image-input"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          disabled={imageBusy}
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+              setImageError('Choose a PNG, JPEG, or WebP image.');
+              event.target.value = '';
+              return;
+            }
+            if (file.size > 8 * 1024 * 1024) {
+              setImageError('Room images may be at most 8 MB.');
+              event.target.value = '';
+              return;
+            }
+            setImageBusy(true);
+            setImageError('');
+            const saved = await onUploadImage(file);
+            if (!saved) setImageError('The room image could not be saved.');
+            setImageBusy(false);
+            event.target.value = '';
+          }}
+        />
+        <div className="room-image-actions">
+          <Button
+            type="button"
+            size="sm"
+            disabled={imageBusy}
+            onClick={() => imageInput.current?.click()}
+          >
+            <Upload /> {imageBusy ? 'Uploading…' : room.room_image_url ? 'Replace image' : 'Upload image'}
+          </Button>
+          {room.room_image_url && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={imageBusy}
+              onClick={async () => {
+                setImageBusy(true);
+                setImageError('');
+                const removed = await onRemoveImage();
+                if (!removed) setImageError('The room image could not be removed.');
+                setImageBusy(false);
+              }}
+            >
+              <Trash2 /> Remove
+            </Button>
+          )}
+        </div>
+        {imageError && <p className="room-image-error">{imageError}</p>}
+        <p className="room-image-help">PNG, JPEG, or WebP · maximum 8 MB</p>
       </div>
       <div className="inspector__section">
         <h3>Outgoing connections <span>{attached.length}</span></h3>
