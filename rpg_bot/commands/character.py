@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Mapping
 import logging
 import re
+from types import SimpleNamespace
 
 import discord
 from discord import app_commands
@@ -1097,6 +1098,37 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
                 self._dedicated_inventory_view(character),
                 message_id=state.discord_message_id,
             )
+
+    async def ensure_required_player_channels(self, guild) -> None:
+        """Recreate missing private HUD channels for active guild members."""
+        if self.bot is None:
+            return
+        for character in self.database.list_all_characters():
+            if (
+                character.character_id is None
+                or not character.is_active
+                or character.is_archived
+            ):
+                continue
+            sheet_state = self.database.get_character_sheet_view_state(
+                character.character_id
+            )
+            if sheet_state is not None and sheet_state.guild_id != guild.id:
+                continue
+            member = guild.get_member(character.discord_user_id)
+            if member is None and hasattr(guild, "fetch_member"):
+                try:
+                    member = await guild.fetch_member(character.discord_user_id)
+                except (discord.NotFound, discord.HTTPException):
+                    member = None
+            if member is None:
+                continue
+            interaction = SimpleNamespace(
+                guild=guild,
+                user=member,
+                client=self.bot,
+            )
+            await self.active_character_changed(interaction, None, character)
 
 
     async def active_character_changed(

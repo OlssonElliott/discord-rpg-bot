@@ -823,6 +823,11 @@ async def _get_or_create_game_channel(interaction: discord.Interaction):
     guild = getattr(interaction, "guild", None)
     if guild is None:
         return None
+    return await ensure_game_channel(guild)
+
+
+async def ensure_game_channel(guild):
+    """Ensure the guild has its shared public game-event channel."""
     for channel in getattr(guild, "text_channels", ()):
         if getattr(channel, "name", "").casefold() == GAME_CHANNEL_NAME:
             return channel
