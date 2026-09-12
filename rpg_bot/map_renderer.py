@@ -1,7 +1,9 @@
 """Pillow renderer for already-filtered player dungeon maps."""
 
 from collections import Counter
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from random import Random
 
 from PIL import Image, ImageDraw, ImageFont
@@ -14,13 +16,15 @@ MAP_HEIGHT = 1000
 PADDING = 80
 MIN_ROOM_WIDTH = 250
 MIN_ROOM_HEIGHT = 160
+MAP_BACKGROUND_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "background.png"
+)
 
 
 def render_player_map(view: PlayerMap) -> BytesIO:
     """Render only the rooms and connections contained in ``view``."""
-    image = Image.new("RGB", (MAP_WIDTH, MAP_HEIGHT), "#15120f")
+    image = _map_canvas()
     draw = ImageDraw.Draw(image)
-    _dark_fantasy_backdrop(draw)
     title_font = _font(42, heading=True)
     room_font = _font(30, heading=True)
     unknown_room_font = _font(27, heading=True)
@@ -174,8 +178,31 @@ def render_player_map(view: PlayerMap) -> BytesIO:
     return _png(image)
 
 
+@lru_cache(maxsize=1)
+def _loaded_map_background() -> Image.Image | None:
+    """Load and size the packaged map background once per process."""
+    try:
+        with Image.open(MAP_BACKGROUND_PATH) as source:
+            return source.convert("RGB").resize(
+                (MAP_WIDTH, MAP_HEIGHT), Image.Resampling.LANCZOS
+            )
+    except (OSError, ValueError):
+        return None
+
+
+def _map_canvas() -> Image.Image:
+    """Return a fresh map canvas, falling back if the asset is unavailable."""
+    background = _loaded_map_background()
+    if background is not None:
+        return background.copy()
+
+    image = Image.new("RGB", (MAP_WIDTH, MAP_HEIGHT), "#15120f")
+    _dark_fantasy_backdrop(ImageDraw.Draw(image))
+    return image
+
+
 def _dark_fantasy_backdrop(draw: ImageDraw.ImageDraw) -> None:
-    """Paint a restrained stone-and-brass frame without external assets."""
+    """Paint a fallback stone-and-brass frame if the asset is unavailable."""
     for y in range(MAP_HEIGHT):
         shade = 20 + int(8 * y / MAP_HEIGHT)
         draw.line((0, y, MAP_WIDTH, y), fill=(shade, shade - 3, shade - 7))

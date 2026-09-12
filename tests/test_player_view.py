@@ -12,11 +12,13 @@ from rpg_bot.discord_player_view import DiscordPlayerViewAdapter
 from rpg_bot.dungeon import ConnectionType, GameLock, KnowledgeSource, KnowledgeState
 from rpg_bot.player_view_service import PlayerViewMessageService, PlayerViewService
 from rpg_bot.map_renderer import (
+    MAP_BACKGROUND_PATH,
     MAP_HEIGHT,
     MAP_WIDTH,
     MIN_ROOM_HEIGHT,
     MIN_ROOM_WIDTH,
     _layout,
+    _map_canvas,
     render_player_map,
 )
 from rpg_bot.world import InvalidMovementError, InventoryHolder
@@ -115,6 +117,18 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         with Image.open(rendered) as image:
             self.assertEqual(image.size, (1600, 1000))
+
+    def test_hud_uses_packaged_map_background(self) -> None:
+        self.assertTrue(MAP_BACKGROUND_PATH.is_file())
+        with Image.open(MAP_BACKGROUND_PATH) as source:
+            expected = source.convert("RGB").resize(
+                (MAP_WIDTH, MAP_HEIGHT), Image.Resampling.LANCZOS
+            )
+
+        canvas = _map_canvas()
+
+        self.assertEqual(canvas.getpixel((800, 500)), expected.getpixel((800, 500)))
+        self.assertEqual(canvas.getpixel((20, 20)), expected.getpixel((20, 20)))
 
     def test_hud_centers_current_room_when_known_bounds_allow_it(self) -> None:
         self.world.place_character(self.alice_id, self.entrance.id)
