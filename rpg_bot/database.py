@@ -1489,27 +1489,49 @@ class Database:
             destination_room = self._require_room(connection, destination_room_id)
             if source_room["area_id"] != destination_room["area_id"]:
                 raise InvalidMovementError("Rooms in different areas cannot be connected.")
-            duplicate = connection.execute(
+            duplicate_destination = connection.execute(
                 """
                 SELECT 1 FROM room_exits
-                WHERE room_id = ? AND (name = ? COLLATE NOCASE OR destination_room_id = ?)
+                WHERE room_id = ? AND destination_room_id = ?
                 """,
-                (room_id, exit_name, destination_room_id),
+                (room_id, destination_room_id),
             ).fetchone()
-            if duplicate:
-                raise InvalidMovementError("That room connection already exists.")
+            if duplicate_destination:
+                raise InvalidMovementError("Those rooms are already connected.")
+            duplicate_name = connection.execute(
+                """
+                SELECT 1 FROM room_exits
+                WHERE room_id = ? AND name = ? COLLATE NOCASE
+                """,
+                (room_id, exit_name),
+            ).fetchone()
+            if duplicate_name:
+                raise InvalidMovementError(
+                    f"This room already has an exit named '{exit_name}'. "
+                    "Choose a different exit name."
+                )
             if return_exit_name is not None:
-                reverse_duplicate = connection.execute(
+                reverse_destination = connection.execute(
                     """
                     SELECT 1 FROM room_exits
-                    WHERE room_id = ? AND (
-                        name = ? COLLATE NOCASE OR destination_room_id = ?
-                    )
+                    WHERE room_id = ? AND destination_room_id = ?
                     """,
-                    (destination_room_id, return_exit_name, room_id),
+                    (destination_room_id, room_id),
                 ).fetchone()
-                if reverse_duplicate:
-                    raise InvalidMovementError("That return connection already exists.")
+                if reverse_destination:
+                    raise InvalidMovementError("Those rooms are already connected.")
+                reverse_name = connection.execute(
+                    """
+                    SELECT 1 FROM room_exits
+                    WHERE room_id = ? AND name = ? COLLATE NOCASE
+                    """,
+                    (destination_room_id, return_exit_name),
+                ).fetchone()
+                if reverse_name:
+                    raise InvalidMovementError(
+                        f"The destination already has an exit named "
+                        f"'{return_exit_name}'. Choose a different return exit name."
+                    )
             connection.execute(
                 """
                 INSERT INTO room_exits (room_id, name, destination_room_id)

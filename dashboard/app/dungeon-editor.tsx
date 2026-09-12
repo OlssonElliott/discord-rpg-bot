@@ -107,6 +107,19 @@ function edgeId(connection: ConnectionData): string {
 
 type CardinalHandle = 'top' | 'right' | 'bottom' | 'left';
 
+const EXIT_NAME_BY_HANDLE: Record<CardinalHandle, string> = {
+  top: 'north',
+  right: 'east',
+  bottom: 'south',
+  left: 'west',
+};
+
+function exitNameForHandle(handle: string | null | undefined): string {
+  return handle && handle in EXIT_NAME_BY_HANDLE
+    ? EXIT_NAME_BY_HANDLE[handle as CardinalHandle]
+    : 'passage';
+}
+
 function connectionHandles(
   source: { x: number; y: number } | undefined,
   target: { x: number; y: number } | undefined,
@@ -376,11 +389,22 @@ export function DungeonEditor() {
 
   const onConnect = useCallback((candidate: Connection) => {
     if (candidate.source && candidate.target && candidate.source !== candidate.target) {
+      const existing = graph?.connections.find((item) =>
+        (item.source_room_id === candidate.source && item.destination_room_id === candidate.target)
+        || (item.source_room_id === candidate.target && item.destination_room_id === candidate.source),
+      );
+      if (existing) {
+        setSelectedEdgeId(edgeId(existing));
+        setSelectedRoomId(null);
+        setNotice('Those locations are already connected');
+        window.setTimeout(() => setNotice(''), 1800);
+        return;
+      }
       setConnection(candidate);
     } else {
       setError('A location cannot connect to itself.');
     }
-  }, []);
+  }, [graph]);
 
   const savePosition = useCallback(async (_: unknown, node: Node) => {
     try {
@@ -556,7 +580,7 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
-      <ConnectionDialog connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, bidirectional, returnExitName) => {
+      <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
           () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
@@ -834,9 +858,9 @@ function EditorDialog({ open, onOpenChange, title, description, name, setName, d
 }
 
 function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, bidirectional: boolean, returnName: string) => Promise<void> }) {
-  const [name, setName] = useState('passage');
+  const [name, setName] = useState(() => exitNameForHandle(connection?.sourceHandle));
   const [bidirectional, setBidirectional] = useState(true);
-  const [returnName, setReturnName] = useState('passage');
+  const [returnName, setReturnName] = useState(() => exitNameForHandle(connection?.targetHandle));
   return (
     <Dialog open={Boolean(connection)} onOpenChange={onOpenChange}>
       <DialogContent>

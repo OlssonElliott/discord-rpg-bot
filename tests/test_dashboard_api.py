@@ -219,6 +219,54 @@ class DashboardAPITests(unittest.TestCase):
         self.assertIsNone(created["return_exit_name"])
         self.assertEqual(self.world.get_room("hall").exits, ())
 
+    def test_connection_reports_exit_name_collision_separately_from_room_pair(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("start", "next", "long_hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id, "x": 0, "y": 0},
+            )
+        self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "start",
+                "destination_room_id": "next",
+                "exit_name": "passage",
+            },
+        )
+
+        collision_status, collision = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "long_hall",
+                "destination_room_id": "next",
+                "exit_name": "east",
+                "return_exit_name": "passage",
+            },
+        )
+        self.assertEqual(collision_status, 400)
+        self.assertIn(
+            "destination already has an exit named 'passage'",
+            collision["error"],
+        )
+
+        status, created = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "long_hall",
+                "destination_room_id": "next",
+                "exit_name": "east",
+                "return_exit_name": "west",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["exit_name"], "east")
+        self.assertEqual(created["return_exit_name"], "west")
+
     def test_rejected_connection_does_not_appear_in_graph(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "one", "name": "One"})
         self.api.handle("POST", "/api/areas", {"id": "two", "name": "Two"})
