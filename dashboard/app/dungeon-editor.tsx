@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import {
   Background,
+  ConnectionMode,
   Controls,
   Handle,
   MarkerType,
@@ -73,7 +74,10 @@ type ContentKind = 'enemy' | 'item' | 'container';
 function RoomNode({ data, selected }: NodeProps<Node<RoomNodeData>>) {
   return (
     <article className={`room-node ${selected ? 'room-node--selected' : ''}`}>
-      <Handle type="target" position={Position.Top} />
+      <Handle id="top" type="source" position={Position.Top} />
+      <Handle id="right" type="source" position={Position.Right} />
+      <Handle id="bottom" type="source" position={Position.Bottom} />
+      <Handle id="left" type="source" position={Position.Left} />
       <div className="room-node__eyebrow">Location</div>
       <h3>{data.name}</h3>
       <div className="room-node__stats" aria-label="Room contents">
@@ -82,7 +86,6 @@ function RoomNode({ data, selected }: NodeProps<Node<RoomNodeData>>) {
         <span title="Loose items"><Sparkles size={13} />{data.counts.items}</span>
         <span title="Containers"><Box size={13} />{data.counts.containers}</span>
       </div>
-      <Handle type="source" position={Position.Bottom} />
     </article>
   );
 }
@@ -102,17 +105,45 @@ function edgeId(connection: ConnectionData): string {
   return connection.connection_id || `${connection.source_room_id}::${connection.exit_name}`;
 }
 
+type CardinalHandle = 'top' | 'right' | 'bottom' | 'left';
+
+function connectionHandles(
+  source: { x: number; y: number } | undefined,
+  target: { x: number; y: number } | undefined,
+): { sourceHandle?: CardinalHandle; targetHandle?: CardinalHandle } {
+  if (!source || !target) return {};
+  const horizontal = Math.abs(target.x - source.x) > Math.abs(target.y - source.y);
+  if (horizontal) {
+    return target.x >= source.x
+      ? { sourceHandle: 'right', targetHandle: 'left' }
+      : { sourceHandle: 'left', targetHandle: 'right' };
+  }
+  return target.y >= source.y
+    ? { sourceHandle: 'bottom', targetHandle: 'top' }
+    : { sourceHandle: 'top', targetHandle: 'bottom' };
+}
+
 function graphEdges(graph: AreaGraphData): Edge[] {
-  return graph.connections.map((connection) => ({
-    id: edgeId(connection),
-    source: connection.source_room_id,
-    target: connection.destination_room_id,
-    label: connection.bidirectional && connection.return_exit_name
-      ? `${connection.exit_name} ↔ ${connection.return_exit_name}`
-      : connection.exit_name,
-    markerStart: connection.bidirectional ? { type: MarkerType.ArrowClosed } : undefined,
-    markerEnd: { type: MarkerType.ArrowClosed },
-  }));
+  const positions = new globalThis.Map(
+    graph.nodes.map((room) => [room.id, room.position]),
+  );
+  return graph.connections.map((connection) => {
+    const handles = connectionHandles(
+      positions.get(connection.source_room_id),
+      positions.get(connection.destination_room_id),
+    );
+    return {
+      id: edgeId(connection),
+      source: connection.source_room_id,
+      target: connection.destination_room_id,
+      ...handles,
+      label: connection.bidirectional && connection.return_exit_name
+        ? `${connection.exit_name} ↔ ${connection.return_exit_name}`
+        : connection.exit_name,
+      markerStart: connection.bidirectional ? { type: MarkerType.ArrowClosed } : undefined,
+      markerEnd: { type: MarkerType.ArrowClosed },
+    };
+  });
 }
 
 export function DungeonEditor() {
@@ -357,13 +388,23 @@ export function DungeonEditor() {
         method: 'PATCH',
         body: JSON.stringify(node.position),
       });
+      const positionedNodes = nodes.map((item) =>
+        item.id === node.id ? { ...item, position: node.position } : item,
+      );
+      const positions = new globalThis.Map(
+        positionedNodes.map((item) => [item.id, item.position]),
+      );
+      setEdges((current) => current.map((edge) => ({
+        ...edge,
+        ...connectionHandles(positions.get(edge.source), positions.get(edge.target)),
+      })));
       setNotice('Layout saved');
       window.setTimeout(() => setNotice(''), 1200);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save position.');
       await loadGraph(areaId);
     }
-  }, [areaId, loadGraph]);
+  }, [areaId, loadGraph, nodes, setEdges]);
 
   if (loading) {
     return <main className="center-state">Opening the location editor…</main>;
@@ -416,6 +457,7 @@ export function DungeonEditor() {
               onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedRoomId(null); }}
               onNodeDragStop={savePosition}
               onConnect={onConnect}
+              connectionMode={ConnectionMode.Loose}
               fitView
               minZoom={0.35}
               maxZoom={1.8}
