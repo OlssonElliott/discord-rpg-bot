@@ -149,46 +149,61 @@ def _draw_room_information(
         if is_current
         else "INSPECTED ROOM"
     )
-    status_font = _font(27, heading=True)
-    title_font = _font(52, heading=True)
-    body_font = _font(29)
-    heading_font = _font(23, heading=True)
-    list_font = _font(27)
-
-    draw.text((left, top), status, font=status_font, fill="#b79354")
     if not known and not is_current:
-        status_box = draw.textbbox((left, top), status, font=status_font)
-        draw.text(
-            (status_box[2] + 22, top + 2),
-            "·  VISITED",
-            font=_font(23, heading=True),
-            fill="#80745f",
-        )
+        status = f"{status} · VISITED"
+    status_font = _font(27, heading=True)
+    body_font = _font(27)
+    heading_font = _font(23, heading=True)
+    list_font = _font(25)
+
+    status_y = top + 5
+    draw.text((left, status_y), status, font=status_font, fill="#b79354")
+    status_box = draw.textbbox((left, status_y), status, font=status_font)
 
     title = f"? {view.name}" if known else view.name
-    title_lines = _wrap_text(draw, title, title_font, right - left, max_lines=2)
-    title_y = top + 42
-    for line in title_lines:
-        draw.text((left, title_y), line, font=title_font, fill="#eee0c0")
-        title_y += 50
+    title_left = status_box[2] + 34
+    title_text, title_font = _fit_heading(
+        draw,
+        title,
+        max_width=right - title_left,
+    )
+    draw.text(
+        (title_left, top - 3),
+        title_text,
+        font=title_font,
+        fill="#eee0c0",
+    )
 
     description = (
         "You have not personally visited this place."
         if known
         else view.description or "No description has been recorded."
     )
-    description_top = max(top + 115, title_y + 3)
+    content_top = top + 88
+    gutter = 48
+    left_width = (right - left - gutter) * 0.5
+    right_left = left + left_width + gutter
+    draw.text(
+        (left, content_top),
+        "DESCRIPTION",
+        font=heading_font,
+        fill="#a9864c",
+    )
+    description_top = content_top + 38
     description_lines = _wrap_text(
-        draw, description, body_font, right - left, max_lines=2
+        draw,
+        description,
+        body_font,
+        left_width,
+        max_lines=5,
     )
     for line in description_lines:
         draw.text((left, description_top), line, font=body_font, fill="#bdb19c")
-        description_top += 32
+        description_top += 34
 
     if known:
         return
 
-    section_top = top + 215
     available_sections = [
         ("CHARACTERS", view.visible_characters),
         ("VISIBLE", view.visible_entities),
@@ -199,17 +214,18 @@ def _draw_room_information(
         if not is_current:
             return
         sections = [("CHARACTERS", ("None",)), ("ITEMS", ("None",))]
-    column_width = (right - left) / len(sections)
+    right_width = right - right_left
+    column_width = right_width / len(sections)
     for index, (heading, values) in enumerate(sections):
-        column_left = left + index * column_width
+        column_left = right_left + index * column_width
         draw.text(
-            (column_left, section_top),
+            (column_left, content_top),
             heading,
             font=heading_font,
             fill="#a9864c",
         )
-        value_y = section_top + 34
-        for value in _summarize(values, limit=1):
+        value_y = content_top + 38
+        for value in _summarize(values, limit=3):
             if value_y > bottom - 25:
                 break
             lines = _wrap_text(
@@ -226,6 +242,29 @@ def _draw_room_information(
                 fill="#ddd2bd",
             )
             value_y += 33
+
+
+def _fit_heading(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    max_width: float,
+) -> tuple[str, ImageFont.FreeTypeFont | ImageFont.ImageFont]:
+    """Fit a room name on the single status row without touching the frame."""
+    for size in range(42, 27, -2):
+        font = _font(size, heading=True)
+        box = draw.textbbox((0, 0), text, font=font)
+        if box[2] - box[0] <= max_width:
+            return text, font
+    font = _font(28, heading=True)
+    fitted = text
+    while len(fitted) > 1:
+        candidate = f"{fitted.rstrip()}…"
+        box = draw.textbbox((0, 0), candidate, font=font)
+        if box[2] - box[0] <= max_width:
+            return candidate, font
+        fitted = fitted[:-1]
+    return "…", font
 
 
 def _summarize(values: tuple[str, ...], *, limit: int) -> tuple[str, ...]:
