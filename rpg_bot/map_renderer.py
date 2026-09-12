@@ -185,7 +185,6 @@ def render_player_map(view: PlayerMap) -> BytesIO:
             box,
             unknown_room_font if not visited else room_font,
             "#ece0c6" if visited else "#9b9282",
-            reserve_markers=bool(room.visible_characters),
         )
         if room.visible_characters:
             _player_markers(draw, box, room.visible_characters, marker_font)
@@ -534,29 +533,31 @@ def _draw_room_label(
     box: tuple[float, float, float, float],
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     colour: str,
-    *,
-    reserve_markers: bool,
 ) -> None:
-    """Wrap by measured width and vertically balance the map label."""
+    """Wrap and geometrically center a label inside the complete room."""
     left, top, right, bottom = box
     lines = _wrap_label(draw, label, font, right - left - 42, max_lines=3)
-    line_height = max(28, draw.textbbox((0, 0), "Ag", font=font)[3] + 5)
-    label_bottom = bottom - (70 if reserve_markers else 22)
-    available_height = max(line_height, label_bottom - (top + 22))
-    text_height = line_height * len(lines)
-    text_y = top + 22 + max(0, (available_height - text_height) / 2)
-    for line in lines:
-        text_box = draw.textbbox((0, 0), line, font=font)
+    text_boxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+    line_gap = 5
+    text_height = sum(box[3] - box[1] for box in text_boxes)
+    text_height += line_gap * max(0, len(lines) - 1)
+    text_top = (top + bottom - text_height) / 2
+
+    for line, text_box in zip(lines, text_boxes, strict=True):
         text_width = text_box[2] - text_box[0]
+        glyph_height = text_box[3] - text_box[1]
         draw.text(
-            (left + (right - left - text_width) / 2, text_y),
+            (
+                left + (right - left - text_width) / 2 - text_box[0],
+                text_top - text_box[1],
+            ),
             line,
             fill=colour,
             font=font,
             stroke_width=1,
             stroke_fill="#17130f",
         )
-        text_y += line_height
+        text_top += glyph_height + line_gap
 
 
 def _wrap_label(
