@@ -186,6 +186,34 @@ class PlayerViewServiceTests(unittest.TestCase):
         rendered = render_player_map(view)
         self.assertEqual(rendered.read(8), b"\x89PNG\r\n\x1a\n")
 
+    def test_unknown_room_map_node_never_renders_its_name(self) -> None:
+        def unknown_map(display_name: str) -> PlayerMap:
+            room = PlayerMapRoom(
+                "sealed",
+                "floor",
+                display_name,
+                100,
+                100,
+                1,
+                1,
+                KnowledgeState.KNOWN,
+                is_focused=True,
+            )
+            return PlayerMap(
+                1,
+                "dungeon",
+                Floor("floor", "dungeon", 1, "Floor 1"),
+                None,
+                "sealed",
+                (room,),
+                (),
+            )
+
+        first = render_player_map(unknown_map("? Sealed Vault"))
+        second = render_player_map(unknown_map("? Completely Different Secret"))
+
+        self.assertEqual(first.getvalue(), second.getvalue())
+
     def test_layout_preserves_world_spacing_and_centers_focus(self) -> None:
         rooms = tuple(
             PlayerMapRoom(

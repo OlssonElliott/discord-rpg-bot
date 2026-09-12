@@ -31,7 +31,6 @@ def render_player_map(view: PlayerMap) -> BytesIO:
     draw = ImageDraw.Draw(image)
     title_font = _font(42, heading=True)
     room_font = _font(30, heading=True)
-    unknown_room_font = _font(27, heading=True)
     mystery_font = _font(58, heading=True)
     small_font = _font(19)
     marker_font = _font(18, heading=True)
@@ -205,23 +204,21 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         if room.knowledge_state is KnowledgeState.KNOWN:
             # A dashed inner border reinforces uncertainty even without colour.
             _dashed_rectangle(draw, box, "#716858")
-            question_box = draw.textbbox((0, 0), "?", font=mystery_font)
-            draw.text(
-                (
-                    left + width - (question_box[2] - question_box[0]) - 22,
-                    top + 10,
-                ),
+            _draw_room_label(
+                draw,
                 "?",
-                fill="#302c27",
-                font=mystery_font,
+                box,
+                mystery_font,
+                "#9b9282",
             )
-        _draw_room_label(
-            draw,
-            room.display_name,
-            box,
-            unknown_room_font if not visited else room_font,
-            "#ece0c6" if visited else "#9b9282",
-        )
+        else:
+            _draw_room_label(
+                draw,
+                room.display_name,
+                box,
+                room_font,
+                "#ece0c6",
+            )
         if room.visible_characters:
             _player_markers(draw, box, room.visible_characters, marker_font)
         fog_strength = _fog_strength(focus_distances.get(room.id, 99))
