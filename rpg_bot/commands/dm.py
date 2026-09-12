@@ -13,7 +13,7 @@ from ..database import (
 from ..models import Character, Stance
 from ..inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
 from ..inventory_service import InventoryError, InventoryService
-from .inventory import refresh_open_inventory
+from .inventory import refresh_inventory_views
 
 
 def result_embed(title: str, character: Character) -> discord.Embed:
@@ -77,7 +77,7 @@ class DMCommands(commands.Cog):
             ephemeral=True,
         )
         assert character.character_id is not None
-        await refresh_open_inventory(user.id, character.character_id)
+        await refresh_inventory_views(interaction, character)
 
     @app_commands.command(name="givecoins", description="Give coins to a character.")
     @app_commands.describe(
@@ -121,7 +121,7 @@ class DMCommands(commands.Cog):
             ephemeral=True,
         )
         assert character.character_id is not None
-        await refresh_open_inventory(user.id, character.character_id)
+        await refresh_inventory_views(interaction, character)
 
     @app_commands.command(name="damage", description="Damage a user's character.")
     @app_commands.describe(user="Discord user", amount="Amount of damage")

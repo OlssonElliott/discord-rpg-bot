@@ -184,6 +184,36 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             {"Unequip"},
         )
 
+    async def test_equip_announces_publicly_and_refreshes_character_sheet(self) -> None:
+        dagger_id = self.service.grant(self.character, "iron_dagger")
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            self.service, 7, self.character.character_id, inventory, dagger_id
+        )
+        interaction = interaction_for(7)
+        character_cog = SimpleNamespace(
+            portrait_store=SimpleNamespace(path_for=lambda _key: None),
+            refresh_dedicated_sheet_for=AsyncMock(return_value=True),
+        )
+        interaction.client = SimpleNamespace(
+            get_cog=lambda name: character_cog if name == "CharacterCommands" else None
+        )
+        equip = next(
+            child
+            for child in view.children
+            if isinstance(child, discord.ui.Button) and child.label == "Equip"
+        )
+
+        await equip.callback(interaction)
+
+        public_embed = interaction.followup.send.await_args.kwargs["embed"]
+        self.assertEqual(public_embed.author.name, "Olof")
+        self.assertEqual(
+            public_embed.description,
+            "Equipped **Iron Dagger** as **Main Hand**.",
+        )
+        character_cog.refresh_dedicated_sheet_for.assert_awaited_once()
+
     async def test_read_opens_separate_panel_without_consuming_item(self) -> None:
         service, note_id, template = self.readable_service()
         inventory = self.database.get_character_inventory(self.character.character_id)

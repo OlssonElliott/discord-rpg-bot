@@ -20,6 +20,7 @@ from ..inventory import (
 )
 from ..inventory_service import InventoryError, InventoryService
 from ..models import Character
+from ..portraits import CharacterPortraitStore
 from ..world_service import WorldService
 
 
@@ -346,11 +347,22 @@ class InventoryView(InventoryOwnedView):
             )
             return
         character = self.character()
+        equipment_message = None
         try:
+            inventory_before = self.service.database.get_character_inventory(
+                self.character_id
+            )
+            selected_item = inventory_before.item(self.selected_id)
+            selected_template = self.service.catalog.get(selected_item.template_id)
             if action == "equip":
-                self.service.equip(character, self.selected_id)
+                slot = self.service.equip(character, self.selected_id)
+                equipment_message = (
+                    f"Equipped **{selected_template.name}** as "
+                    f"**{slot.value.replace('_', ' ').title()}**."
+                )
             elif action == "unequip":
                 self.service.unequip(character, self.selected_id)
+                equipment_message = f"Unequipped **{selected_template.name}**."
             elif action == "use":
                 character = self.service.use(character, self.selected_id)
         except (InventoryError, ValueError) as error:
@@ -370,6 +382,9 @@ class InventoryView(InventoryOwnedView):
             page=self.page,
             edit=True,
         )
+        await refresh_character_sheet(interaction, character)
+        if equipment_message is not None:
+            await _announce_equipment(interaction, character, equipment_message)
 
     @discord.ui.button(label="Equip", style=discord.ButtonStyle.success, row=1)
     async def equip_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -445,6 +460,7 @@ class InventoryView(InventoryOwnedView):
             page=min(self.page, max(0, (len(inventory.items) - 1) // 25)),
             edit=True,
         )
+        await refresh_character_sheet(interaction, character)
         await interaction.followup.send(
             f"**{character.name}** dropped {moved.quantity} × {moved.item.name}."
         )
@@ -620,6 +636,61 @@ async def refresh_open_inventory(user_id: int, character_id: int) -> None:
     session.page = page
     session.reading_id = reading_id
     session.reading_page = view.reading_page if reading_id is not None else 0
+
+
+async def refresh_character_sheet(
+    interaction: discord.Interaction, character: Character
+) -> None:
+    client = getattr(interaction, "client", None)
+    if client is None or not hasattr(client, "get_cog"):
+        return
+    character_cog = client.get_cog("CharacterCommands")
+    if character_cog is None or not hasattr(
+        character_cog, "refresh_dedicated_sheet_for"
+    ):
+        return
+    try:
+        await character_cog.refresh_dedicated_sheet_for(character)
+    except (discord.HTTPException, OSError, ValueError):
+        LOGGER.exception(
+            "Could not refresh the permanent character sheet for character %s",
+            character.character_id,
+        )
+
+
+async def refresh_inventory_views(
+    interaction: discord.Interaction, character: Character
+) -> None:
+    """Refresh both the open inventory and permanent character channel."""
+    assert character.character_id is not None
+    await refresh_open_inventory(character.discord_user_id, character.character_id)
+    await refresh_character_sheet(interaction, character)
+
+
+async def _announce_equipment(
+    interaction: discord.Interaction,
+    character: Character,
+    description: str,
+) -> None:
+    from .player import apply_character_identity, portrait_attachment_name
+
+    character_cog = interaction.client.get_cog("CharacterCommands")
+    portrait_store = getattr(character_cog, "portrait_store", CharacterPortraitStore())
+    embed = discord.Embed(
+        description=description,
+        colour=discord.Colour.from_rgb(154, 120, 61),
+    )
+    portrait_path = apply_character_identity(embed, character, portrait_store)
+    if portrait_path is None:
+        await interaction.followup.send(embed=embed)
+        return
+    portrait_file = discord.File(
+        portrait_path, filename=portrait_attachment_name(portrait_path)
+    )
+    try:
+        await interaction.followup.send(embed=embed, file=portrait_file)
+    finally:
+        portrait_file.close()
 
 
 async def show_inventory(

@@ -19,7 +19,7 @@ from rpg_bot.map_renderer import (
     _layout,
     render_player_map,
 )
-from rpg_bot.world import InvalidMovementError
+from rpg_bot.world import InvalidMovementError, InventoryHolder
 from rpg_bot.world_service import WorldService
 
 
@@ -273,6 +273,25 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         self.assertEqual(
             self.world.get_character_room(self.alice_id).id, self.entrance.id
+        )
+
+    def test_room_and_item_changes_queue_live_map_refreshes(self) -> None:
+        self.views.bind_discord_channel(self.alice_id, 77)
+        self.world.place_character(self.alice_id, self.entrance.id)
+        self.database.clear_player_map_refresh(self.alice_id)
+
+        self.world.place_character(self.bob_id, self.entrance.id)
+
+        self.assertEqual(
+            self.database.pending_player_map_refreshes(), (self.alice_id,)
+        )
+        self.database.clear_player_map_refresh(self.alice_id)
+
+        self.world.create_item("key", "Iron Key")
+        self.world.place_item(InventoryHolder.room(self.entrance.id), "key")
+
+        self.assertEqual(
+            self.database.pending_player_map_refreshes(), (self.alice_id,)
         )
 
     def test_legacy_area_room_and_exit_gain_floor_and_connection_metadata(self) -> None:

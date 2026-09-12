@@ -1592,6 +1592,22 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         )
         return message.id
 
+    async def refresh_dedicated_sheet_for(self, character: Character) -> bool:
+        """Refresh an existing permanent sheet after an inventory mutation."""
+        if self.bot is None or character.character_id is None:
+            return False
+        state = self.database.get_character_sheet_view_state(character.character_id)
+        if state is None:
+            return False
+        channel = self.bot.get_channel(state.discord_channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(state.discord_channel_id)
+            except discord.NotFound:
+                return False
+        await self._refresh_dedicated_sheet(channel, character)
+        return True
+
     async def publish_character_sheet(
         self,
         interaction: discord.Interaction,

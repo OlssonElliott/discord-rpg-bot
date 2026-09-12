@@ -41,6 +41,7 @@ from .world import (
     EntityKind,
     Exit,
     GraphConnection,
+    HolderKind,
     InvalidMovementError,
     InvalidTransferError,
     InventoryHolder,
@@ -559,6 +560,11 @@ class Database:
                 FOREIGN KEY (character_id) REFERENCES characters(id),
                 FOREIGN KEY (selected_floor_id) REFERENCES dungeon_floors(id),
                 FOREIGN KEY (focused_room_id) REFERENCES rooms(id)
+            );
+            CREATE TABLE IF NOT EXISTS player_map_refresh_requests (
+                character_id INTEGER PRIMARY KEY,
+                requested_at TEXT NOT NULL,
+                FOREIGN KEY (character_id) REFERENCES characters(id)
             );
             CREATE TABLE IF NOT EXISTS game_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1833,6 +1839,10 @@ class Database:
     def place_character(self, character_id: int, room_id: str) -> Room:
         with self._connect() as connection:
             self._require_room(connection, room_id)
+            previous = connection.execute(
+                "SELECT current_room_id FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone()
             cursor = connection.execute(
                 "UPDATE characters SET current_room_id = ? WHERE id = ? AND is_archived = 0",
                 (room_id, character_id),
@@ -1840,6 +1850,11 @@ class Database:
             if cursor.rowcount == 0:
                 raise CharacterNotFoundError("That character does not exist.")
             self._record_room_visit(connection, character_id, room_id)
+            if previous is not None and previous["current_room_id"] is not None:
+                self._queue_map_refresh_for_room(
+                    connection, previous["current_room_id"]
+                )
+            self._queue_map_refresh_for_room(connection, room_id)
         room = self.get_room(room_id)
         assert room is not None
         return room
@@ -1899,6 +1914,8 @@ class Database:
                 (destination_id, character_id),
             )
             self._record_room_visit(connection, character_id, destination_id)
+            self._queue_map_refresh_for_room(connection, current_room_id)
+            self._queue_map_refresh_for_room(connection, destination_id)
         room = self.get_room(destination_id)
         assert room is not None
         return room
@@ -2234,6 +2251,64 @@ class Database:
             for row in rows
         )
 
+    def request_player_map_refresh(self, character_id: int) -> None:
+        with self._connect() as connection:
+            if connection.execute(
+                "SELECT 1 FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone() is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            self._queue_player_map_refresh(connection, character_id)
+
+    def pending_player_map_refreshes(self) -> tuple[int, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT character_id FROM player_map_refresh_requests
+                ORDER BY requested_at, character_id
+                """
+            ).fetchall()
+        return tuple(row["character_id"] for row in rows)
+
+    def clear_player_map_refresh(self, character_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM player_map_refresh_requests WHERE character_id = ?",
+                (character_id,),
+            )
+
+    @staticmethod
+    def _queue_player_map_refresh(
+        connection: sqlite3.Connection, character_id: int
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO player_map_refresh_requests (character_id, requested_at)
+            VALUES (?, ?)
+            ON CONFLICT(character_id) DO UPDATE SET requested_at = excluded.requested_at
+            """,
+            (character_id, datetime.now(timezone.utc).isoformat()),
+        )
+
+    @classmethod
+    def _queue_map_refresh_for_room(
+        cls, connection: sqlite3.Connection, room_id: str
+    ) -> None:
+        rows = connection.execute(
+            """
+            SELECT characters.id
+            FROM characters
+            JOIN player_view_states
+              ON player_view_states.character_id = characters.id
+            WHERE characters.current_room_id = ?
+              AND characters.is_archived = 0
+              AND player_view_states.discord_channel_id IS NOT NULL
+            """,
+            (room_id,),
+        ).fetchall()
+        for row in rows:
+            cls._queue_player_map_refresh(connection, row["id"])
+
     def get_game_lock(self) -> GameLock:
         with self._connect() as connection:
             row = connection.execute(
@@ -2363,6 +2438,8 @@ class Database:
                 """,
                 (holder.kind.value, holder.id, item.id, quantity),
             )
+            if holder.kind is HolderKind.ROOM:
+                self._queue_map_refresh_for_room(connection, holder.id)
         return ItemStack(item, existing + quantity)
 
     def get_inventory(self, holder: InventoryHolder) -> tuple[ItemStack, ...]:
@@ -2458,6 +2535,8 @@ class Database:
                     """,
                     (uuid4().hex, character_id, template_id, quantity, durability),
                 )
+            if source.kind is HolderKind.ROOM:
+                self._queue_map_refresh_for_room(connection, source.id)
         return ItemStack(item, quantity)
 
     def drop_character_inventory_item(
@@ -2538,6 +2617,8 @@ class Database:
                 """,
                 (destination.kind.value, destination.id, item.id, quantity),
             )
+            if destination.kind is HolderKind.ROOM:
+                self._queue_map_refresh_for_room(connection, destination.id)
         return ItemStack(item, quantity)
 
     def transfer_item(
@@ -2590,6 +2671,9 @@ class Database:
                 """,
                 (destination.kind.value, destination.id, item.id, quantity),
             )
+            for holder in (source, destination):
+                if holder.kind is HolderKind.ROOM:
+                    self._queue_map_refresh_for_room(connection, holder.id)
         return ItemStack(item, quantity)
 
     def get_dice_color(self, discord_user_id: int) -> str:

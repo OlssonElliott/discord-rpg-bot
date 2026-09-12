@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from rpg_bot.commands.inventory import (
     InventoryCommands,
@@ -145,6 +145,10 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             inventory_cog.inventory.binding, inventory_interaction
         )
         take_interaction, _ = self.command_interaction()
+        character_cog = SimpleNamespace(refresh_dedicated_sheet_for=AsyncMock())
+        take_interaction.client = SimpleNamespace(
+            get_cog=lambda name: character_cog if name == "CharacterCommands" else None
+        )
 
         await self.cog.take.callback(
             self.cog.take.binding, take_interaction, "health_potion", 1
@@ -163,6 +167,22 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             field.value for field in refreshed.fields if field.name == "Inventory"
         )
         self.assertIn("Health Potion", items)
+        character_cog.refresh_dedicated_sheet_for.assert_awaited_once()
+
+    async def test_pending_dashboard_refresh_is_applied_to_discord_map(self) -> None:
+        self.database.bind_player_view_channel(self.character_id, 88)
+        self.database.request_player_map_refresh(self.character_id)
+        self.cog.map_messages = SimpleNamespace(refresh=AsyncMock())
+        self.cog.bot = SimpleNamespace(
+            wait_until_ready=AsyncMock(),
+            is_closed=MagicMock(side_effect=(False, True)),
+        )
+
+        with patch("rpg_bot.commands.world.asyncio.sleep", new=AsyncMock()):
+            await self.cog._process_map_refresh_requests()
+
+        self.cog.map_messages.refresh.assert_awaited_once_with(self.character_id)
+        self.assertEqual(self.database.pending_player_map_refreshes(), ())
 
     async def test_public_world_action_attaches_character_portrait(self) -> None:
         portrait_root = Path(self.temp_directory.name) / "portraits"
