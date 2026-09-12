@@ -300,6 +300,23 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             public_embed.description,
             "**Olof** takes out **Bloodstained Note** and starts reading.",
         )
+        reading_view = edited["view"]
+        close_reading = next(
+            child
+            for child in reading_view.children
+            if isinstance(child, discord.ui.Button) and child.label == "Close reading"
+        )
+        close_interaction = interaction_for(7)
+        close_interaction.guild = interaction.guild
+
+        await close_reading.callback(close_interaction)
+
+        closing_embed = game_channel.send.await_args_list[1].kwargs["embed"]
+        self.assertEqual(closing_embed.author.name, "Olof")
+        self.assertEqual(
+            closing_embed.description,
+            "**Olof** stops reading and puts **Bloodstained Note** away.",
+        )
         self.assertEqual(
             self.database.get_character_inventory(
                 self.character.character_id

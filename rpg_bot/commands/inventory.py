@@ -448,14 +448,26 @@ class InventoryView(InventoryOwnedView):
     )
     async def read_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if self.reading_id is not None:
+            character = self.character()
+            try:
+                template = self.service.read(character, self.reading_id)
+            except (InventoryError, ValueError) as error:
+                await interaction.response.send_message(str(error), ephemeral=True)
+                return
             await show_inventory(
                 interaction,
                 self.service,
-                self.character(),
+                character,
                 selected_id=self.selected_id,
                 page=self.page,
                 edit=True,
                 dedicated_cog=self.dedicated_cog,
+            )
+            await _announce_room_action(
+                interaction,
+                character,
+                f"**{character.name}** stops reading and puts "
+                f"**{template.name}** away.",
             )
             return
         if self.selected_id is None:
