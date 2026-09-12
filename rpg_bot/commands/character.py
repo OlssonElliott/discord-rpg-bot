@@ -1063,50 +1063,6 @@ class CharacterSheetView(discord.ui.View):
         )
 
 
-class DedicatedCharacterSheetView(discord.ui.View):
-    """Persistent controls attached to the private character-sheet channel."""
-
-    def __init__(
-        self, cog: CharacterCommands, user_id: int, character_id: int
-    ) -> None:
-        super().__init__(timeout=None)
-        self.cog = cog
-        self.user_id = user_id
-        self.character_id = character_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.user_id:
-            return True
-        await interaction.response.send_message(
-            "This character sheet belongs to another player.", ephemeral=True
-        )
-        return False
-
-    @discord.ui.button(
-        label="Refresh",
-        style=discord.ButtonStyle.primary,
-        emoji="🔄",
-        custom_id="character-sheet:refresh",
-    )
-    async def refresh(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        del button
-        character = self.cog.database.get_character_by_id(
-            self.user_id, self.character_id
-        )
-        if character is None:
-            await interaction.response.send_message(
-                "That character is no longer available.", ephemeral=True
-            )
-            return
-        await interaction.response.defer()
-        if interaction.message is not None:
-            await self.cog._edit_dedicated_sheet_message(
-                interaction.message, character
-            )
-
-
 class CharacterCommands(commands.GroupCog, group_name="character"):
     """Tracks transient flows per Discord user; only results are persisted."""
 
@@ -1138,11 +1094,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             if character is None or state.discord_message_id is None:
                 continue
             self.bot.add_view(
-                DedicatedCharacterSheetView(
-                    self,
-                    character.discord_user_id,
-                    state.character_id,
-                ),
+                self._dedicated_inventory_view(character),
                 message_id=state.discord_message_id,
             )
 
@@ -1371,6 +1323,20 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             inventory_embed(character, inventory, self.item_catalog),
         ], portrait_file
 
+    def _dedicated_inventory_view(self, character: Character):
+        """Build the persistent interactive inventory shown on the private HUD."""
+        from .inventory import InventoryView
+
+        assert character.character_id is not None
+        inventory = self.database.get_character_inventory(character.character_id)
+        return InventoryView(
+            self.inventory_service,
+            character.discord_user_id,
+            character.character_id,
+            inventory,
+            dedicated_cog=self,
+        )
+
     @staticmethod
     def _sheet_channel_name(character: Character) -> str:
         slug = re.sub(r"[^a-z0-9]+", "-", character.name.casefold()).strip("-")
@@ -1526,9 +1492,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
             await message.edit(
                 embeds=embeds,
                 attachments=[portrait_file] if portrait_file is not None else [],
-                view=DedicatedCharacterSheetView(
-                    self, character.discord_user_id, character.character_id
-                ),
+                view=self._dedicated_inventory_view(character),
             )
         finally:
             if portrait_file is not None:
@@ -1553,9 +1517,7 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         try:
             arguments = {
                 "embeds": embeds,
-                "view": DedicatedCharacterSheetView(
-                    self, character.discord_user_id, character.character_id
-                ),
+                "view": self._dedicated_inventory_view(character),
             }
             if portrait_file is not None:
                 arguments["file"] = portrait_file

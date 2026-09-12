@@ -28,6 +28,7 @@ from ..world_service import WorldService
 DISCORD_FIELD_LIMIT = 1024
 DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
 READING_SEPARATOR = "──────────"
+GAME_CHANNEL_NAME = "game"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -209,8 +210,15 @@ def inventory_embeds(
 
 
 class InventoryOwnedView(discord.ui.View):
-    def __init__(self, service: InventoryService, user_id: int, character_id: int) -> None:
-        super().__init__(timeout=15 * 60)
+    def __init__(
+        self,
+        service: InventoryService,
+        user_id: int,
+        character_id: int,
+        *,
+        persistent: bool = False,
+    ) -> None:
+        super().__init__(timeout=None if persistent else 15 * 60)
         self.service = service
         self.user_id = user_id
         self.character_id = character_id
@@ -252,6 +260,7 @@ class InventoryItemSelect(discord.ui.Select):
             ],
             disabled=not options,
             row=0,
+            custom_id="inventory:item",
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -278,6 +287,7 @@ class InventoryItemSelect(discord.ui.Select):
             reading_id=reading_id,
             reading_page=0,
             edit=True,
+            dedicated_cog=self.owner_view.dedicated_cog,
         )
 
 
@@ -292,8 +302,15 @@ class InventoryView(InventoryOwnedView):
         page: int = 0,
         reading_id: str | None = None,
         reading_page: int = 0,
+        dedicated_cog=None,
     ) -> None:
-        super().__init__(service, user_id, character_id)
+        super().__init__(
+            service,
+            user_id,
+            character_id,
+            persistent=dedicated_cog is not None,
+        )
+        self.dedicated_cog = dedicated_cog
         self.selected_id = selected_id
         self.page = page
         self.reading_id = reading_id
@@ -340,6 +357,10 @@ class InventoryView(InventoryOwnedView):
                 self.remove_item(self.reading_previous_button)
             if self.reading_page >= len(reading_pages) - 1:
                 self.remove_item(self.reading_next_button)
+        if self.dedicated_cog is not None:
+            self.back_button.label = "Refresh"
+            self.back_button.emoji = "🔄"
+            self.back_button.custom_id = "character-sheet:refresh"
 
     async def _run(self, interaction: discord.Interaction, action: str) -> None:
         if self.selected_id is None:
@@ -384,26 +405,48 @@ class InventoryView(InventoryOwnedView):
             selected_id=selected,
             page=self.page,
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
-        await refresh_character_sheet(interaction, character)
+        if self.dedicated_cog is None:
+            await refresh_character_sheet(interaction, character)
         if equipment_message is not None:
             await _announce_equipment(
                 interaction, self.service.database, character, equipment_message
             )
 
-    @discord.ui.button(label="Equip", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(
+        label="Equip",
+        style=discord.ButtonStyle.success,
+        row=1,
+        custom_id="inventory:equip",
+    )
     async def equip_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await self._run(interaction, "equip")
 
-    @discord.ui.button(label="Unequip", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(
+        label="Unequip",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="inventory:unequip",
+    )
     async def unequip_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await self._run(interaction, "unequip")
 
-    @discord.ui.button(label="Use", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(
+        label="Use",
+        style=discord.ButtonStyle.danger,
+        row=1,
+        custom_id="inventory:use",
+    )
     async def use_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await self._run(interaction, "use")
 
-    @discord.ui.button(label="Read", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(
+        label="Read",
+        style=discord.ButtonStyle.primary,
+        row=1,
+        custom_id="inventory:read",
+    )
     async def read_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if self.reading_id is not None:
             await show_inventory(
@@ -413,6 +456,7 @@ class InventoryView(InventoryOwnedView):
                 selected_id=self.selected_id,
                 page=self.page,
                 edit=True,
+                dedicated_cog=self.dedicated_cog,
             )
             return
         if self.selected_id is None:
@@ -435,6 +479,7 @@ class InventoryView(InventoryOwnedView):
             reading_id=self.selected_id,
             reading_page=0,
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
         await _announce_room_action(
             interaction,
@@ -443,7 +488,12 @@ class InventoryView(InventoryOwnedView):
             f"**{character.name}** takes out **{template.name}** and starts reading.",
         )
 
-    @discord.ui.button(label="Drop", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(
+        label="Drop",
+        style=discord.ButtonStyle.danger,
+        row=1,
+        custom_id="inventory:drop",
+    )
     async def drop_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if self.selected_id is None:
             await interaction.response.send_message(
@@ -471,14 +521,32 @@ class InventoryView(InventoryOwnedView):
             selected_id=selected,
             page=min(self.page, max(0, (len(inventory.items) - 1) // 25)),
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
-        await refresh_character_sheet(interaction, character)
+        if self.dedicated_cog is None:
+            await refresh_character_sheet(interaction, character)
         await interaction.followup.send(
             f"**{character.name}** dropped {moved.quantity} × {moved.item.name}."
         )
 
-    @discord.ui.button(label="Back to sheet", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(
+        label="Back to sheet",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+        custom_id="inventory:back",
+    )
     async def back_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if self.dedicated_cog is not None:
+            await show_inventory(
+                interaction,
+                self.service,
+                self.character(),
+                selected_id=self.selected_id,
+                page=self.page,
+                edit=True,
+                dedicated_cog=self.dedicated_cog,
+            )
+            return
         from .character import CharacterSheetView
 
         character = self.character()
@@ -504,7 +572,12 @@ class InventoryView(InventoryOwnedView):
                 portrait_file.close()
         forget_open_inventory(self.user_id, self.character_id)
 
-    @discord.ui.button(label="Previous items", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(
+        label="Previous items",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+        custom_id="inventory:previous-items",
+    )
     async def previous_page(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -514,9 +587,15 @@ class InventoryView(InventoryOwnedView):
             self.character(),
             page=max(0, self.page - 1),
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
 
-    @discord.ui.button(label="Next items", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(
+        label="Next items",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+        custom_id="inventory:next-items",
+    )
     async def next_page(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -526,9 +605,15 @@ class InventoryView(InventoryOwnedView):
             self.character(),
             page=min(self.page_count - 1, self.page + 1),
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
 
-    @discord.ui.button(label="Previous page", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(
+        label="Previous page",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+        custom_id="inventory:previous-page",
+    )
     async def reading_previous_button(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -541,9 +626,15 @@ class InventoryView(InventoryOwnedView):
             reading_id=self.reading_id,
             reading_page=max(0, self.reading_page - 1),
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
 
-    @discord.ui.button(label="Next page", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(
+        label="Next page",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+        custom_id="inventory:next-page",
+    )
     async def reading_next_button(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -556,6 +647,7 @@ class InventoryView(InventoryOwnedView):
             reading_id=self.reading_id,
             reading_page=self.reading_page + 1,
             edit=True,
+            dedicated_cog=self.dedicated_cog,
         )
 
 
@@ -704,6 +796,9 @@ async def _announce_room_action(
         for other in room.characters
     ):
         return
+    game_channel = await _get_or_create_game_channel(interaction)
+    if game_channel is None:
+        return
     character_cog = interaction.client.get_cog("CharacterCommands")
     portrait_store = getattr(character_cog, "portrait_store", CharacterPortraitStore())
     embed = discord.Embed(
@@ -712,15 +807,49 @@ async def _announce_room_action(
     )
     portrait_path = apply_character_identity(embed, character, portrait_store)
     if portrait_path is None:
-        await interaction.followup.send(embed=embed)
+        await game_channel.send(embed=embed)
         return
     portrait_file = discord.File(
         portrait_path, filename=portrait_attachment_name(portrait_path)
     )
     try:
-        await interaction.followup.send(embed=embed, file=portrait_file)
+        await game_channel.send(embed=embed, file=portrait_file)
     finally:
         portrait_file.close()
+
+
+async def _get_or_create_game_channel(interaction: discord.Interaction):
+    """Return the guild's single public channel for witnessed game events."""
+    guild = getattr(interaction, "guild", None)
+    if guild is None:
+        return None
+    for channel in getattr(guild, "text_channels", ()):
+        if getattr(channel, "name", "").casefold() == GAME_CHANNEL_NAME:
+            return channel
+    bot_member = getattr(guild, "me", None)
+    if (
+        bot_member is None
+        or not getattr(bot_member.guild_permissions, "manage_channels", False)
+    ):
+        LOGGER.warning(
+            "Could not create #%s in guild %s: Manage Channels is missing",
+            GAME_CHANNEL_NAME,
+            getattr(guild, "id", "unknown"),
+        )
+        return None
+    try:
+        return await guild.create_text_channel(
+            GAME_CHANNEL_NAME,
+            topic="In-world actions witnessed by other player characters.",
+            reason="Public Rollkeeper game-event channel",
+        )
+    except discord.HTTPException:
+        LOGGER.exception(
+            "Could not create #%s in guild %s",
+            GAME_CHANNEL_NAME,
+            getattr(guild, "id", "unknown"),
+        )
+        return None
 
 
 async def show_inventory(
@@ -733,6 +862,7 @@ async def show_inventory(
     reading_id: str | None = None,
     reading_page: int = 0,
     edit: bool = False,
+    dedicated_cog=None,
 ) -> None:
     inventory = service.database.get_character_inventory(character.character_id)
     embeds = inventory_embeds(
@@ -752,14 +882,29 @@ async def show_inventory(
         page,
         reading_id,
         reading_page,
+        dedicated_cog,
     )
+    portrait_file = None
+    if dedicated_cog is not None:
+        sheet, portrait_file = dedicated_cog._sheet_presentation(
+            character, include_inventory_summary=False
+        )
+        embeds.insert(0, sheet)
     if edit:
-        await interaction.response.edit_message(embeds=embeds, attachments=[], view=view)
+        try:
+            await interaction.response.edit_message(
+                embeds=embeds,
+                attachments=[portrait_file] if portrait_file is not None else [],
+                view=view,
+            )
+        finally:
+            if portrait_file is not None:
+                portrait_file.close()
         message = interaction.message
     else:
         await interaction.response.send_message(embeds=embeds, view=view, ephemeral=True)
         message = await interaction.original_response()
-    if message is not None:
+    if message is not None and dedicated_cog is None:
         _OPEN_INVENTORIES[character.discord_user_id] = OpenInventory(
             service,
             character.character_id,

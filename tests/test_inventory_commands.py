@@ -8,6 +8,7 @@ import discord
 
 from rpg_bot.commands.dm import DMCommands
 from rpg_bot.commands.inventory import (
+    _get_or_create_game_channel,
     InventoryCommands,
     InventoryView,
     forget_open_inventory,
@@ -98,6 +99,28 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(call.kwargs["ephemeral"])
         self.assertEqual(call.kwargs["embeds"][0].title, "Olof's Inventory")
         self.assertIsInstance(call.kwargs["view"], InventoryView)
+
+    async def test_game_channel_is_created_once_when_missing(self) -> None:
+        channel = SimpleNamespace(name="game")
+        guild = SimpleNamespace(
+            id=44,
+            text_channels=[],
+            me=SimpleNamespace(
+                guild_permissions=SimpleNamespace(manage_channels=True)
+            ),
+            create_text_channel=AsyncMock(return_value=channel),
+        )
+        interaction = interaction_for(7)
+        interaction.guild = guild
+
+        resolved = await _get_or_create_game_channel(interaction)
+
+        self.assertIs(resolved, channel)
+        guild.create_text_channel.assert_awaited_once_with(
+            "game",
+            topic="In-world actions witnessed by other player characters.",
+            reason="Public Rollkeeper game-event channel",
+        )
 
     def test_inventory_embed_shows_flat_storage_and_equipped_capacity(self) -> None:
         backpack_id = self.service.grant(self.character, "traveler_backpack")
@@ -191,6 +214,8 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             self.service, 7, self.character.character_id, inventory, dagger_id
         )
         interaction = interaction_for(7)
+        game_channel = SimpleNamespace(name="game", send=AsyncMock())
+        interaction.guild = SimpleNamespace(text_channels=[game_channel])
         world = WorldService(self.database, self.catalog)
         world.create_area("crypt", "Crypt")
         world.create_room("hall", "crypt", "Hall")
@@ -212,7 +237,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
 
         await equip.callback(interaction)
 
-        public_embed = interaction.followup.send.await_args.kwargs["embed"]
+        public_embed = game_channel.send.await_args.kwargs["embed"]
         self.assertEqual(public_embed.author.name, "Olof")
         self.assertEqual(
             public_embed.description,
@@ -251,6 +276,8 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             service, 7, self.character.character_id, inventory, note_id
         )
         interaction = interaction_for(7)
+        game_channel = SimpleNamespace(name="game", send=AsyncMock())
+        interaction.guild = SimpleNamespace(text_channels=[game_channel])
         await view.read_button.callback(interaction)
 
         edited = interaction.response.edit_message.await_args.kwargs
@@ -261,7 +288,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(template.description, embeds[1].description)
         self.assertIn(template.content, embeds[1].description)
         self.assertNotIn("Use", button_labels(view))
-        public_embed = interaction.followup.send.await_args.kwargs["embed"]
+        public_embed = game_channel.send.await_args.kwargs["embed"]
         self.assertEqual(public_embed.author.name, "Olof")
         self.assertEqual(
             public_embed.description,

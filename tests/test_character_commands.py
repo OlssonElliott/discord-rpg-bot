@@ -5,6 +5,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import discord
 from PIL import Image
 
 from rpg_bot.character_creation import CharacterCreationFlow, CreationStep
@@ -198,9 +199,17 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         channel.send.assert_awaited_once()
         sent_view = channel.send.await_args.kwargs["view"]
         self.assertEqual(
-            [button.label for button in sent_view.children],
+            [
+                button.label
+                for button in sent_view.children
+                if isinstance(button, discord.ui.Button)
+            ],
             ["Refresh"],
         )
+        self.assertTrue(
+            any(isinstance(control, discord.ui.Select) for control in sent_view.children)
+        )
+        self.assertTrue(sent_view.is_persistent())
         sent_embeds = channel.send.await_args.kwargs["embeds"]
         self.assertEqual([embed.title for embed in sent_embeds], ["Olof", "Olof's Inventory"])
         self.assertIn("Money:", sent_embeds[1].description)
