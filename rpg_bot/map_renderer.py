@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import Path
 from random import Random
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 
 from .dungeon import KnowledgeState, PlayerMap
 
@@ -19,6 +19,7 @@ MIN_ROOM_HEIGHT = 160
 MAP_BACKGROUND_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "map" / "background.png"
 )
+ROOM_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "room.png"
 
 
 def render_player_map(view: PlayerMap) -> BytesIO:
@@ -131,16 +132,25 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         if room.is_current:
             outline = "#c69a4b"
             border_width = 13
-        draw.rounded_rectangle(
-            (left + 10, top + 12, left + width + 10, top + height + 12),
-            radius=18,
-            fill="#090806",
-        )
-        draw.rounded_rectangle(box, radius=18, fill=fill)
-        _room_texture(draw, box, room.id, visited)
-        draw.rounded_rectangle(
-            box, radius=18, outline=outline, width=border_width
-        )
+        uses_room_art = _draw_room_art(image, box, visited=visited)
+        if not uses_room_art:
+            draw.rounded_rectangle(
+                (left + 10, top + 12, left + width + 10, top + height + 12),
+                radius=18,
+                fill="#090806",
+            )
+            draw.rounded_rectangle(box, radius=18, fill=fill)
+            _room_texture(draw, box, room.id, visited)
+        if not uses_room_art or room.is_current or room.is_focused:
+            status_box = (
+                left + (11 if uses_room_art else 0),
+                top + (11 if uses_room_art else 0),
+                left + width - (11 if uses_room_art else 0),
+                top + height - (11 if uses_room_art else 0),
+            )
+            draw.rounded_rectangle(
+                status_box, radius=18, outline=outline, width=border_width
+            )
         if room.is_current and room.is_focused:
             inset_box = (
                 left + 16,
@@ -199,6 +209,87 @@ def _map_canvas() -> Image.Image:
     image = Image.new("RGB", (MAP_WIDTH, MAP_HEIGHT), "#15120f")
     _dark_fantasy_backdrop(ImageDraw.Draw(image))
     return image
+
+
+@lru_cache(maxsize=1)
+def _loaded_room_art() -> Image.Image | None:
+    """Load the supplied room frame and remove its large transparent margin."""
+    try:
+        with Image.open(ROOM_ART_PATH) as source:
+            room = source.convert("RGBA")
+        alpha = room.getchannel("A")
+        visible_bounds = alpha.point(
+            lambda value: 255 if value >= 16 else 0
+        ).getbbox()
+        if visible_bounds is None:
+            return None
+        left, top, right, bottom = visible_bounds
+        margin = 24
+        return room.crop(
+            (
+                max(0, left - margin),
+                max(0, top - margin),
+                min(room.width, right + margin),
+                min(room.height, bottom + margin),
+            )
+        )
+    except (OSError, ValueError):
+        return None
+
+
+def _draw_room_art(
+    image: Image.Image,
+    box: tuple[float, float, float, float],
+    *,
+    visited: bool,
+) -> bool:
+    """Draw the supplied room art while preserving its border proportions."""
+    source = _loaded_room_art()
+    if source is None:
+        return False
+    if not visited:
+        source = ImageEnhance.Brightness(source).enhance(0.52)
+
+    left, top, right, bottom = (round(value) for value in box)
+    room = _nine_slice(source, (max(1, right - left), max(1, bottom - top)))
+    image.paste(room, (left, top), room)
+    return True
+
+
+def _nine_slice(source: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Resize framed art without stretching its corners and edge thickness."""
+    target_width, target_height = size
+    source_border = min(76, source.width // 3, source.height // 3)
+    target_border = min(42, target_width // 3, target_height // 3)
+    result = Image.new("RGBA", size, (0, 0, 0, 0))
+
+    source_x = (0, source_border, source.width - source_border, source.width)
+    source_y = (0, source_border, source.height - source_border, source.height)
+    target_x = (0, target_border, target_width - target_border, target_width)
+    target_y = (0, target_border, target_height - target_border, target_height)
+    for row in range(3):
+        for column in range(3):
+            source_box = (
+                source_x[column],
+                source_y[row],
+                source_x[column + 1],
+                source_y[row + 1],
+            )
+            target_box = (
+                target_x[column],
+                target_y[row],
+                target_x[column + 1],
+                target_y[row + 1],
+            )
+            target_size = (
+                target_box[2] - target_box[0],
+                target_box[3] - target_box[1],
+            )
+            if target_size[0] <= 0 or target_size[1] <= 0:
+                continue
+            tile = source.crop(source_box).resize(target_size, Image.Resampling.LANCZOS)
+            result.paste(tile, target_box[:2], tile)
+    return result
 
 
 def _dark_fantasy_backdrop(draw: ImageDraw.ImageDraw) -> None:

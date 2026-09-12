@@ -17,7 +17,9 @@ from rpg_bot.map_renderer import (
     MAP_WIDTH,
     MIN_ROOM_HEIGHT,
     MIN_ROOM_WIDTH,
+    ROOM_ART_PATH,
     _layout,
+    _loaded_room_art,
     _map_canvas,
     render_player_map,
 )
@@ -129,6 +131,17 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         self.assertEqual(canvas.getpixel((800, 500)), expected.getpixel((800, 500)))
         self.assertEqual(canvas.getpixel((20, 20)), expected.getpixel((20, 20)))
+
+    def test_hud_uses_packaged_room_art(self) -> None:
+        self.assertTrue(ROOM_ART_PATH.is_file())
+
+        room = _loaded_room_art()
+
+        self.assertIsNotNone(room)
+        assert room is not None
+        self.assertEqual(room.mode, "RGBA")
+        self.assertLess(room.width, 1672)
+        self.assertLess(room.height, 941)
 
     def test_hud_centers_current_room_when_known_bounds_allow_it(self) -> None:
         self.world.place_character(self.alice_id, self.entrance.id)
