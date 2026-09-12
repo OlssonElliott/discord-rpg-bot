@@ -6,7 +6,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, UnidentifiedImageError
 
 from .dungeon import FocusedRoomView, KnowledgeState
 
@@ -14,7 +14,9 @@ from .dungeon import FocusedRoomView, KnowledgeState
 ROOM_PANEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "panel.png"
 PANEL_SIZE = (1448, 1086)
 SCENE_VIEWPORT = (143, 128, 1306, 600)
+SCENE_LAYER_BOUNDS = (112, 98, 1337, 630)
 SCENE_CORNER_RADIUS = 48
+SCENE_EDGE_FEATHER = 1.5
 INFO_BOUNDS = (150, 670, 1298, 995)
 
 
@@ -44,7 +46,7 @@ def render_room_card(
 
     scene_loaded = False
     if view.knowledge_state is KnowledgeState.VISITED and scene_path is not None:
-        scene_loaded = _place_scene(card, scene_path)
+        scene_loaded = _place_scene(card, panel, scene_path)
     if not scene_loaded:
         _draw_scene_placeholder(
             draw,
@@ -64,7 +66,7 @@ def render_room_card(
     return output
 
 
-def _place_scene(card: Image.Image, scene_path: Path) -> bool:
+def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> bool:
     if not scene_path.is_file():
         return False
     mask: Image.Image | None = None
@@ -76,8 +78,8 @@ def _place_scene(card: Image.Image, scene_path: Path) -> bool:
             scene = ImageOps.fit(
                 oriented.convert("RGB"),
                 (
-                    SCENE_VIEWPORT[2] - SCENE_VIEWPORT[0],
-                    SCENE_VIEWPORT[3] - SCENE_VIEWPORT[1],
+                    SCENE_LAYER_BOUNDS[2] - SCENE_LAYER_BOUNDS[0],
+                    SCENE_LAYER_BOUNDS[3] - SCENE_LAYER_BOUNDS[1],
                 ),
                 method=Image.Resampling.LANCZOS,
             )
@@ -85,14 +87,21 @@ def _place_scene(card: Image.Image, scene_path: Path) -> bool:
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
         return False
     try:
-        mask = Image.new("L", scene.size, 0)
+        # The scene is deliberately larger than the opening. The panel is then
+        # restored over it so the artwork sits physically behind the frame,
+        # instead of ending at a visibly clipped rectangular edge.
+        card.paste(scene, SCENE_LAYER_BOUNDS[:2])
+        mask = Image.new("L", PANEL_SIZE, 255)
         mask_draw = ImageDraw.Draw(mask)
         mask_draw.rounded_rectangle(
-            (0, 0, scene.width - 1, scene.height - 1),
+            SCENE_VIEWPORT,
             radius=SCENE_CORNER_RADIUS,
-            fill=255,
+            fill=0,
         )
-        card.paste(scene, SCENE_VIEWPORT[:2], mask)
+        feathered_mask = mask.filter(ImageFilter.GaussianBlur(SCENE_EDGE_FEATHER))
+        mask.close()
+        mask = feathered_mask
+        card.paste(panel, (0, 0), mask)
     finally:
         scene.close()
         if mask is not None:
@@ -152,7 +161,7 @@ def _draw_room_information(
     if not known and not is_current:
         status = f"{status} · VISITED"
     status_font = _font(27, heading=True)
-    body_font = _font(27)
+    body_font = _font(25)
     heading_font = _font(23, heading=True)
     list_font = _font(25)
 
@@ -180,9 +189,8 @@ def _draw_room_information(
         else view.description or "No description has been recorded."
     )
     content_top = top + 88
-    gutter = 48
-    left_width = (right - left - gutter) * 0.5
-    right_left = left + left_width + gutter
+    left_width = 430
+    right_left = left + left_width + 42
     draw.text(
         (left, content_top),
         "DESCRIPTION",
@@ -195,11 +203,11 @@ def _draw_room_information(
         description,
         body_font,
         left_width,
-        max_lines=5,
+        max_lines=6,
     )
     for line in description_lines:
         draw.text((left, description_top), line, font=body_font, fill="#bdb19c")
-        description_top += 34
+        description_top += 32
 
     if known:
         return
@@ -232,7 +240,7 @@ def _draw_room_information(
                 draw,
                 value,
                 list_font,
-                column_width - 36,
+                column_width - 20,
                 max_lines=1,
             )
             draw.text(

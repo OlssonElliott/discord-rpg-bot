@@ -11,6 +11,7 @@ from rpg_bot.room_scene_renderer import (
     INFO_BOUNDS,
     PANEL_SIZE,
     ROOM_PANEL_PATH,
+    SCENE_LAYER_BOUNDS,
     SCENE_VIEWPORT,
     _loaded_room_panel,
     _summarize,
@@ -89,6 +90,10 @@ class RoomCardRendererTests(unittest.TestCase):
             self.assertEqual(card.getpixel((0, 0))[3], 0)
             panel = _loaded_room_panel()
             assert panel is not None
+            self.assertLess(SCENE_LAYER_BOUNDS[0], SCENE_VIEWPORT[0])
+            self.assertLess(SCENE_LAYER_BOUNDS[1], SCENE_VIEWPORT[1])
+            self.assertGreater(SCENE_LAYER_BOUNDS[2], SCENE_VIEWPORT[2])
+            self.assertGreater(SCENE_LAYER_BOUNDS[3], SCENE_VIEWPORT[3])
             untouched_border = (120, 150)
             self.assertEqual(
                 card.getpixel(untouched_border),
