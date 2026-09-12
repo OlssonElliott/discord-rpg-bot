@@ -6,14 +6,22 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import (
+    Image,
+    ImageChops,
+    ImageDraw,
+    ImageFilter,
+    ImageFont,
+    ImageOps,
+    UnidentifiedImageError,
+)
 
 from .dungeon import FocusedRoomView, KnowledgeState
 
 
 ROOM_PANEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "panel.png"
 PANEL_SIZE = (1448, 1086)
-SCENE_APERTURE_BOUNDS = (118, 105, 1330, 620)
+SCENE_APERTURE_BOUNDS = (111, 108, 1337, 616)
 SCENE_UNDERLAY = 18
 SCENE_LAYER_BOUNDS = (
     SCENE_APERTURE_BOUNDS[0] - SCENE_UNDERLAY,
@@ -21,10 +29,7 @@ SCENE_LAYER_BOUNDS = (
     SCENE_APERTURE_BOUNDS[2] + SCENE_UNDERLAY,
     SCENE_APERTURE_BOUNDS[3] + SCENE_UNDERLAY,
 )
-SCENE_CORNER_RADIUS = 64
-SCENE_INNER_SHADOW_WIDTH = 7
-TOP_FRAME_ORNAMENT = ((724, 20), (781, 76), (724, 139), (667, 76))
-BOTTOM_FRAME_ORNAMENT = ((724, 581), (770, 627), (724, 671), (678, 627))
+SCENE_MASK_SCALE = 4
 INFO_BOUNDS = (150, 670, 1298, 995)
 INFO_COLUMN_PROPORTIONS = (0.36, 0.22, 0.42)
 INFO_COLUMN_GAP = 28
@@ -104,25 +109,15 @@ def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> boo
         # scene therefore continues beneath the ornate frame by 18 pixels.
         scene_layer = Image.new("RGBA", PANEL_SIZE, (0, 0, 0, 0))
         scene_layer.paste(scene, SCENE_LAYER_BOUNDS[:2])
-        scene_mask = Image.new("L", PANEL_SIZE, 0)
-        ImageDraw.Draw(scene_mask).rounded_rectangle(
-            SCENE_LAYER_BOUNDS,
-            radius=SCENE_CORNER_RADIUS + SCENE_UNDERLAY,
-            fill=255,
-        )
+        scene_mask = _scene_aperture_mask()
         card.paste(scene_layer, (0, 0), scene_mask)
 
-        frame_mask = Image.new("L", PANEL_SIZE, 255)
-        frame_draw = ImageDraw.Draw(frame_mask)
-        frame_draw.rounded_rectangle(
-            SCENE_APERTURE_BOUNDS,
-            radius=SCENE_CORNER_RADIUS,
-            fill=0,
-        )
-        frame_draw.polygon(TOP_FRAME_ORNAMENT, fill=255)
-        frame_draw.polygon(BOTTOM_FRAME_ORNAMENT, fill=255)
+        # Restore every pixel outside the panel-specific opening. This places
+        # the ornate corners and both centre ornaments above the oversized
+        # scene without approximating them with broad, visible polygons.
+        frame_mask = ImageOps.invert(scene_mask)
         card.paste(panel, (0, 0), frame_mask)
-        _draw_inner_scene_shadow(card)
+        _draw_inner_scene_shadow(card, scene_mask)
     finally:
         scene.close()
         for image in (scene_layer, scene_mask, frame_mask):
@@ -131,24 +126,60 @@ def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> boo
     return True
 
 
-def _draw_inner_scene_shadow(card: Image.Image) -> None:
-    """Add a narrow dark lip where the foreground frame meets the scene."""
+def _scene_aperture_mask() -> Image.Image:
+    """Return an antialiased mask following the panel's true upper opening.
+
+    The ornate corner spandrels are not circular, and the centre ornaments
+    project into the opening. Keeping those shapes in this path means the
+    foreground panel itself defines the visible edge of the room scene.
+    """
+    scale = SCENE_MASK_SCALE
+    mask = Image.new("L", (PANEL_SIZE[0] * scale, PANEL_SIZE[1] * scale), 0)
+    points = (
+        # Top edge and the lower tip of the top-centre ornament.
+        (184, 108), (671, 108), (684, 118), (700, 128), (724, 137),
+        (748, 128), (764, 118), (777, 108), (1264, 108),
+        # Right filigree corner and straight side.
+        (1288, 111), (1308, 122), (1324, 141), (1334, 164),
+        (1337, 188), (1337, 538),
+        # Lower-right filigree corner.
+        (1334, 561), (1324, 582), (1308, 600), (1287, 611), (1263, 616),
+        # Bottom edge rises tightly around the upper half of its ornament.
+        (779, 616), (763, 608), (748, 600), (724, 582),
+        (700, 600), (685, 608), (669, 616), (185, 616),
+        # Lower-left filigree corner and straight side.
+        (161, 612), (140, 601), (124, 583), (114, 562), (111, 538),
+        (111, 187),
+        # Upper-left filigree corner.
+        (114, 163), (124, 141), (140, 123), (160, 112),
+    )
+    ImageDraw.Draw(mask).polygon(
+        tuple((x * scale, y * scale) for x, y in points),
+        fill=255,
+    )
+    resized = mask.resize(PANEL_SIZE, Image.Resampling.LANCZOS)
+    mask.close()
+    return resized
+
+
+def _draw_inner_scene_shadow(card: Image.Image, aperture_mask: Image.Image) -> None:
+    """Add a very small inner lip that follows the custom aperture."""
     shadow = Image.new("RGBA", PANEL_SIZE, (0, 0, 0, 0))
+    eroded: Image.Image | None = None
+    edge: Image.Image | None = None
     try:
-        ImageDraw.Draw(shadow).rounded_rectangle(
-            (
-                SCENE_APERTURE_BOUNDS[0] + 2,
-                SCENE_APERTURE_BOUNDS[1] + 2,
-                SCENE_APERTURE_BOUNDS[2] - 2,
-                SCENE_APERTURE_BOUNDS[3] - 2,
-            ),
-            radius=SCENE_CORNER_RADIUS - 2,
-            outline=(0, 0, 0, 72),
-            width=SCENE_INNER_SHADOW_WIDTH,
+        eroded = aperture_mask.filter(ImageFilter.MinFilter(5))
+        edge = ImageChops.subtract(aperture_mask, eroded).point(
+            lambda value: value * 44 // 255
         )
+        shadow.putalpha(edge)
         card.alpha_composite(shadow)
     finally:
         shadow.close()
+        if eroded is not None:
+            eroded.close()
+        if edge is not None:
+            edge.close()
 
 
 def _draw_scene_placeholder(
@@ -158,11 +189,11 @@ def _draw_scene_placeholder(
     unavailable: bool,
 ) -> None:
     left, top, right, bottom = SCENE_APERTURE_BOUNDS
-    draw.rounded_rectangle(
-        (left, top, right, bottom),
-        radius=SCENE_CORNER_RADIUS,
-        fill="#0c0d0e",
-    )
+    aperture_mask = _scene_aperture_mask()
+    try:
+        draw.bitmap((0, 0), aperture_mask, fill="#0c0d0e")
+    finally:
+        aperture_mask.close()
     for inset in range(0, 150, 10):
         shade = 12 + inset // 15
         draw.rectangle(

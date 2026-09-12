@@ -15,6 +15,7 @@ from rpg_bot.room_scene_renderer import (
     SCENE_LAYER_BOUNDS,
     _loaded_room_panel,
     _list_lines,
+    _scene_aperture_mask,
     _summarize,
     _wrap_text,
     render_room_card,
@@ -92,6 +93,11 @@ class RoomCardRendererTests(unittest.TestCase):
             panel = _loaded_room_panel()
             assert panel is not None
             self.assertEqual(card.getpixel((724, 120)), panel.getpixel((724, 120)))
+            # The real centre ornaments remain foreground frame pixels, while
+            # the scene stays visible immediately beside their narrow shapes.
+            self.assertEqual(card.getpixel((724, 590)), panel.getpixel((724, 590)))
+            self.assertEqual(card.getpixel((690, 590)), (128, 0, 128, 255))
+            self.assertEqual(card.getpixel((758, 590)), (128, 0, 128, 255))
             self.assertLess(SCENE_LAYER_BOUNDS[0], SCENE_APERTURE_BOUNDS[0])
             self.assertLess(SCENE_LAYER_BOUNDS[1], SCENE_APERTURE_BOUNDS[1])
             self.assertGreater(SCENE_LAYER_BOUNDS[2], SCENE_APERTURE_BOUNDS[2])
@@ -103,6 +109,25 @@ class RoomCardRendererTests(unittest.TestCase):
             )
             difference = ImageChops.difference(card, panel)
             self.assertIsNotNone(difference.crop(INFO_BOUNDS).getbbox())
+
+    def test_scene_aperture_matches_frame_corners_and_centre_ornaments(self) -> None:
+        mask = _scene_aperture_mask()
+        try:
+            # The filigree corners belong to the frame, rather than to a
+            # generic rounded image layer.
+            self.assertEqual(mask.getpixel((120, 120)), 0)
+            self.assertGreater(mask.getpixel((180, 130)), 250)
+            self.assertEqual(mask.getpixel((1328, 125)), 0)
+            self.assertGreater(mask.getpixel((1270, 130)), 250)
+
+            # The two ornaments intrude only by their actual narrow silhouette.
+            self.assertEqual(mask.getpixel((724, 120)), 0)
+            self.assertGreater(mask.getpixel((650, 120)), 250)
+            self.assertEqual(mask.getpixel((724, 590)), 0)
+            self.assertGreater(mask.getpixel((690, 590)), 250)
+            self.assertGreater(mask.getpixel((758, 590)), 250)
+        finally:
+            mask.close()
 
     def test_known_room_never_uses_supplied_scene_or_hidden_details(self) -> None:
         known = FocusedRoomView("study", KnowledgeState.KNOWN, "Forgotten Study")
