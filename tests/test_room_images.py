@@ -3,13 +3,19 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
+from rpg_bot.dungeon import FocusedRoomView, KnowledgeState
 from rpg_bot.room_images import InvalidRoomImageError, RoomImageStore
 from rpg_bot.room_scene_renderer import (
-    PANEL_CROP,
+    INFO_BOUNDS,
+    PANEL_SIZE,
     ROOM_PANEL_PATH,
-    render_room_scene_panel,
+    SCENE_VIEWPORT,
+    _loaded_room_panel,
+    _summarize,
+    _wrap_text,
+    render_room_card,
 )
 
 
@@ -47,19 +53,97 @@ class RoomImageStoreTests(unittest.TestCase):
                 store.save(b"x" * (8 * 1024 * 1024 + 1), "image/png")
             self.assertIsNone(store.path_for("../outside.webp"))
 
-    def test_panel_asset_frames_a_room_scene(self) -> None:
+
+class RoomCardRendererTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.scene_path = Path(self.temporary_directory.name) / "scene.png"
+        self.scene_path.write_bytes(image_bytes())
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_full_panel_scene_and_lower_information_are_preserved(self) -> None:
         self.assertTrue(ROOM_PANEL_PATH.is_file())
-        with tempfile.TemporaryDirectory() as directory:
-            scene_path = Path(directory) / "scene.png"
-            scene_path.write_bytes(image_bytes())
+        view = FocusedRoomView(
+            "study",
+            KnowledgeState.VISITED,
+            "Forgotten Study",
+            "Dust and old records cover every surface.",
+            visible_characters=("Bobby",),
+            visible_items=("Iron Key",),
+        )
 
-            rendered = render_room_scene_panel(scene_path)
+        rendered = render_room_card(view, is_current=True, scene_path=self.scene_path)
 
-            self.assertIsNotNone(rendered)
-            assert rendered is not None
-            with Image.open(rendered) as panel:
-                self.assertEqual(panel.format, "WEBP")
-                self.assertEqual(panel.size, (PANEL_CROP[2], PANEL_CROP[3]))
+        self.assertIsNotNone(rendered)
+        assert rendered is not None
+        with Image.open(rendered) as card:
+            self.assertEqual(card.format, "WEBP")
+            self.assertEqual(card.size, PANEL_SIZE)
+            scene_center = (
+                (SCENE_VIEWPORT[0] + SCENE_VIEWPORT[2]) // 2,
+                (SCENE_VIEWPORT[1] + SCENE_VIEWPORT[3]) // 2,
+            )
+            self.assertEqual(card.getpixel(scene_center), (128, 0, 128))
+            panel = _loaded_room_panel()
+            assert panel is not None
+            untouched_border = (120, 150)
+            self.assertEqual(
+                card.getpixel(untouched_border),
+                panel.convert("RGB").getpixel(untouched_border),
+            )
+            difference = ImageChops.difference(card, panel.convert("RGB"))
+            self.assertIsNotNone(difference.crop(INFO_BOUNDS).getbbox())
+
+    def test_known_room_never_uses_supplied_scene_or_hidden_details(self) -> None:
+        known = FocusedRoomView("study", KnowledgeState.KNOWN, "Forgotten Study")
+
+        with_scene = render_room_card(
+            known, is_current=False, scene_path=self.scene_path
+        )
+        without_scene = render_room_card(known, is_current=False)
+
+        assert with_scene is not None and without_scene is not None
+        self.assertEqual(with_scene.getvalue(), without_scene.getvalue())
+
+    def test_fallback_inspected_state_and_overflow_render_inside_fixed_card(self) -> None:
+        view = FocusedRoomView(
+            "archive",
+            KnowledgeState.VISITED,
+            "The Extremely Long and Entirely Forgotten Royal Archive",
+            "A " + "very long remembered description " * 30,
+            visible_characters=tuple(f"Character {index}" for index in range(8)),
+            visible_entities=tuple(f"Creature {index}" for index in range(8)),
+            visible_items=tuple(f"Item {index}" for index in range(8)),
+        )
+
+        current = render_room_card(view, is_current=True)
+        inspected = render_room_card(view, is_current=False)
+
+        assert current is not None and inspected is not None
+        self.assertNotEqual(current.getvalue(), inspected.getvalue())
+        with Image.open(inspected) as card:
+            self.assertEqual(card.size, PANEL_SIZE)
+
+        canvas = Image.new("RGB", (300, 100))
+        draw = ImageDraw.Draw(canvas)
+        lines = _wrap_text(
+            draw,
+            "many words that cannot all fit in this narrow box",
+            _loaded_test_font(),
+            90,
+            max_lines=2,
+        )
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[-1].endswith("…"))
+        self.assertEqual(_summarize(tuple("ABCDE"), limit=1), ("A", "+ 4 more"))
+
+
+def _loaded_test_font():
+    from PIL import ImageFont
+
+    return ImageFont.load_default()
 
 
 if __name__ == "__main__":

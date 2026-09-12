@@ -173,7 +173,7 @@ class PlayerViewServiceTests(unittest.TestCase):
         rendered = render_player_map(view)
         self.assertEqual(rendered.read(8), b"\x89PNG\r\n\x1a\n")
 
-    def test_visited_room_hud_shows_status_description_and_scene(self) -> None:
+    def test_visited_room_hud_uses_one_composed_card_without_duplicate_text(self) -> None:
         self.world.place_character(self.alice_id, self.chapel.id)
         view = self.views.build_player_map(self.alice_id)
         adapter = DiscordPlayerViewAdapter(self.database, self.views, Mock())
@@ -186,13 +186,11 @@ class PlayerViewServiceTests(unittest.TestCase):
                 "Dashed chambers remain unvisited.",
             )
             detail = embeds[1]
-            self.assertEqual(detail.author.name, "CURRENT ROOM")
-            self.assertEqual(detail.title, "Chapel")
-            self.assertEqual(detail.description, self.chapel.description)
-            self.assertEqual(detail.fields[0].name, "Journal")
-            self.assertEqual(detail.fields[0].value, "You are here.")
-            self.assertEqual(detail.image.url, self.chapel.scene_image_url)
-            self.assertEqual(detail.footer.text, "Visual memory")
+            self.assertIsNone(detail.title)
+            self.assertIsNone(detail.description)
+            self.assertEqual(len(detail.fields), 0)
+            self.assertEqual(detail.image.url, "attachment://room-card.webp")
+            self.assertEqual(files[1].filename, "room-card.webp")
             room_select = next(
                 control
                 for control in controls.children
@@ -238,13 +236,11 @@ class PlayerViewServiceTests(unittest.TestCase):
         embeds, files, _controls = adapter._message_parts(view)
         try:
             detail = embeds[1]
-            self.assertEqual(detail.author.name, "KNOWN · UNVISITED")
-            self.assertEqual(detail.title, "? Chapel")
-            self.assertIn("not yet present", detail.description)
-            self.assertEqual(detail.fields[0].name, "Journal")
-            self.assertEqual(detail.fields[0].value, "Not personally visited.")
-            self.assertIsNone(detail.image.url)
-            self.assertEqual(len(files), 1)
+            self.assertIsNone(detail.title)
+            self.assertIsNone(detail.description)
+            self.assertEqual(len(detail.fields), 0)
+            self.assertEqual(detail.image.url, "attachment://room-card.webp")
+            self.assertEqual(len(files), 2)
         finally:
             for file in files:
                 file.close()
@@ -302,9 +298,10 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         embeds, files, _controls = adapter._message_parts(view)
         try:
-            self.assertEqual(embeds[1].image.url, "attachment://room-scene.webp")
-            self.assertEqual(files[1].filename, "room-scene.webp")
-            self.assertEqual(embeds[1].footer.text, "Visual memory")
+            self.assertEqual(embeds[1].image.url, "attachment://room-card.webp")
+            self.assertEqual(files[1].filename, "room-card.webp")
+            self.assertIsNone(embeds[1].title)
+            self.assertEqual(len(embeds[1].fields), 0)
         finally:
             for file in files:
                 file.close()
@@ -317,10 +314,8 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         embeds, files, _controls = adapter._message_parts(view)
         try:
-            self.assertIsNone(embeds[1].image.url)
-            self.assertEqual(
-                embeds[1].footer.text, "No visual record available."
-            )
+            self.assertEqual(embeds[1].image.url, "attachment://room-card.webp")
+            self.assertEqual(files[1].filename, "room-card.webp")
         finally:
             for file in files:
                 file.close()
@@ -333,11 +328,8 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         embeds, files, _controls = adapter._message_parts(view)
         try:
-            self.assertIsNone(embeds[1].image.url)
-            self.assertEqual(
-                embeds[1].footer.text,
-                "The remembered scene is currently unavailable.",
-            )
+            self.assertEqual(embeds[1].image.url, "attachment://room-card.webp")
+            self.assertEqual(files[1].filename, "room-card.webp")
         finally:
             for file in files:
                 file.close()
