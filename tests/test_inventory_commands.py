@@ -191,6 +191,12 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             self.service, 7, self.character.character_id, inventory, dagger_id
         )
         interaction = interaction_for(7)
+        world = WorldService(self.database, self.catalog)
+        world.create_area("crypt", "Crypt")
+        world.create_room("hall", "crypt", "Hall")
+        world.place_character(self.character.character_id, "hall")
+        witness = self.database.create_character(8, "Sven", 12)
+        world.place_character(witness.character_id, "hall")
         character_cog = SimpleNamespace(
             portrait_store=SimpleNamespace(path_for=lambda _key: None),
             refresh_dedicated_sheet_for=AsyncMock(return_value=True),
@@ -210,12 +216,35 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(public_embed.author.name, "Olof")
         self.assertEqual(
             public_embed.description,
-            "Equipped **Iron Dagger** as **Main Hand**.",
+            "**Olof** equips **Iron Dagger** as **Main Hand**.",
         )
         character_cog.refresh_dedicated_sheet_for.assert_awaited_once()
 
+    async def test_equip_is_not_announced_without_another_character_present(self) -> None:
+        dagger_id = self.service.grant(self.character, "iron_dagger")
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            self.service, 7, self.character.character_id, inventory, dagger_id
+        )
+        interaction = interaction_for(7)
+        equip = next(
+            child
+            for child in view.children
+            if isinstance(child, discord.ui.Button) and child.label == "Equip"
+        )
+
+        await equip.callback(interaction)
+
+        interaction.followup.send.assert_not_awaited()
+
     async def test_read_opens_separate_panel_without_consuming_item(self) -> None:
         service, note_id, template = self.readable_service()
+        world = WorldService(self.database, service.catalog)
+        world.create_area("crypt", "Crypt")
+        world.create_room("library", "crypt", "Library")
+        world.place_character(self.character.character_id, "library")
+        witness = self.database.create_character(8, "Sven", 12)
+        world.place_character(witness.character_id, "library")
         inventory = self.database.get_character_inventory(self.character.character_id)
 
         view = InventoryView(
@@ -232,6 +261,12 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(template.description, embeds[1].description)
         self.assertIn(template.content, embeds[1].description)
         self.assertNotIn("Use", button_labels(view))
+        public_embed = interaction.followup.send.await_args.kwargs["embed"]
+        self.assertEqual(public_embed.author.name, "Olof")
+        self.assertEqual(
+            public_embed.description,
+            "**Olof** takes out **Bloodstained Note** and starts reading.",
+        )
         self.assertEqual(
             self.database.get_character_inventory(
                 self.character.character_id

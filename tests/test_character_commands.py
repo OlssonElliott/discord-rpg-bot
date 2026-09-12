@@ -199,7 +199,7 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         sent_view = channel.send.await_args.kwargs["view"]
         self.assertEqual(
             [button.label for button in sent_view.children],
-            ["Manage inventory", "Refresh"],
+            ["Refresh"],
         )
         sent_embeds = channel.send.await_args.kwargs["embeds"]
         self.assertEqual([embed.title for embed in sent_embeds], ["Olof", "Olof's Inventory"])

@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..database import Database
 from ..inventory import (
     DEFAULT_ITEM_CATALOG_PATH,
     EquipmentSlot,
@@ -357,12 +358,14 @@ class InventoryView(InventoryOwnedView):
             if action == "equip":
                 slot = self.service.equip(character, self.selected_id)
                 equipment_message = (
-                    f"Equipped **{selected_template.name}** as "
-                    f"**{slot.value.replace('_', ' ').title()}**."
+                    f"**{character.name}** equips **{selected_template.name}** "
+                    f"as **{slot.value.replace('_', ' ').title()}**."
                 )
             elif action == "unequip":
                 self.service.unequip(character, self.selected_id)
-                equipment_message = f"Unequipped **{selected_template.name}**."
+                equipment_message = (
+                    f"**{character.name}** unequips **{selected_template.name}**."
+                )
             elif action == "use":
                 character = self.service.use(character, self.selected_id)
         except (InventoryError, ValueError) as error:
@@ -384,7 +387,9 @@ class InventoryView(InventoryOwnedView):
         )
         await refresh_character_sheet(interaction, character)
         if equipment_message is not None:
-            await _announce_equipment(interaction, character, equipment_message)
+            await _announce_equipment(
+                interaction, self.service.database, character, equipment_message
+            )
 
     @discord.ui.button(label="Equip", style=discord.ButtonStyle.success, row=1)
     async def equip_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -415,8 +420,9 @@ class InventoryView(InventoryOwnedView):
                 "Select a readable item first.", ephemeral=True
             )
             return
+        character = self.character()
         try:
-            self.service.read(self.character(), self.selected_id)
+            template = self.service.read(character, self.selected_id)
         except (InventoryError, ValueError) as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
@@ -429,6 +435,12 @@ class InventoryView(InventoryOwnedView):
             reading_id=self.selected_id,
             reading_page=0,
             edit=True,
+        )
+        await _announce_room_action(
+            interaction,
+            self.service.database,
+            character,
+            f"**{character.name}** takes out **{template.name}** and starts reading.",
         )
 
     @discord.ui.button(label="Drop", style=discord.ButtonStyle.danger, row=1)
@@ -669,11 +681,29 @@ async def refresh_inventory_views(
 
 async def _announce_equipment(
     interaction: discord.Interaction,
+    database: Database,
+    character: Character,
+    description: str,
+) -> None:
+    await _announce_room_action(interaction, database, character, description)
+
+
+async def _announce_room_action(
+    interaction: discord.Interaction,
+    database: Database,
     character: Character,
     description: str,
 ) -> None:
     from .player import apply_character_identity, portrait_attachment_name
 
+    if character.character_id is None:
+        return
+    room = database.get_character_room(character.character_id)
+    if room is None or not any(
+        other.character_id != character.character_id and other.is_active
+        for other in room.characters
+    ):
+        return
     character_cog = interaction.client.get_cog("CharacterCommands")
     portrait_store = getattr(character_cog, "portrait_store", CharacterPortraitStore())
     embed = discord.Embed(

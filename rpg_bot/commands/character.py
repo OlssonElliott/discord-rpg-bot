@@ -1083,30 +1083,6 @@ class DedicatedCharacterSheetView(discord.ui.View):
         return False
 
     @discord.ui.button(
-        label="Manage inventory",
-        style=discord.ButtonStyle.secondary,
-        emoji="🎒",
-        custom_id="character-sheet:inventory",
-    )
-    async def inventory(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        del button
-        from .inventory import show_inventory
-
-        character = self.cog.database.get_character_by_id(
-            self.user_id, self.character_id
-        )
-        if character is None:
-            await interaction.response.send_message(
-                "That character is no longer available.", ephemeral=True
-            )
-            return
-        await show_inventory(
-            interaction, self.cog.inventory_service, character, edit=False
-        )
-
-    @discord.ui.button(
         label="Refresh",
         style=discord.ButtonStyle.primary,
         emoji="🔄",
