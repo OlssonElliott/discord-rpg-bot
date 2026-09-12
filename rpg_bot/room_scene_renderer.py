@@ -13,7 +13,8 @@ from .dungeon import FocusedRoomView, KnowledgeState
 
 ROOM_PANEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "panel.png"
 PANEL_SIZE = (1448, 1086)
-SCENE_VIEWPORT = (170, 130, 1278, 596)
+SCENE_VIEWPORT = (143, 128, 1306, 600)
+SCENE_CORNER_RADIUS = 48
 INFO_BOUNDS = (150, 670, 1298, 995)
 
 
@@ -53,12 +54,12 @@ def render_room_card(
 
     _draw_room_information(draw, view, is_current=is_current)
     output = BytesIO()
-    rendered = card.convert("RGB")
     try:
-        rendered.save(output, format="WEBP", lossless=True, method=6)
+        # Keep the panel's transparent outer silhouette. Converting to RGB here
+        # produces the black rectangle Discord previously showed around it.
+        card.save(output, format="WEBP", lossless=True, method=6)
         output.seek(0)
     finally:
-        rendered.close()
         card.close()
     return output
 
@@ -66,6 +67,7 @@ def render_room_card(
 def _place_scene(card: Image.Image, scene_path: Path) -> bool:
     if not scene_path.is_file():
         return False
+    mask: Image.Image | None = None
     try:
         with Image.open(scene_path) as source:
             if getattr(source, "is_animated", False):
@@ -83,9 +85,18 @@ def _place_scene(card: Image.Image, scene_path: Path) -> bool:
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
         return False
     try:
-        card.paste(scene, SCENE_VIEWPORT[:2])
+        mask = Image.new("L", scene.size, 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rounded_rectangle(
+            (0, 0, scene.width - 1, scene.height - 1),
+            radius=SCENE_CORNER_RADIUS,
+            fill=255,
+        )
+        card.paste(scene, SCENE_VIEWPORT[:2], mask)
     finally:
         scene.close()
+        if mask is not None:
+            mask.close()
     return True
 
 
@@ -96,7 +107,11 @@ def _draw_scene_placeholder(
     unavailable: bool,
 ) -> None:
     left, top, right, bottom = SCENE_VIEWPORT
-    draw.rectangle((left, top, right, bottom), fill="#0c0d0e")
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=SCENE_CORNER_RADIUS,
+        fill="#0c0d0e",
+    )
     for inset in range(0, 150, 10):
         shade = 12 + inset // 15
         draw.rectangle(

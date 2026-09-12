@@ -85,15 +85,16 @@ class RoomCardRendererTests(unittest.TestCase):
                 (SCENE_VIEWPORT[0] + SCENE_VIEWPORT[2]) // 2,
                 (SCENE_VIEWPORT[1] + SCENE_VIEWPORT[3]) // 2,
             )
-            self.assertEqual(card.getpixel(scene_center), (128, 0, 128))
+            self.assertEqual(card.getpixel(scene_center), (128, 0, 128, 255))
+            self.assertEqual(card.getpixel((0, 0))[3], 0)
             panel = _loaded_room_panel()
             assert panel is not None
             untouched_border = (120, 150)
             self.assertEqual(
                 card.getpixel(untouched_border),
-                panel.convert("RGB").getpixel(untouched_border),
+                panel.getpixel(untouched_border),
             )
-            difference = ImageChops.difference(card, panel.convert("RGB"))
+            difference = ImageChops.difference(card, panel)
             self.assertIsNotNone(difference.crop(INFO_BOUNDS).getbbox())
 
     def test_known_room_never_uses_supplied_scene_or_hidden_details(self) -> None:
