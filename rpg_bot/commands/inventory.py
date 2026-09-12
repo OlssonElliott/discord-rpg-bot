@@ -9,7 +9,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..database import Database
 from ..inventory import (
     DEFAULT_ITEM_CATALOG_PATH,
     EquipmentSlot,
@@ -411,7 +410,7 @@ class InventoryView(InventoryOwnedView):
             await refresh_character_sheet(interaction, character)
         if equipment_message is not None:
             await _announce_equipment(
-                interaction, self.service.database, character, equipment_message
+                interaction, character, equipment_message
             )
 
     @discord.ui.button(
@@ -483,7 +482,6 @@ class InventoryView(InventoryOwnedView):
         )
         await _announce_room_action(
             interaction,
-            self.service.database,
             character,
             f"**{character.name}** takes out **{template.name}** and starts reading.",
         )
@@ -773,29 +771,19 @@ async def refresh_inventory_views(
 
 async def _announce_equipment(
     interaction: discord.Interaction,
-    database: Database,
     character: Character,
     description: str,
 ) -> None:
-    await _announce_room_action(interaction, database, character, description)
+    await _announce_room_action(interaction, character, description)
 
 
 async def _announce_room_action(
     interaction: discord.Interaction,
-    database: Database,
     character: Character,
     description: str,
 ) -> None:
     from .player import apply_character_identity, portrait_attachment_name
 
-    if character.character_id is None:
-        return
-    room = database.get_character_room(character.character_id)
-    if room is None or not any(
-        other.character_id != character.character_id and other.is_active
-        for other in room.characters
-    ):
-        return
     game_channel = await _get_or_create_game_channel(interaction)
     if game_channel is None:
         return

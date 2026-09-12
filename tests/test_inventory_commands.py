@@ -245,13 +245,15 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         character_cog.refresh_dedicated_sheet_for.assert_awaited_once()
 
-    async def test_equip_is_not_announced_without_another_character_present(self) -> None:
+    async def test_equip_is_announced_without_another_character_present(self) -> None:
         dagger_id = self.service.grant(self.character, "iron_dagger")
         inventory = self.database.get_character_inventory(self.character.character_id)
         view = InventoryView(
             self.service, 7, self.character.character_id, inventory, dagger_id
         )
         interaction = interaction_for(7)
+        game_channel = SimpleNamespace(name="game", send=AsyncMock())
+        interaction.guild = SimpleNamespace(text_channels=[game_channel])
         equip = next(
             child
             for child in view.children
@@ -260,7 +262,11 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
 
         await equip.callback(interaction)
 
-        interaction.followup.send.assert_not_awaited()
+        public_embed = game_channel.send.await_args.kwargs["embed"]
+        self.assertEqual(
+            public_embed.description,
+            "**Olof** equips **Iron Dagger** as **Main Hand**.",
+        )
 
     async def test_read_opens_separate_panel_without_consuming_item(self) -> None:
         service, note_id, template = self.readable_service()
