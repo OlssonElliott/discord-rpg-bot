@@ -19,9 +19,11 @@ from PIL import (
 from .dungeon import FocusedRoomView, KnowledgeState
 
 
-ROOM_PANEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "panel.png"
+ROOM_PANEL_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "panel-square.png"
+)
 PANEL_SIZE = (1448, 1086)
-SCENE_APERTURE_BOUNDS = (111, 108, 1337, 616)
+SCENE_APERTURE_BOUNDS = (113, 111, 1335, 629)
 SCENE_UNDERLAY = 18
 SCENE_LAYER_BOUNDS = (
     SCENE_APERTURE_BOUNDS[0] - SCENE_UNDERLAY,
@@ -127,34 +129,11 @@ def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> boo
 
 
 def _scene_aperture_mask() -> Image.Image:
-    """Return an antialiased mask following the panel's true upper opening.
-
-    The ornate corner spandrels are not circular, and the centre ornaments
-    project into the opening. Keeping those shapes in this path means the
-    foreground panel itself defines the visible edge of the room scene.
-    """
+    """Return an antialiased rectangular mask for the clean scene opening."""
     scale = SCENE_MASK_SCALE
     mask = Image.new("L", (PANEL_SIZE[0] * scale, PANEL_SIZE[1] * scale), 0)
-    points = (
-        # Top edge and the lower tip of the top-centre ornament.
-        (184, 108), (671, 108), (684, 118), (700, 128), (724, 137),
-        (748, 128), (764, 118), (777, 108), (1264, 108),
-        # Right filigree corner and straight side.
-        (1288, 111), (1308, 122), (1324, 141), (1334, 164),
-        (1337, 188), (1337, 538),
-        # Lower-right filigree corner.
-        (1334, 561), (1324, 582), (1308, 600), (1287, 611), (1263, 616),
-        # Bottom edge rises tightly around the upper half of its ornament.
-        (779, 616), (763, 608), (748, 600), (724, 582),
-        (700, 600), (685, 608), (669, 616), (185, 616),
-        # Lower-left filigree corner and straight side.
-        (161, 612), (140, 601), (124, 583), (114, 562), (111, 538),
-        (111, 187),
-        # Upper-left filigree corner.
-        (114, 163), (124, 141), (140, 123), (160, 112),
-    )
-    ImageDraw.Draw(mask).polygon(
-        tuple((x * scale, y * scale) for x, y in points),
+    ImageDraw.Draw(mask).rectangle(
+        tuple(value * scale for value in SCENE_APERTURE_BOUNDS),
         fill=255,
     )
     resized = mask.resize(PANEL_SIZE, Image.Resampling.LANCZOS)

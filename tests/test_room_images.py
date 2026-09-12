@@ -92,10 +92,10 @@ class RoomCardRendererTests(unittest.TestCase):
             self.assertEqual(card.getpixel((0, 0))[3], 0)
             panel = _loaded_room_panel()
             assert panel is not None
-            self.assertEqual(card.getpixel((724, 120)), panel.getpixel((724, 120)))
-            # The real centre ornaments remain foreground frame pixels, while
-            # the scene stays visible immediately beside their narrow shapes.
-            self.assertEqual(card.getpixel((724, 590)), panel.getpixel((724, 590)))
+            self.assertEqual(card.getpixel((724, 120)), (128, 0, 128, 255))
+            # The scene opening is rectangular: no centre ornaments or corner
+            # flourishes intrude into the image anymore.
+            self.assertEqual(card.getpixel((724, 590)), (128, 0, 128, 255))
             self.assertEqual(card.getpixel((690, 590)), (128, 0, 128, 255))
             self.assertEqual(card.getpixel((758, 590)), (128, 0, 128, 255))
             self.assertLess(SCENE_LAYER_BOUNDS[0], SCENE_APERTURE_BOUNDS[0])
@@ -110,22 +110,24 @@ class RoomCardRendererTests(unittest.TestCase):
             difference = ImageChops.difference(card, panel)
             self.assertIsNotNone(difference.crop(INFO_BOUNDS).getbbox())
 
-    def test_scene_aperture_matches_frame_corners_and_centre_ornaments(self) -> None:
+    def test_scene_aperture_is_a_clean_rectangle(self) -> None:
         mask = _scene_aperture_mask()
         try:
-            # The filigree corners belong to the frame, rather than to a
-            # generic rounded image layer.
-            self.assertEqual(mask.getpixel((120, 120)), 0)
+            # All four inner corners and both former ornament positions are
+            # part of one uninterrupted rectangular scene opening.
+            self.assertGreater(mask.getpixel((120, 120)), 250)
             self.assertGreater(mask.getpixel((180, 130)), 250)
-            self.assertEqual(mask.getpixel((1328, 125)), 0)
+            self.assertGreater(mask.getpixel((1328, 125)), 250)
             self.assertGreater(mask.getpixel((1270, 130)), 250)
-
-            # The two ornaments intrude only by their actual narrow silhouette.
-            self.assertEqual(mask.getpixel((724, 120)), 0)
+            self.assertGreater(mask.getpixel((120, 620)), 250)
+            self.assertGreater(mask.getpixel((1328, 620)), 250)
+            self.assertGreater(mask.getpixel((724, 120)), 250)
             self.assertGreater(mask.getpixel((650, 120)), 250)
-            self.assertEqual(mask.getpixel((724, 590)), 0)
+            self.assertGreater(mask.getpixel((724, 590)), 250)
             self.assertGreater(mask.getpixel((690, 590)), 250)
             self.assertGreater(mask.getpixel((758, 590)), 250)
+            self.assertLess(mask.getpixel((112, 110)), 5)
+            self.assertLess(mask.getpixel((1336, 630)), 5)
         finally:
             mask.close()
 
