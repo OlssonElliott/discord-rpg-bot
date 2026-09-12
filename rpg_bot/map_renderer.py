@@ -1,13 +1,13 @@
 """Pillow renderer for already-filtered player dungeon maps."""
 
-from collections import Counter
+from collections import deque
 from functools import lru_cache
 from io import BytesIO
 from math import hypot
 from pathlib import Path
 from random import Random
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFont
 
 from .dungeon import KnowledgeState, PlayerMap
 
@@ -17,6 +17,8 @@ MAP_HEIGHT = 1000
 PADDING = 80
 MIN_ROOM_WIDTH = 250
 MIN_ROOM_HEIGHT = 160
+WORLD_TO_MAP_SCALE = 1.0
+VIEWPORT_BOUNDS = (PADDING, 145, MAP_WIDTH - PADDING, MAP_HEIGHT - PADDING)
 MAP_BACKGROUND_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "map" / "background.png"
 )
@@ -62,7 +64,9 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         )
         return _png(image)
 
+    map_base = image.copy()
     positions = _layout(view)
+    focus_distances = _focus_distances(view)
     centers = {
         room.id: (
             positions[room.id][0] + positions[room.id][2] / 2,
@@ -84,25 +88,43 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         source = centers.get(connection.from_room_id)
         target = centers.get(connection.to_room_id)
         if source and target:
+            connection_fog = _fog_strength(
+                max(
+                    focus_distances.get(connection.from_room_id, 99),
+                    focus_distances.get(connection.to_room_id, 99),
+                )
+            )
             start = _edge_point(source, target, boxes[connection.from_room_id])
             end = _edge_point(target, source, boxes[connection.to_room_id])
             # Run beneath each room frame so antialiased/shadow pixels cannot
             # leave a visible gap between the connector and the artwork.
             start = _point_toward(start, source, 18)
             end = _point_toward(end, target, 18)
-            draw.line((*start, *end), fill="#080706", width=13)
-            draw.line((*start, *end), fill="#645338", width=6)
-            draw.line((*start, *end), fill="#9a8051", width=2)
+            draw.line(
+                (*start, *end),
+                fill=_fog_colour("#080706", connection_fog),
+                width=13,
+            )
+            draw.line(
+                (*start, *end),
+                fill=_fog_colour("#645338", connection_fog),
+                width=6,
+            )
+            draw.line(
+                (*start, *end),
+                fill=_fog_colour("#9a8051", connection_fog),
+                width=2,
+            )
             midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
             draw.ellipse(
                 (midpoint[0] - 8, midpoint[1] - 8, midpoint[0] + 8, midpoint[1] + 8),
-                fill="#655239",
-                outline="#c4a66b",
+                fill=_fog_colour("#655239", connection_fog),
+                outline=_fog_colour("#c4a66b", connection_fog),
                 width=2,
             )
             draw.ellipse(
                 (midpoint[0] - 3, midpoint[1] - 3, midpoint[0] + 3, midpoint[1] + 3),
-                fill="#dbc38b",
+                fill=_fog_colour("#dbc38b", connection_fog),
             )
         else:
             local_id = (
@@ -112,9 +134,18 @@ def render_player_map(view: PlayerMap) -> BytesIO:
             )
             local = centers.get(local_id)
             if local:
+                connection_fog = _fog_strength(focus_distances.get(local_id, 99))
                 endpoint = (local[0] + 105, local[1] + 80)
-                draw.line((*local, *endpoint), fill="#090806", width=15)
-                draw.line((*local, *endpoint), fill="#75603e", width=6)
+                draw.line(
+                    (*local, *endpoint),
+                    fill=_fog_colour("#090806", connection_fog),
+                    width=15,
+                )
+                draw.line(
+                    (*local, *endpoint),
+                    fill=_fog_colour("#75603e", connection_fog),
+                    width=6,
+                )
                 other_floor_id = (
                     connection.to_floor_id
                     if local_id == connection.from_room_id
@@ -122,7 +153,12 @@ def render_player_map(view: PlayerMap) -> BytesIO:
                 )
                 connection_name = connection.connection_type.value.replace("_", " ")
                 label = f"{connection_name} -> {other_floor_id}"
-                draw.text(endpoint, label, fill="#c7b58e", font=small_font)
+                draw.text(
+                    endpoint,
+                    label,
+                    fill=_fog_colour("#c7b58e", connection_fog),
+                    font=small_font,
+                )
 
     for room in view.rooms:
         left, top, width, height = positions[room.id]
@@ -188,6 +224,20 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         )
         if room.visible_characters:
             _player_markers(draw, box, room.visible_characters, marker_font)
+        fog_strength = _fog_strength(focus_distances.get(room.id, 99))
+        if fog_strength:
+            _fog_room(image, box, fog_strength)
+
+    # A camera may place distant known rooms beyond the visible region. Restore
+    # the decorated canvas outside the viewport so those rooms and connectors
+    # cannot draw over the floor title or the outer map frame.
+    outside_viewport = Image.new("L", (MAP_WIDTH, MAP_HEIGHT), 255)
+    try:
+        ImageDraw.Draw(outside_viewport).rectangle(VIEWPORT_BOUNDS, fill=0)
+        image.paste(map_base, (0, 0), outside_viewport)
+    finally:
+        outside_viewport.close()
+        map_base.close()
 
     return _png(image)
 
@@ -385,111 +435,110 @@ def _room_texture(
 
 
 def _layout(view: PlayerMap) -> dict[str, tuple[float, float, float, float]]:
-    coordinate_counts = Counter((room.x, room.y) for room in view.rooms)
-    raw: dict[str, tuple[float, float, float, float]] = {}
-    for index, room in enumerate(view.rooms):
-        x, y = room.x, room.y
-        if coordinate_counts[(x, y)] > 1:
-            x += (index % 4) * 180
-            y += (index // 4) * 125
-        raw[room.id] = (x, y, max(110, room.width * 85), max(72, room.height * 60))
-
-    min_x = min(item[0] for item in raw.values())
-    min_y = min(item[1] for item in raw.values())
-    max_x = max(item[0] + item[2] for item in raw.values())
-    max_y = max(item[1] + item[3] for item in raw.values())
-    viewport_left = PADDING
-    viewport_top = 145
-    viewport_right = MAP_WIDTH - PADDING
-    viewport_bottom = MAP_HEIGHT - PADDING
-    available_width = viewport_right - viewport_left
-    available_height = viewport_bottom - viewport_top
-    scale = min(
-        3.0,
-        available_width / max(1, max_x - min_x),
-        available_height / max(1, max_y - min_y),
-    )
-    # A little breathing room lets the viewport favour the current room instead
-    # of pinning an edge room against the canvas just to maximize raw scale.
-    if view.current_room_id in raw:
-        scale *= 0.84
-
-    current = raw.get(view.current_room_id or "")
-    focused = raw.get(view.focused_room_id or "")
-    anchor = current or focused
-    if (
-        current is not None
-        and focused is not None
-        and view.focused_room_id != view.current_room_id
-    ):
-        current_center = _room_center(current)
-        focused_center = _room_center(focused)
-        anchor_center = (
-            current_center[0] * 0.72 + focused_center[0] * 0.28,
-            current_center[1] * 0.72 + focused_center[1] * 0.28,
-        )
-    elif anchor is not None:
-        anchor_center = _room_center(anchor)
+    """Project persisted dungeon coordinates through a focus-centred camera."""
+    rooms = {room.id: room for room in view.rooms}
+    focus = rooms.get(view.focused_room_id or "")
+    current = rooms.get(view.current_room_id or "")
+    anchor = focus or current
+    if anchor is None:
+        anchor_x = sum(room.x for room in view.rooms) / len(view.rooms)
+        anchor_y = sum(room.y for room in view.rooms) / len(view.rooms)
     else:
-        anchor_center = ((min_x + max_x) / 2, (min_y + max_y) / 2)
+        anchor_x, anchor_y = anchor.x, anchor.y
 
-    # Calculate the real rendered bounds before positioning the group. Room
-    # artwork has a minimum readable size, so scaled raw bounds can be much
-    # smaller than the boxes that will actually be drawn. Using the raw bounds
-    # here previously caused edge rooms to be clamped individually, collapsing
-    # the final gap and sometimes overlapping the room above or beside them.
-    scaled_rooms: dict[str, tuple[float, float, float, float]] = {}
-    for room_id, (x, y, width, height) in raw.items():
-        rendered_width = max(MIN_ROOM_WIDTH, width * scale)
-        rendered_height = max(MIN_ROOM_HEIGHT, height * scale)
-        scaled_rooms[room_id] = (
-            (x + width / 2) * scale,
-            (y + height / 2) * scale,
-            rendered_width,
-            rendered_height,
-        )
-    rendered_min_x = min(
-        center_x - width / 2
-        for center_x, _center_y, width, _height in scaled_rooms.values()
-    )
-    rendered_max_x = max(
-        center_x + width / 2
-        for center_x, _center_y, width, _height in scaled_rooms.values()
-    )
-    rendered_min_y = min(
-        center_y - height / 2
-        for _center_x, center_y, _width, height in scaled_rooms.values()
-    )
-    rendered_max_y = max(
-        center_y + height / 2
-        for _center_x, center_y, _width, height in scaled_rooms.values()
-    )
-
-    viewport_center = (
-        (viewport_left + viewport_right) / 2,
-        (viewport_top + viewport_bottom) / 2,
-    )
-    desired_offset_x = viewport_center[0] - anchor_center[0] * scale
-    desired_offset_y = viewport_center[1] - anchor_center[1] * scale
-    offset_x = _bounded_offset(
-        desired_offset_x,
-        viewport_left - rendered_min_x,
-        viewport_right - rendered_max_x,
-    )
-    offset_y = _bounded_offset(
-        desired_offset_y,
-        viewport_top - rendered_min_y,
-        viewport_bottom - rendered_max_y,
-    )
+    viewport_left, viewport_top, viewport_right, viewport_bottom = VIEWPORT_BOUNDS
+    viewport_center_x = (viewport_left + viewport_right) / 2
+    viewport_center_y = (viewport_top + viewport_bottom) / 2
     positioned = {}
-    for room_id, (center_x, center_y, width, height) in scaled_rooms.items():
-        positioned[room_id] = (
-            offset_x + center_x - width / 2,
-            offset_y + center_y - height / 2,
+    for room in view.rooms:
+        width = max(MIN_ROOM_WIDTH, room.width * 85)
+        height = max(MIN_ROOM_HEIGHT, room.height * 60)
+        center_x = viewport_center_x + (room.x - anchor_x) * WORLD_TO_MAP_SCALE
+        center_y = viewport_center_y + (room.y - anchor_y) * WORLD_TO_MAP_SCALE
+        positioned[room.id] = (
+            center_x - width / 2,
+            center_y - height / 2,
             width,
             height,
         )
     return positioned
+
+
+def _focus_distances(view: PlayerMap) -> dict[str, int]:
+    """Return graph distance from focus without changing room knowledge."""
+    room_ids = {room.id for room in view.rooms}
+    focus_id = (
+        view.focused_room_id
+        if view.focused_room_id in room_ids
+        else view.current_room_id
+        if view.current_room_id in room_ids
+        else None
+    )
+    if focus_id is None:
+        return {room_id: 0 for room_id in room_ids}
+    neighbours = {room_id: set() for room_id in room_ids}
+    for connection in view.connections:
+        if (
+            connection.from_room_id in room_ids
+            and connection.to_room_id in room_ids
+        ):
+            neighbours[connection.from_room_id].add(connection.to_room_id)
+            neighbours[connection.to_room_id].add(connection.from_room_id)
+    distances = {focus_id: 0}
+    pending = deque((focus_id,))
+    while pending:
+        room_id = pending.popleft()
+        for neighbour in neighbours[room_id]:
+            if neighbour in distances:
+                continue
+            distances[neighbour] = distances[room_id] + 1
+            pending.append(neighbour)
+    return distances
+
+
+def _fog_strength(distance: int) -> float:
+    if distance <= 1:
+        return 0.0
+    if distance == 2:
+        return 0.18
+    if distance == 3:
+        return 0.42
+    return 0.68
+
+
+def _fog_colour(colour: str, strength: float) -> tuple[int, int, int]:
+    source = ImageColor.getrgb(colour)
+    fog = (8, 9, 9)
+    return tuple(
+        round(channel * (1 - strength) + fog_channel * strength)
+        for channel, fog_channel in zip(source, fog, strict=True)
+    )
+
+
+def _fog_room(
+    image: Image.Image,
+    box: tuple[float, float, float, float],
+    strength: float,
+) -> None:
+    left = max(0, round(box[0]))
+    top = max(0, round(box[1]))
+    right = min(image.width, round(box[2]))
+    bottom = min(image.height, round(box[3]))
+    if left >= right or top >= bottom:
+        return
+    region = image.crop((left, top, right, bottom))
+    try:
+        fog = Image.new("RGB", region.size, (8, 9, 9))
+        try:
+            fogged = Image.blend(region, fog, strength)
+            try:
+                image.paste(fogged, (left, top))
+            finally:
+                fogged.close()
+        finally:
+            fog.close()
+    finally:
+        region.close()
 
 
 def _player_markers(
@@ -649,18 +698,6 @@ def _point_toward(
         return point
     scale = min(1.0, distance / length)
     return point[0] + dx * scale, point[1] + dy * scale
-
-
-def _room_center(room: tuple[float, float, float, float]) -> tuple[float, float]:
-    x, y, width, height = room
-    return x + width / 2, y + height / 2
-
-
-def _bounded_offset(desired: float, fit_at_start: float, fit_at_end: float) -> float:
-    """Prefer the anchor position while keeping the known map inside the viewport."""
-    lower = min(fit_at_start, fit_at_end)
-    upper = max(fit_at_start, fit_at_end)
-    return max(lower, min(desired, upper))
 
 
 def _dashed_rectangle(

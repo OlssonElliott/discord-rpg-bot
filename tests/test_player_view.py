@@ -17,6 +17,7 @@ from rpg_bot.dungeon import (
     KnowledgeSource,
     KnowledgeState,
     PlayerMap,
+    PlayerMapConnection,
     PlayerMapRoom,
 )
 from rpg_bot.player_view_service import PlayerViewMessageService, PlayerViewService
@@ -28,6 +29,10 @@ from rpg_bot.map_renderer import (
     MIN_ROOM_HEIGHT,
     MIN_ROOM_WIDTH,
     ROOM_ART_PATH,
+    VIEWPORT_BOUNDS,
+    WORLD_TO_MAP_SCALE,
+    _focus_distances,
+    _fog_strength,
     _layout,
     _loaded_room_art,
     _map_canvas,
@@ -181,7 +186,7 @@ class PlayerViewServiceTests(unittest.TestCase):
         rendered = render_player_map(view)
         self.assertEqual(rendered.read(8), b"\x89PNG\r\n\x1a\n")
 
-    def test_layout_does_not_compress_last_room_against_viewport_edge(self) -> None:
+    def test_layout_preserves_world_spacing_and_centers_focus(self) -> None:
         rooms = tuple(
             PlayerMapRoom(
                 str(index),
@@ -208,13 +213,126 @@ class PlayerViewServiceTests(unittest.TestCase):
         )
 
         positions = _layout(view)
-        ordered = [positions[str(index)] for index in range(4)]
+        centers = {
+            room_id: (left + width / 2, top + height / 2)
+            for room_id, (left, top, width, height) in positions.items()
+        }
+        viewport_center = (
+            (VIEWPORT_BOUNDS[0] + VIEWPORT_BOUNDS[2]) / 2,
+            (VIEWPORT_BOUNDS[1] + VIEWPORT_BOUNDS[3]) / 2,
+        )
 
-        for upper, lower in zip(ordered, ordered[1:]):
-            upper_bottom = upper[1] + upper[3]
-            self.assertGreaterEqual(lower[1] - upper_bottom, 20)
-        self.assertGreaterEqual(ordered[0][1], 145)
-        self.assertLessEqual(ordered[-1][1] + ordered[-1][3], MAP_HEIGHT - 80)
+        self.assertEqual(centers["0"], viewport_center)
+        for index in range(3):
+            self.assertEqual(
+                centers[str(index + 1)][1] - centers[str(index)][1],
+                200 * WORLD_TO_MAP_SCALE,
+            )
+        self.assertGreater(positions["3"][1], MAP_HEIGHT)
+
+    def test_layout_recenters_on_focused_room_without_moving_current(self) -> None:
+        rooms = tuple(
+            PlayerMapRoom(
+                str(index),
+                "floor",
+                f"Room {index}",
+                index * 120,
+                index * 200,
+                1,
+                1,
+                KnowledgeState.VISITED,
+                is_current=index == 0,
+                is_focused=index == 2,
+            )
+            for index in range(4)
+        )
+        view = PlayerMap(
+            1,
+            "dungeon",
+            Floor("floor", "dungeon", 1, "Floor 1"),
+            "0",
+            "2",
+            rooms,
+            (),
+        )
+
+        positions = _layout(view)
+        focus = positions["2"]
+        current = positions["0"]
+        viewport_center = (
+            (VIEWPORT_BOUNDS[0] + VIEWPORT_BOUNDS[2]) / 2,
+            (VIEWPORT_BOUNDS[1] + VIEWPORT_BOUNDS[3]) / 2,
+        )
+
+        self.assertEqual(
+            (focus[0] + focus[2] / 2, focus[1] + focus[3] / 2),
+            viewport_center,
+        )
+        self.assertEqual(
+            focus[1] - current[1],
+            400 * WORLD_TO_MAP_SCALE,
+        )
+        rendered = render_player_map(view)
+        with Image.open(rendered) as image:
+            current_center_x = round(current[0] + current[2] / 2)
+            background = _map_canvas()
+            try:
+                self.assertEqual(
+                    image.getpixel((current_center_x, 100)),
+                    background.getpixel((current_center_x, 100)),
+                )
+            finally:
+                background.close()
+
+    def test_focus_fog_uses_graph_distance_without_changing_knowledge(self) -> None:
+        rooms = tuple(
+            PlayerMapRoom(
+                str(index),
+                "floor",
+                f"Room {index}",
+                0,
+                index * 150,
+                1,
+                1,
+                KnowledgeState.VISITED,
+                is_focused=index == 0,
+            )
+            for index in range(5)
+        )
+        connections = tuple(
+            PlayerMapConnection(
+                str(index),
+                str(index),
+                str(index + 1),
+                "floor",
+                "floor",
+                ConnectionType.PASSAGE,
+                True,
+            )
+            for index in range(4)
+        )
+        view = PlayerMap(
+            1,
+            "dungeon",
+            Floor("floor", "dungeon", 1, "Floor 1"),
+            None,
+            "0",
+            rooms,
+            connections,
+        )
+
+        self.assertEqual(
+            _focus_distances(view),
+            {str(index): index for index in range(5)},
+        )
+        self.assertEqual(
+            [room.knowledge_state for room in view.rooms],
+            [KnowledgeState.VISITED] * 5,
+        )
+        self.assertEqual(_fog_strength(0), 0)
+        self.assertEqual(_fog_strength(1), 0)
+        self.assertLess(_fog_strength(2), _fog_strength(3))
+        self.assertLess(_fog_strength(3), _fog_strength(4))
 
     def test_visited_room_hud_uses_one_composed_card_without_duplicate_text(self) -> None:
         self.world.place_character(self.alice_id, self.chapel.id)
