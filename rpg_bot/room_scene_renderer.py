@@ -6,7 +6,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 
 from .dungeon import FocusedRoomView, KnowledgeState
 
@@ -14,10 +14,17 @@ from .dungeon import FocusedRoomView, KnowledgeState
 ROOM_PANEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "panel.png"
 PANEL_SIZE = (1448, 1086)
 SCENE_VIEWPORT = (143, 128, 1306, 600)
-SCENE_LAYER_BOUNDS = (112, 98, 1337, 630)
+SCENE_UNDERLAY = 18
+SCENE_LAYER_BOUNDS = (
+    SCENE_VIEWPORT[0] - SCENE_UNDERLAY,
+    SCENE_VIEWPORT[1] - SCENE_UNDERLAY,
+    SCENE_VIEWPORT[2] + SCENE_UNDERLAY,
+    SCENE_VIEWPORT[3] + SCENE_UNDERLAY,
+)
 SCENE_CORNER_RADIUS = 48
-SCENE_EDGE_FEATHER = 1.5
 INFO_BOUNDS = (150, 670, 1298, 995)
+INFO_COLUMN_PROPORTIONS = (0.36, 0.22, 0.42)
+INFO_COLUMN_GAP = 28
 
 
 @lru_cache(maxsize=1)
@@ -69,7 +76,9 @@ def render_room_card(
 def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> bool:
     if not scene_path.is_file():
         return False
-    mask: Image.Image | None = None
+    scene_layer: Image.Image | None = None
+    scene_mask: Image.Image | None = None
+    frame_mask: Image.Image | None = None
     try:
         with Image.open(scene_path) as source:
             if getattr(source, "is_animated", False):
@@ -87,25 +96,31 @@ def _place_scene(card: Image.Image, panel: Image.Image, scene_path: Path) -> boo
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
         return False
     try:
-        # The scene is deliberately larger than the opening. The panel is then
-        # restored over it so the artwork sits physically behind the frame,
-        # instead of ending at a visibly clipped rectangular edge.
-        card.paste(scene, SCENE_LAYER_BOUNDS[:2])
-        mask = Image.new("L", PANEL_SIZE, 255)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.rounded_rectangle(
+        # Build the scene independently, crop it to the upper region, then put
+        # the original panel back above it with only its aperture removed. The
+        # scene therefore continues beneath the ornate frame by 18 pixels.
+        scene_layer = Image.new("RGBA", PANEL_SIZE, (0, 0, 0, 0))
+        scene_layer.paste(scene, SCENE_LAYER_BOUNDS[:2])
+        scene_mask = Image.new("L", PANEL_SIZE, 0)
+        ImageDraw.Draw(scene_mask).rounded_rectangle(
+            SCENE_LAYER_BOUNDS,
+            radius=SCENE_CORNER_RADIUS + SCENE_UNDERLAY,
+            fill=255,
+        )
+        card.paste(scene_layer, (0, 0), scene_mask)
+
+        frame_mask = Image.new("L", PANEL_SIZE, 255)
+        ImageDraw.Draw(frame_mask).rounded_rectangle(
             SCENE_VIEWPORT,
             radius=SCENE_CORNER_RADIUS,
             fill=0,
         )
-        feathered_mask = mask.filter(ImageFilter.GaussianBlur(SCENE_EDGE_FEATHER))
-        mask.close()
-        mask = feathered_mask
-        card.paste(panel, (0, 0), mask)
+        card.paste(panel, (0, 0), frame_mask)
     finally:
         scene.close()
-        if mask is not None:
-            mask.close()
+        for image in (scene_layer, scene_mask, frame_mask):
+            if image is not None:
+                image.close()
     return True
 
 
@@ -189,8 +204,11 @@ def _draw_room_information(
         else view.description or "No description has been recorded."
     )
     content_top = top + 88
-    left_width = 430
-    right_left = left + left_width + 42
+    usable_width = right - left - (2 * INFO_COLUMN_GAP)
+    description_width = usable_width * INFO_COLUMN_PROPORTIONS[0]
+    characters_width = usable_width * INFO_COLUMN_PROPORTIONS[1]
+    characters_left = left + description_width + INFO_COLUMN_GAP
+    items_left = characters_left + characters_width + INFO_COLUMN_GAP
     draw.text(
         (left, content_top),
         "DESCRIPTION",
@@ -202,7 +220,7 @@ def _draw_room_information(
         draw,
         description,
         body_font,
-        left_width,
+        description_width,
         max_lines=6,
     )
     for line in description_lines:
@@ -212,20 +230,24 @@ def _draw_room_information(
     if known:
         return
 
-    available_sections = [
-        ("CHARACTERS", view.visible_characters),
-        ("VISIBLE", view.visible_entities),
-        ("ITEMS", view.visible_items),
-    ]
-    sections = [(heading, values) for heading, values in available_sections if values]
-    if not sections:
-        if not is_current:
-            return
-        sections = [("CHARACTERS", ("None",)), ("ITEMS", ("None",))]
-    right_width = right - right_left
-    column_width = right_width / len(sections)
-    for index, (heading, values) in enumerate(sections):
-        column_left = right_left + index * column_width
+    character_values = view.visible_characters + view.visible_entities
+    if is_current:
+        character_values = character_values or ("None",)
+        item_values = view.visible_items or ("None",)
+    else:
+        item_values = view.visible_items
+    sections = (
+        ("CHARACTERS", character_values, characters_left, characters_width),
+        (
+            "ITEMS",
+            item_values,
+            items_left,
+            usable_width * INFO_COLUMN_PROPORTIONS[2],
+        ),
+    )
+    for heading, values, column_left, column_width in sections:
+        if not values:
+            continue
         draw.text(
             (column_left, content_top),
             heading,
@@ -233,23 +255,50 @@ def _draw_room_information(
             fill="#a9864c",
         )
         value_y = content_top + 38
-        for value in _summarize(values, limit=3):
-            if value_y > bottom - 25:
-                break
-            lines = _wrap_text(
-                draw,
-                value,
-                list_font,
-                column_width - 20,
-                max_lines=1,
-            )
+        lines = _list_lines(
+            draw,
+            values,
+            list_font,
+            column_width - 16,
+            max_lines=5,
+        )
+        for line in lines:
             draw.text(
                 (column_left, value_y),
-                lines[0],
+                line,
                 font=list_font,
                 fill="#ddd2bd",
             )
-            value_y += 33
+            value_y += 32
+
+
+def _list_lines(
+    draw: ImageDraw.ImageDraw,
+    values: tuple[str, ...],
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    max_width: float,
+    *,
+    max_lines: int,
+) -> tuple[str, ...]:
+    """Lay out list values vertically, wrapping names before truncating them."""
+    summarized = _summarize(values, limit=3)
+    lines: list[str] = []
+    for index, value in enumerate(summarized):
+        lines_left = max_lines - len(lines)
+        if lines_left <= 0:
+            break
+        remaining_values = len(summarized) - index - 1
+        value_lines = min(2, max(1, lines_left - remaining_values))
+        lines.extend(
+            _wrap_text(
+                draw,
+                value,
+                font,
+                max_width,
+                max_lines=value_lines,
+            )
+        )
+    return tuple(lines[:max_lines])
 
 
 def _fit_heading(

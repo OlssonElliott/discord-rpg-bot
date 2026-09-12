@@ -14,6 +14,7 @@ from rpg_bot.room_scene_renderer import (
     SCENE_LAYER_BOUNDS,
     SCENE_VIEWPORT,
     _loaded_room_panel,
+    _list_lines,
     _summarize,
     _wrap_text,
     render_room_card,
@@ -67,12 +68,12 @@ class RoomCardRendererTests(unittest.TestCase):
     def test_full_panel_scene_and_lower_information_are_preserved(self) -> None:
         self.assertTrue(ROOM_PANEL_PATH.is_file())
         view = FocusedRoomView(
-            "study",
+            "next",
             KnowledgeState.VISITED,
-            "Forgotten Study",
-            "Dust and old records cover every surface.",
+            "next",
+            "next location",
             visible_characters=("Bobby",),
-            visible_items=("Iron Key",),
+            visible_items=("key", "Rusted Knight Harness"),
         )
 
         rendered = render_room_card(view, is_current=True, scene_path=self.scene_path)
@@ -144,6 +145,15 @@ class RoomCardRendererTests(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertTrue(lines[-1].endswith("…"))
         self.assertEqual(_summarize(tuple("ABCDE"), limit=1), ("A", "+ 4 more"))
+        item_lines = _list_lines(
+            draw,
+            ("key", "Rusted Knight Harness"),
+            _loaded_test_font(),
+            90,
+            max_lines=5,
+        )
+        self.assertEqual(item_lines[0], "key")
+        self.assertNotIn("…", " ".join(item_lines))
 
 
 def _loaded_test_font():
