@@ -14,7 +14,7 @@ from ..player_view_service import PlayerViewMessageService, PlayerViewService
 from ..portraits import CharacterPortraitStore
 from ..world import InventoryHolder, ItemStack, Room, WorldError
 from ..world_service import WorldService
-from .inventory import refresh_inventory_views
+from .inventory import refresh_inventory_views, send_game_event
 from .player import apply_character_identity, portrait_attachment_name
 
 
@@ -305,7 +305,19 @@ class WorldCommands(commands.Cog):
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
             return
-        await self._send_character_embed(interaction, character, room_embed(room))
+        await interaction.response.defer(ephemeral=True)
+        embed = room_embed(room)
+        room_description = embed.description or "No description."
+        embed.description = (
+            f"**{character.name}** moves to **{room.name}**.\n\n{room_description}"
+        )
+        game_channel = await send_game_event(
+            interaction, character, embed, self.portrait_store
+        )
+        confirmation = f"Moved to **{room.name}**."
+        if game_channel is not None:
+            confirmation += f" Posted in {game_channel.mention}."
+        await interaction.followup.send(confirmation, ephemeral=True)
         if await self._refresh_existing_map(character.character_id):
             self.database.clear_player_map_refresh(character.character_id)
 

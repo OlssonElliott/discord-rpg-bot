@@ -794,21 +794,31 @@ async def _announce_room_action(
     character: Character,
     description: str,
 ) -> None:
-    from .player import apply_character_identity, portrait_attachment_name
-
-    game_channel = await _get_or_create_game_channel(interaction)
-    if game_channel is None:
-        return
     character_cog = interaction.client.get_cog("CharacterCommands")
     portrait_store = getattr(character_cog, "portrait_store", CharacterPortraitStore())
     embed = discord.Embed(
         description=description,
         colour=discord.Colour.from_rgb(154, 120, 61),
     )
+    await send_game_event(interaction, character, embed, portrait_store)
+
+
+async def send_game_event(
+    interaction: discord.Interaction,
+    character: Character,
+    embed: discord.Embed,
+    portrait_store: CharacterPortraitStore,
+):
+    """Post a character-authored event to the guild's shared game log."""
+    from .player import apply_character_identity, portrait_attachment_name
+
+    game_channel = await _get_or_create_game_channel(interaction)
+    if game_channel is None:
+        return None
     portrait_path = apply_character_identity(embed, character, portrait_store)
     if portrait_path is None:
         await game_channel.send(embed=embed)
-        return
+        return game_channel
     portrait_file = discord.File(
         portrait_path, filename=portrait_attachment_name(portrait_path)
     )
@@ -816,6 +826,7 @@ async def _announce_room_action(
         await game_channel.send(embed=embed, file=portrait_file)
     finally:
         portrait_file.close()
+    return game_channel
 
 
 async def _get_or_create_game_channel(interaction: discord.Interaction):

@@ -308,9 +308,14 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         self.cog.world.connect_rooms("entrance", "north", destination.id)
         self.cog.player_views.bind_discord_channel(self.character_id, 88)
         self.cog.map_messages = SimpleNamespace(refresh=AsyncMock())
+        game_channel = SimpleNamespace(
+            name="game", mention="#game", send=AsyncMock()
+        )
         interaction = SimpleNamespace(
             user=SimpleNamespace(id=7),
-            response=SimpleNamespace(send_message=AsyncMock()),
+            guild=SimpleNamespace(text_channels=[game_channel]),
+            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
         )
 
         await self.cog.move.callback(
@@ -318,6 +323,15 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.cog.map_messages.refresh.assert_awaited_once_with(self.character_id)
+        movement_embed = game_channel.send.await_args.kwargs["embed"]
+        self.assertEqual(movement_embed.author.name, "Olof")
+        self.assertIn(
+            "**Olof** moves to **Collapsed Hall**.", movement_embed.description
+        )
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        interaction.followup.send.assert_awaited_once_with(
+            "Moved to **Collapsed Hall**. Posted in #game.", ephemeral=True
+        )
         self.assertEqual(
             self.cog.world.get_character_room(self.character_id).id,
             destination.id,
