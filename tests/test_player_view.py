@@ -10,7 +10,15 @@ from PIL import Image
 
 from rpg_bot.database import Database
 from rpg_bot.discord_player_view import DiscordPlayerViewAdapter
-from rpg_bot.dungeon import ConnectionType, GameLock, KnowledgeSource, KnowledgeState
+from rpg_bot.dungeon import (
+    ConnectionType,
+    Floor,
+    GameLock,
+    KnowledgeSource,
+    KnowledgeState,
+    PlayerMap,
+    PlayerMapRoom,
+)
 from rpg_bot.player_view_service import PlayerViewMessageService, PlayerViewService
 from rpg_bot.room_images import RoomImageStore
 from rpg_bot.map_renderer import (
@@ -172,6 +180,41 @@ class PlayerViewServiceTests(unittest.TestCase):
         self.assertGreaterEqual(positions[current.id][3], MIN_ROOM_HEIGHT)
         rendered = render_player_map(view)
         self.assertEqual(rendered.read(8), b"\x89PNG\r\n\x1a\n")
+
+    def test_layout_does_not_compress_last_room_against_viewport_edge(self) -> None:
+        rooms = tuple(
+            PlayerMapRoom(
+                str(index),
+                "floor",
+                f"Room {index}",
+                0,
+                index * 200,
+                1,
+                1,
+                KnowledgeState.VISITED,
+                is_current=index == 0,
+                is_focused=index == 0,
+            )
+            for index in range(4)
+        )
+        view = PlayerMap(
+            1,
+            "dungeon",
+            Floor("floor", "dungeon", 1, "Floor 1"),
+            "0",
+            "0",
+            rooms,
+            (),
+        )
+
+        positions = _layout(view)
+        ordered = [positions[str(index)] for index in range(4)]
+
+        for upper, lower in zip(ordered, ordered[1:]):
+            upper_bottom = upper[1] + upper[3]
+            self.assertGreaterEqual(lower[1] - upper_bottom, 20)
+        self.assertGreaterEqual(ordered[0][1], 145)
+        self.assertLessEqual(ordered[-1][1] + ordered[-1][3], MAP_HEIGHT - 80)
 
     def test_visited_room_hud_uses_one_composed_card_without_duplicate_text(self) -> None:
         self.world.place_character(self.alice_id, self.chapel.id)

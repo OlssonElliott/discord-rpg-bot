@@ -433,6 +433,38 @@ def _layout(view: PlayerMap) -> dict[str, tuple[float, float, float, float]]:
     else:
         anchor_center = ((min_x + max_x) / 2, (min_y + max_y) / 2)
 
+    # Calculate the real rendered bounds before positioning the group. Room
+    # artwork has a minimum readable size, so scaled raw bounds can be much
+    # smaller than the boxes that will actually be drawn. Using the raw bounds
+    # here previously caused edge rooms to be clamped individually, collapsing
+    # the final gap and sometimes overlapping the room above or beside them.
+    scaled_rooms: dict[str, tuple[float, float, float, float]] = {}
+    for room_id, (x, y, width, height) in raw.items():
+        rendered_width = max(MIN_ROOM_WIDTH, width * scale)
+        rendered_height = max(MIN_ROOM_HEIGHT, height * scale)
+        scaled_rooms[room_id] = (
+            (x + width / 2) * scale,
+            (y + height / 2) * scale,
+            rendered_width,
+            rendered_height,
+        )
+    rendered_min_x = min(
+        center_x - width / 2
+        for center_x, _center_y, width, _height in scaled_rooms.values()
+    )
+    rendered_max_x = max(
+        center_x + width / 2
+        for center_x, _center_y, width, _height in scaled_rooms.values()
+    )
+    rendered_min_y = min(
+        center_y - height / 2
+        for _center_x, center_y, _width, height in scaled_rooms.values()
+    )
+    rendered_max_y = max(
+        center_y + height / 2
+        for _center_x, center_y, _width, height in scaled_rooms.values()
+    )
+
     viewport_center = (
         (viewport_left + viewport_right) / 2,
         (viewport_top + viewport_bottom) / 2,
@@ -441,29 +473,22 @@ def _layout(view: PlayerMap) -> dict[str, tuple[float, float, float, float]]:
     desired_offset_y = viewport_center[1] - anchor_center[1] * scale
     offset_x = _bounded_offset(
         desired_offset_x,
-        viewport_left - min_x * scale,
-        viewport_right - max_x * scale,
+        viewport_left - rendered_min_x,
+        viewport_right - rendered_max_x,
     )
     offset_y = _bounded_offset(
         desired_offset_y,
-        viewport_top - min_y * scale,
-        viewport_bottom - max_y * scale,
+        viewport_top - rendered_min_y,
+        viewport_bottom - rendered_max_y,
     )
     positioned = {}
-    for room_id, (x, y, width, height) in raw.items():
-        rendered_width = max(MIN_ROOM_WIDTH, width * scale)
-        rendered_height = max(MIN_ROOM_HEIGHT, height * scale)
-        center_x = offset_x + (x + width / 2) * scale
-        center_y = offset_y + (y + height / 2) * scale
-        left = max(
-            viewport_left,
-            min(center_x - rendered_width / 2, viewport_right - rendered_width),
+    for room_id, (center_x, center_y, width, height) in scaled_rooms.items():
+        positioned[room_id] = (
+            offset_x + center_x - width / 2,
+            offset_y + center_y - height / 2,
+            width,
+            height,
         )
-        top = max(
-            viewport_top,
-            min(center_y - rendered_height / 2, viewport_bottom - rendered_height),
-        )
-        positioned[room_id] = (left, top, rendered_width, rendered_height)
     return positioned
 
 
