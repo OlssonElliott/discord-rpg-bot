@@ -142,6 +142,10 @@ class PlayerViewServiceTests(unittest.TestCase):
         self.assertEqual(room.mode, "RGBA")
         self.assertLess(room.width, 1672)
         self.assertLess(room.height, 941)
+        visible_bounds = room.getchannel("A").point(
+            lambda value: 255 if value >= 16 else 0
+        ).getbbox()
+        self.assertEqual(visible_bounds, (0, 0, room.width, room.height))
 
     def test_hud_centers_current_room_when_known_bounds_allow_it(self) -> None:
         self.world.place_character(self.alice_id, self.entrance.id)

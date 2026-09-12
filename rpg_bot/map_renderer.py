@@ -3,6 +3,7 @@
 from collections import Counter
 from functools import lru_cache
 from io import BytesIO
+from math import hypot
 from pathlib import Path
 from random import Random
 
@@ -85,6 +86,10 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         if source and target:
             start = _edge_point(source, target, boxes[connection.from_room_id])
             end = _edge_point(target, source, boxes[connection.to_room_id])
+            # Run beneath each room frame so antialiased/shadow pixels cannot
+            # leave a visible gap between the connector and the artwork.
+            start = _point_toward(start, source, 18)
+            end = _point_toward(end, target, 18)
             draw.line((*start, *end), fill="#080706", width=13)
             draw.line((*start, *end), fill="#645338", width=6)
             draw.line((*start, *end), fill="#9a8051", width=2)
@@ -213,7 +218,7 @@ def _map_canvas() -> Image.Image:
 
 @lru_cache(maxsize=1)
 def _loaded_room_art() -> Image.Image | None:
-    """Load the supplied room frame and remove its large transparent margin."""
+    """Load the supplied room frame without its transparent outer margin."""
     try:
         with Image.open(ROOM_ART_PATH) as source:
             room = source.convert("RGBA")
@@ -223,16 +228,7 @@ def _loaded_room_art() -> Image.Image | None:
         ).getbbox()
         if visible_bounds is None:
             return None
-        left, top, right, bottom = visible_bounds
-        margin = 24
-        return room.crop(
-            (
-                max(0, left - margin),
-                max(0, top - margin),
-                min(room.width, right + margin),
-                min(room.height, bottom + margin),
-            )
-        )
+        return room.crop(visible_bounds)
     except (OSError, ValueError):
         return None
 
@@ -612,6 +608,21 @@ def _edge_point(
         1.0 / max(abs(dx) / half_width, abs(dy) / half_height, 1e-9),
     )
     return origin[0] + dx * factor, origin[1] + dy * factor
+
+
+def _point_toward(
+    point: tuple[float, float],
+    target: tuple[float, float],
+    distance: float,
+) -> tuple[float, float]:
+    """Move a connector endpoint toward a room center by ``distance``."""
+    dx = target[0] - point[0]
+    dy = target[1] - point[1]
+    length = hypot(dx, dy)
+    if length == 0:
+        return point
+    scale = min(1.0, distance / length)
+    return point[0] + dx * scale, point[1] + dy * scale
 
 
 def _room_center(room: tuple[float, float, float, float]) -> tuple[float, float]:
