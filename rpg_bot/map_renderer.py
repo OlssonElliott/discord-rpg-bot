@@ -202,8 +202,6 @@ def render_player_map(view: PlayerMap) -> BytesIO:
                 inset_box, radius=12, outline="#d8c89f", width=5
             )
         if room.knowledge_state is KnowledgeState.KNOWN:
-            # A dashed inner border reinforces uncertainty even without colour.
-            _dashed_rectangle(draw, box, "#716858")
             _draw_room_label(
                 draw,
                 "?",
@@ -695,35 +693,6 @@ def _point_toward(
         return point
     scale = min(1.0, distance / length)
     return point[0] + dx * scale, point[1] + dy * scale
-
-
-def _dashed_rectangle(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[float, float, float, float],
-    colour: str,
-) -> None:
-    left, top, right, bottom = box
-    inset = 8
-    left += inset
-    top += inset
-    right -= inset
-    bottom -= inset
-    dash = 9
-    gap = 7
-    for start in range(int(left), int(right), dash + gap):
-        draw.line((start, top, min(start + dash, right), top), fill=colour, width=2)
-        draw.line(
-            (start, bottom, min(start + dash, right), bottom),
-            fill=colour,
-            width=2,
-        )
-    for start in range(int(top), int(bottom), dash + gap):
-        draw.line((left, start, left, min(start + dash, bottom)), fill=colour, width=2)
-        draw.line(
-            (right, start, right, min(start + dash, bottom)),
-            fill=colour,
-            width=2,
-        )
 
 
 def _font(
