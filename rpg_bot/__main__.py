@@ -51,6 +51,8 @@ class RPGBot(commands.Bot):
 
     async def on_ready(self) -> None:
         if self.user is not None:
+            from .commands.inventory import ensure_game_channel
+
             LOGGER.info("Logged in as %s (ID: %s)", self.user, self.user.id)
             for guild in self.guilds:
                 member = guild.me
@@ -73,6 +75,12 @@ class RPGBot(commands.Bot):
                         ", ".join(missing),
                         install_url,
                     )
+                await ensure_game_channel(guild)
+                character_cog = self.get_cog("CharacterCommands")
+                if character_cog is not None and hasattr(
+                    character_cog, "ensure_required_player_channels"
+                ):
+                    await character_cog.ensure_required_player_channels(guild)
 
 
 def configure_error_handling(bot: RPGBot) -> None:

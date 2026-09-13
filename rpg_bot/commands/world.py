@@ -1,5 +1,6 @@
 """Small player-facing command surface for the deterministic world service."""
 
+import asyncio
 import logging
 
 import discord
@@ -13,7 +14,7 @@ from ..player_view_service import PlayerViewMessageService, PlayerViewService
 from ..portraits import CharacterPortraitStore
 from ..world import InventoryHolder, ItemStack, Room, WorldError
 from ..world_service import WorldService
-from .inventory import refresh_open_inventory
+from .inventory import refresh_inventory_views, send_game_event
 from .player import apply_character_identity, portrait_attachment_name
 
 
@@ -79,6 +80,7 @@ class WorldCommands(commands.Cog):
             if self.map_adapter is not None
             else None
         )
+        self._map_refresh_task: asyncio.Task | None = None
 
     async def cog_load(self) -> None:
         """Restore persistent component callbacks for existing HUD messages."""
@@ -94,6 +96,29 @@ class WorldCommands(commands.Cog):
             self.bot.add_view(
                 self.map_adapter.controls(view), message_id=state.discord_message_id
             )
+        self._map_refresh_task = asyncio.create_task(
+            self._process_map_refresh_requests(),
+            name="player-map-refresh-requests",
+        )
+
+    def cog_unload(self) -> None:
+        if self._map_refresh_task is not None:
+            self._map_refresh_task.cancel()
+
+    async def _process_map_refresh_requests(self) -> None:
+        assert self.bot is not None
+        await self.bot.wait_until_ready()
+        while not self.bot.is_closed():
+            for character_id in self.database.pending_player_map_refreshes():
+                # Consume before rendering so a newer mutation that arrives while
+                # Discord is being updated leaves a fresh request behind.
+                self.database.clear_player_map_refresh(character_id)
+                if not await self._refresh_existing_map(character_id):
+                    try:
+                        self.database.request_player_map_refresh(character_id)
+                    except CharacterNotFoundError:
+                        pass
+            await asyncio.sleep(0.75)
 
     def _active_character(self, user_id: int) -> Character:
         character = self.database.get_character(user_id)
@@ -280,8 +305,21 @@ class WorldCommands(commands.Cog):
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
             return
-        await self._send_character_embed(interaction, character, room_embed(room))
-        await self._refresh_existing_map(character.character_id)
+        await interaction.response.defer(ephemeral=True)
+        embed = room_embed(room)
+        room_description = embed.description or "No description."
+        embed.description = (
+            f"**{character.name}** moves to **{room.name}**.\n\n{room_description}"
+        )
+        game_channel = await send_game_event(
+            interaction, character, embed, self.portrait_store
+        )
+        confirmation = f"Moved to **{room.name}**."
+        if game_channel is not None:
+            confirmation += f" Posted in {game_channel.mention}."
+        await interaction.followup.send(confirmation, ephemeral=True)
+        if await self._refresh_existing_map(character.character_id):
+            self.database.clear_player_map_refresh(character.character_id)
 
     def _adapter(self, client: discord.Client) -> DiscordPlayerViewAdapter:
         if self.map_adapter is not None and self.map_adapter.client is client:
@@ -368,16 +406,21 @@ class WorldCommands(commands.Cog):
                 + "."
             )
 
-    async def _refresh_existing_map(self, character_id: int) -> None:
+    async def _refresh_existing_map(self, character_id: int) -> bool:
         if self.map_messages is None:
-            return
-        state = self.database.get_player_view_state(character_id)
+            return False
+        try:
+            state = self.database.get_player_view_state(character_id)
+        except CharacterNotFoundError:
+            return True
         if state.discord_channel_id is None:
-            return
+            return True
         try:
             await self.map_messages.refresh(character_id)
         except (discord.HTTPException, ValueError):
             LOGGER.exception("Could not refresh dungeon HUD for character %s", character_id)
+            return False
+        return True
 
     @app_commands.command(name="take", description="Take a loose item from the room.")
     @app_commands.describe(item="Item name or ID", quantity="Number to take")
@@ -399,7 +442,7 @@ class WorldCommands(commands.Cog):
             character,
             self._action_embed(f"Took **{_stack_text(moved)}**."),
         )
-        await refresh_open_inventory(interaction.user.id, character.character_id)
+        await refresh_inventory_views(interaction, character)
 
     @app_commands.command(
         name="drop", description="Drop an inventory item in the room."
@@ -422,7 +465,7 @@ class WorldCommands(commands.Cog):
             character,
             self._action_embed(f"Dropped **{_stack_text(moved)}**."),
         )
-        await refresh_open_inventory(interaction.user.id, character.character_id)
+        await refresh_inventory_views(interaction, character)
 
     @app_commands.command(name="loot", description="Inspect an accessible container.")
     @app_commands.describe(container="Container name or ID")
@@ -483,7 +526,7 @@ class WorldCommands(commands.Cog):
             character,
             self._action_embed(f"Took **{_stack_text(moved)}**."),
         )
-        await refresh_open_inventory(interaction.user.id, character.character_id)
+        await refresh_inventory_views(interaction, character)
 
 
 async def setup(bot: commands.Bot) -> None:

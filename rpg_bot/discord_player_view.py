@@ -9,6 +9,8 @@ from .database import Database
 from .dungeon import KnowledgeState, PlayerMap
 from .map_renderer import render_player_map
 from .player_view_service import PlayerViewService
+from .room_images import RoomImageStore
+from .room_scene_renderer import render_room_card
 
 
 def private_map_channel_name(character_name: str, character_id: int) -> str:
@@ -24,10 +26,12 @@ class DiscordPlayerViewAdapter:
         database: Database,
         views: PlayerViewService,
         client: discord.Client,
+        room_images: RoomImageStore | None = None,
     ) -> None:
         self.database = database
         self.views = views
         self.client = client
+        self.room_images = room_images or RoomImageStore()
 
     async def edit_view_message(
         self, channel_id: int, message_id: int, view: PlayerMap
@@ -89,76 +93,47 @@ class DiscordPlayerViewAdapter:
         if view.focused_room is not None:
             focused = view.focused_room
             is_current = focused.room_id == view.current_room_id
-            if focused.knowledge_state is KnowledgeState.KNOWN:
+            scene_path = None
+            if (
+                focused.knowledge_state is KnowledgeState.VISITED
+                and focused.scene_image_path
+            ):
+                candidate = self.room_images.path_for(
+                    focused.scene_image_path
+                ) or Path(focused.scene_image_path)
+                if candidate.is_file():
+                    scene_path = candidate
+            room_card = render_room_card(
+                focused,
+                is_current=is_current,
+                scene_path=scene_path,
+            )
+            if room_card is not None:
+                filename = "room-card.webp"
+                files.append(discord.File(room_card, filename=filename))
                 room_embed = discord.Embed(
-                    title=f"? {focused.name}",
+                    colour=(
+                        discord.Colour.from_rgb(91, 78, 59)
+                        if focused.knowledge_state is KnowledgeState.KNOWN
+                        else discord.Colour.from_rgb(111, 37, 32)
+                        if is_current
+                        else discord.Colour.from_rgb(154, 120, 61)
+                    )
+                )
+                room_embed.set_image(url=f"attachment://{filename}")
+            else:
+                # Text remains only as an accessibility fallback if the
+                # packaged panel asset itself is unavailable.
+                known = focused.knowledge_state is KnowledgeState.KNOWN
+                room_embed = discord.Embed(
+                    title=f"? {focused.name}" if known else focused.name,
                     description=(
-                        "*A place marked on your map, but not yet present in "
-                        "your memories.*"
+                        "You have not personally visited this place."
+                        if known
+                        else focused.description or "No saved description."
                     ),
                     colour=discord.Colour.from_rgb(91, 78, 59),
                 )
-                room_embed.set_author(name="KNOWN · UNVISITED")
-                room_embed.add_field(
-                    name="Journal",
-                    value="Not personally visited.",
-                    inline=False,
-                )
-                room_embed.set_footer(text="No visual memory recorded.")
-            else:
-                room_embed = discord.Embed(
-                    title=focused.name,
-                    description=(focused.description or "No saved description.")[:2000],
-                    colour=(
-                        discord.Colour.from_rgb(111, 37, 32)
-                        if is_current
-                        else discord.Colour.from_rgb(154, 120, 61)
-                    ),
-                )
-                room_embed.set_author(
-                    name="CURRENT ROOM" if is_current else "INSPECTED ROOM"
-                )
-                room_embed.add_field(
-                    name="Journal",
-                    value=(
-                        "You are here."
-                        if is_current
-                        else "Visited · Recalled from your travels."
-                    ),
-                    inline=False,
-                )
-                if focused.visible_characters:
-                    room_embed.add_field(
-                        name="Characters",
-                        value="\n".join(focused.visible_characters),
-                        inline=True,
-                    )
-                if focused.visible_entities:
-                    room_embed.add_field(
-                        name="Visible",
-                        value="\n".join(focused.visible_entities),
-                        inline=True,
-                    )
-                if focused.visible_items:
-                    room_embed.add_field(
-                        name="Items",
-                        value="\n".join(focused.visible_items),
-                        inline=True,
-                    )
-                if focused.scene_image_url:
-                    room_embed.set_image(url=focused.scene_image_url)
-                    room_embed.set_footer(text="Visual memory")
-                elif focused.scene_image_path:
-                    scene_path = Path(focused.scene_image_path)
-                    if scene_path.is_file():
-                        filename = f"room-scene{scene_path.suffix or '.png'}"
-                        files.append(discord.File(scene_path, filename=filename))
-                        room_embed.set_image(url=f"attachment://{filename}")
-                        room_embed.set_footer(text="Visual memory")
-                    else:
-                        room_embed.set_footer(
-                            text="The remembered scene is currently unavailable."
-                        )
             embeds.append(room_embed)
         return embeds, files, self.controls(view)
 

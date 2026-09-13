@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 
@@ -38,6 +39,42 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertIsNotNone(character)
         self.assertEqual(character.hp, 17)
+
+    def test_connection_lock_columns_are_migrated_for_existing_databases(self) -> None:
+        legacy_path = Path(self.temp_directory.name) / "legacy-connections.db"
+        with closing(sqlite3.connect(legacy_path)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE room_connections (
+                    id TEXT PRIMARY KEY,
+                    from_room_id TEXT NOT NULL,
+                    to_room_id TEXT NOT NULL,
+                    exit_name TEXT NOT NULL,
+                    return_exit_name TEXT,
+                    connection_type TEXT NOT NULL,
+                    hidden INTEGER NOT NULL DEFAULT 0,
+                    bidirectional INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.commit()
+
+        Database(legacy_path).initialize()
+
+        with closing(sqlite3.connect(legacy_path)) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(room_connections)")
+            }
+        self.assertIn("has_lock", columns)
+        self.assertIn("is_locked", columns)
+        self.assertIn("is_broken", columns)
+        self.assertIn("unlock_difficulty", columns)
+        self.assertIn("has_trap", columns)
+        self.assertIn("trap_state", columns)
+        self.assertIn("trap_detection_difficulty", columns)
+        self.assertIn("trap_damage_type", columns)
+        self.assertIn("trap_damage", columns)
 
     def test_hp_is_clamped_for_damage_and_healing(self) -> None:
         self.database.create_character(123, "Olof", 22)

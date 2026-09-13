@@ -1,12 +1,15 @@
 """Pillow renderer for already-filtered player dungeon maps."""
 
-from collections import Counter
+from collections import deque
+from functools import lru_cache
 from io import BytesIO
+from math import hypot
+from pathlib import Path
 from random import Random
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFont
 
-from .dungeon import KnowledgeState, PlayerMap
+from .dungeon import ConnectionType, KnowledgeState, PlayerMap, TrapState
 
 
 MAP_WIDTH = 1600
@@ -14,16 +17,42 @@ MAP_HEIGHT = 1000
 PADDING = 80
 MIN_ROOM_WIDTH = 250
 MIN_ROOM_HEIGHT = 160
+WORLD_TO_MAP_SCALE = 1.0
+VIEWPORT_BOUNDS = (PADDING, 145, MAP_WIDTH - PADDING, MAP_HEIGHT - PADDING)
+MAP_BACKGROUND_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "background.png"
+)
+ROOM_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "room.png"
+DOOR_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "door.png"
+HALLWAY_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "hallway.png"
+LOCKED_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "lock.png"
+UNLOCKED_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "lock-unlocked.png"
+)
+BROKEN_LOCK_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "lock-broken.png"
+)
+TRAP_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "trap.png"
+TRAP_DISARMED_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "trap-disarmed.png"
+)
+TRAP_TRIGGERED_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "trap-triggered.png"
+)
+CONNECTION_ART_HEIGHT = 72
+LOCK_ART_HEIGHT = 34
+LOCK_ART_GAP = 4
+TRAP_ART_HEIGHT = LOCK_ART_HEIGHT
+TRAP_ART_GAP = LOCK_ART_GAP
+CONNECTION_ROOM_GAP = 12
 
 
 def render_player_map(view: PlayerMap) -> BytesIO:
     """Render only the rooms and connections contained in ``view``."""
-    image = Image.new("RGB", (MAP_WIDTH, MAP_HEIGHT), "#15120f")
+    image = _map_canvas()
     draw = ImageDraw.Draw(image)
-    _dark_fantasy_backdrop(draw)
     title_font = _font(42, heading=True)
     room_font = _font(30, heading=True)
-    unknown_room_font = _font(27, heading=True)
     mystery_font = _font(58, heading=True)
     small_font = _font(19)
     marker_font = _font(18, heading=True)
@@ -56,7 +85,9 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         )
         return _png(image)
 
+    map_base = image.copy()
     positions = _layout(view)
+    focus_distances = _focus_distances(view)
     centers = {
         room.id: (
             positions[room.id][0] + positions[room.id][2] / 2,
@@ -78,22 +109,47 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         source = centers.get(connection.from_room_id)
         target = centers.get(connection.to_room_id)
         if source and target:
+            connection_fog = _fog_strength(
+                max(
+                    focus_distances.get(connection.from_room_id, 99),
+                    focus_distances.get(connection.to_room_id, 99),
+                )
+            )
             start = _edge_point(source, target, boxes[connection.from_room_id])
             end = _edge_point(target, source, boxes[connection.to_room_id])
-            draw.line((*start, *end), fill="#080706", width=13)
-            draw.line((*start, *end), fill="#645338", width=6)
-            draw.line((*start, *end), fill="#9a8051", width=2)
-            midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
-            draw.ellipse(
-                (midpoint[0] - 8, midpoint[1] - 8, midpoint[0] + 8, midpoint[1] + 8),
-                fill="#655239",
-                outline="#c4a66b",
+            # Run beneath each room frame so antialiased/shadow pixels cannot
+            # leave a visible gap between the connector and the artwork.
+            start = _point_toward(start, source, 18)
+            end = _point_toward(end, target, 18)
+            draw.line(
+                (*start, *end),
+                fill=_fog_colour("#080706", connection_fog),
+                width=13,
+            )
+            draw.line(
+                (*start, *end),
+                fill=_fog_colour("#645338", connection_fog),
+                width=6,
+            )
+            draw.line(
+                (*start, *end),
+                fill=_fog_colour("#9a8051", connection_fog),
                 width=2,
             )
-            draw.ellipse(
-                (midpoint[0] - 3, midpoint[1] - 3, midpoint[0] + 3, midpoint[1] + 3),
-                fill="#dbc38b",
-            )
+            midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+            if not _draw_connector_art(
+                image,
+                midpoint,
+                connection.connection_type,
+                has_lock=connection.has_lock,
+                is_locked=connection.is_locked,
+                is_broken=connection.is_broken,
+                has_trap=connection.has_trap,
+                trap_state=connection.trap_state,
+                fog_strength=connection_fog,
+                vertical=abs(target[1] - source[1]) >= abs(target[0] - source[0]),
+            ):
+                _draw_connector_dot(draw, midpoint, fog_strength=connection_fog)
         else:
             local_id = (
                 connection.from_room_id
@@ -102,9 +158,18 @@ def render_player_map(view: PlayerMap) -> BytesIO:
             )
             local = centers.get(local_id)
             if local:
+                connection_fog = _fog_strength(focus_distances.get(local_id, 99))
                 endpoint = (local[0] + 105, local[1] + 80)
-                draw.line((*local, *endpoint), fill="#090806", width=15)
-                draw.line((*local, *endpoint), fill="#75603e", width=6)
+                draw.line(
+                    (*local, *endpoint),
+                    fill=_fog_colour("#090806", connection_fog),
+                    width=15,
+                )
+                draw.line(
+                    (*local, *endpoint),
+                    fill=_fog_colour("#75603e", connection_fog),
+                    width=6,
+                )
                 other_floor_id = (
                     connection.to_floor_id
                     if local_id == connection.from_room_id
@@ -112,7 +177,12 @@ def render_player_map(view: PlayerMap) -> BytesIO:
                 )
                 connection_name = connection.connection_type.value.replace("_", " ")
                 label = f"{connection_name} -> {other_floor_id}"
-                draw.text(endpoint, label, fill="#c7b58e", font=small_font)
+                draw.text(
+                    endpoint,
+                    label,
+                    fill=_fog_colour("#c7b58e", connection_fog),
+                    font=small_font,
+                )
 
     for room in view.rooms:
         left, top, width, height = positions[room.id]
@@ -127,16 +197,25 @@ def render_player_map(view: PlayerMap) -> BytesIO:
         if room.is_current:
             outline = "#c69a4b"
             border_width = 13
-        draw.rounded_rectangle(
-            (left + 10, top + 12, left + width + 10, top + height + 12),
-            radius=18,
-            fill="#090806",
-        )
-        draw.rounded_rectangle(box, radius=18, fill=fill)
-        _room_texture(draw, box, room.id, visited)
-        draw.rounded_rectangle(
-            box, radius=18, outline=outline, width=border_width
-        )
+        uses_room_art = _draw_room_art(image, box, visited=visited)
+        if not uses_room_art:
+            draw.rounded_rectangle(
+                (left + 10, top + 12, left + width + 10, top + height + 12),
+                radius=18,
+                fill="#090806",
+            )
+            draw.rounded_rectangle(box, radius=18, fill=fill)
+            _room_texture(draw, box, room.id, visited)
+        if not uses_room_art or room.is_current or room.is_focused:
+            status_box = (
+                left + (11 if uses_room_art else 0),
+                top + (11 if uses_room_art else 0),
+                left + width - (11 if uses_room_art else 0),
+                top + height - (11 if uses_room_art else 0),
+            )
+            draw.rounded_rectangle(
+                status_box, radius=18, outline=outline, width=border_width
+            )
         if room.is_current and room.is_focused:
             inset_box = (
                 left + 16,
@@ -148,34 +227,383 @@ def render_player_map(view: PlayerMap) -> BytesIO:
                 inset_box, radius=12, outline="#d8c89f", width=5
             )
         if room.knowledge_state is KnowledgeState.KNOWN:
-            # A dashed inner border reinforces uncertainty even without colour.
-            _dashed_rectangle(draw, box, "#716858")
-            question_box = draw.textbbox((0, 0), "?", font=mystery_font)
-            draw.text(
-                (
-                    left + width - (question_box[2] - question_box[0]) - 22,
-                    top + 10,
-                ),
+            _draw_room_label(
+                draw,
                 "?",
-                fill="#302c27",
-                font=mystery_font,
+                box,
+                mystery_font,
+                "#9b9282",
             )
-        _draw_room_label(
-            draw,
-            room.display_name,
-            box,
-            unknown_room_font if not visited else room_font,
-            "#ece0c6" if visited else "#9b9282",
-            reserve_markers=bool(room.visible_characters),
-        )
+        else:
+            _draw_room_label(
+                draw,
+                room.display_name,
+                box,
+                room_font,
+                "#ece0c6",
+            )
         if room.visible_characters:
             _player_markers(draw, box, room.visible_characters, marker_font)
+        fog_strength = _fog_strength(focus_distances.get(room.id, 99))
+        if fog_strength:
+            _fog_room(image, box, fog_strength)
+
+    # A camera may place distant known rooms beyond the visible region. Restore
+    # the decorated canvas outside the viewport so those rooms and connectors
+    # cannot draw over the floor title or the outer map frame.
+    outside_viewport = Image.new("L", (MAP_WIDTH, MAP_HEIGHT), 255)
+    try:
+        ImageDraw.Draw(outside_viewport).rectangle(VIEWPORT_BOUNDS, fill=0)
+        image.paste(map_base, (0, 0), outside_viewport)
+    finally:
+        outside_viewport.close()
+        map_base.close()
 
     return _png(image)
 
 
+@lru_cache(maxsize=1)
+def _loaded_map_background() -> Image.Image | None:
+    """Load and size the packaged map background once per process."""
+    try:
+        with Image.open(MAP_BACKGROUND_PATH) as source:
+            return source.convert("RGB").resize(
+                (MAP_WIDTH, MAP_HEIGHT), Image.Resampling.LANCZOS
+            )
+    except (OSError, ValueError):
+        return None
+
+
+def _map_canvas() -> Image.Image:
+    """Return a fresh map canvas, falling back if the asset is unavailable."""
+    background = _loaded_map_background()
+    if background is not None:
+        return background.copy()
+
+    image = Image.new("RGB", (MAP_WIDTH, MAP_HEIGHT), "#15120f")
+    _dark_fantasy_backdrop(ImageDraw.Draw(image))
+    return image
+
+
+@lru_cache(maxsize=1)
+def _loaded_room_art() -> Image.Image | None:
+    """Load the supplied room frame without its transparent outer margin."""
+    try:
+        with Image.open(ROOM_ART_PATH) as source:
+            room = source.convert("RGBA")
+        alpha = room.getchannel("A")
+        visible_bounds = alpha.point(
+            lambda value: 255 if value >= 16 else 0
+        ).getbbox()
+        if visible_bounds is None:
+            return None
+        return room.crop(visible_bounds)
+    except (OSError, ValueError):
+        return None
+
+
+@lru_cache(maxsize=1)
+def _loaded_door_art() -> Image.Image | None:
+    """Load the door marker, crop transparent padding, and keep it upright."""
+    return _load_map_marker_art(DOOR_ART_PATH, CONNECTION_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_hallway_art() -> Image.Image | None:
+    """Load the hallway marker at the same visual height as the door."""
+    return _load_map_marker_art(HALLWAY_ART_PATH, CONNECTION_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_locked_art() -> Image.Image | None:
+    return _load_map_marker_art(LOCKED_ART_PATH, LOCK_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_unlocked_art() -> Image.Image | None:
+    return _load_map_marker_art(UNLOCKED_ART_PATH, LOCK_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_broken_lock_art() -> Image.Image | None:
+    return _load_map_marker_art(BROKEN_LOCK_ART_PATH, LOCK_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_trap_art() -> Image.Image | None:
+    return _load_map_marker_art(TRAP_ART_PATH, TRAP_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_disarmed_trap_art() -> Image.Image | None:
+    return _load_map_marker_art(TRAP_DISARMED_ART_PATH, TRAP_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_triggered_trap_art() -> Image.Image | None:
+    return _load_map_marker_art(TRAP_TRIGGERED_ART_PATH, TRAP_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _door_visual_anchor() -> tuple[float, float] | None:
+    """Return the alpha-weighted center of the visible door motif."""
+    door = _loaded_door_art()
+    if door is None:
+        return None
+    alpha = door.getchannel("A")
+    values = tuple(alpha.getdata())
+    total_alpha = sum(values)
+    if not total_alpha:
+        return ((door.width - 1) / 2, (door.height - 1) / 2)
+    return (
+        sum((index % door.width) * value for index, value in enumerate(values))
+        / total_alpha,
+        sum((index // door.width) * value for index, value in enumerate(values))
+        / total_alpha,
+    )
+
+
+def _load_map_marker_art(path: Path, target_height: int) -> Image.Image | None:
+    """Crop transparent padding and uniformly size map-marker artwork."""
+    try:
+        with Image.open(path) as source:
+            artwork = source.convert("RGBA")
+        visible_bounds = artwork.getchannel("A").point(
+            lambda value: 255 if value >= 16 else 0
+        ).getbbox()
+        if visible_bounds is None:
+            return None
+        artwork = artwork.crop(visible_bounds)
+        target_width = max(
+            1, round(target_height * artwork.width / artwork.height)
+        )
+        return artwork.resize(
+            (target_width, target_height), Image.Resampling.LANCZOS
+        )
+    except (OSError, ValueError):
+        return None
+
+
+def _draw_connector_art(
+    image: Image.Image,
+    midpoint: tuple[float, float],
+    connection_type: ConnectionType,
+    *,
+    has_lock: bool = False,
+    is_locked: bool = False,
+    is_broken: bool = False,
+    has_trap: bool = False,
+    trap_state: TrapState | None = None,
+    fog_strength: float,
+    vertical: bool = False,
+) -> bool:
+    """Place the selected, unrotated artwork at a connector midpoint."""
+    if connection_type is ConnectionType.DOOR:
+        source = _loaded_door_art()
+    elif connection_type in (ConnectionType.HALLWAY, ConnectionType.PASSAGE):
+        source = _loaded_hallway_art()
+    else:
+        source = None
+    if source is None:
+        return False
+    trap_art = None
+    if has_trap:
+        if trap_state is TrapState.DISARMED:
+            trap_art = _loaded_disarmed_trap_art()
+        elif trap_state is TrapState.TRIGGERED:
+            trap_art = _loaded_triggered_trap_art()
+        else:
+            trap_art = _loaded_trap_art()
+    if connection_type is ConnectionType.DOOR:
+        lock_art = None
+        if has_lock:
+            if is_broken:
+                lock_art = _loaded_broken_lock_art()
+            elif is_locked:
+                lock_art = _loaded_locked_art()
+            else:
+                lock_art = _loaded_unlocked_art()
+        scale, door_position, lock_position = _door_marker_layout(
+            midpoint,
+            source.size,
+            lock_art.size if lock_art is not None else (0, 0),
+            vertical=vertical,
+            door_visual_anchor=_door_visual_anchor(),
+        )
+        artwork = _prepared_marker_art(source, scale, fog_strength)
+        image.paste(artwork, door_position, artwork)
+        if lock_art is not None and lock_position is not None:
+            rendered_lock = _prepared_marker_art(lock_art, scale, fog_strength)
+            image.paste(rendered_lock, lock_position, rendered_lock)
+        marker_position = door_position
+    else:
+        artwork = _prepared_marker_art(source, 1.0, fog_strength)
+        left = round(midpoint[0] - artwork.width / 2)
+        top = round(midpoint[1] - artwork.height / 2)
+        marker_position = (left, top)
+        image.paste(artwork, marker_position, artwork)
+    if trap_art is not None:
+        rendered_trap = _prepared_marker_art(trap_art, 1.0, fog_strength)
+        trap_position = _trap_marker_position(
+            midpoint,
+            marker_position,
+            artwork.size,
+            rendered_trap.size,
+            vertical=vertical,
+        )
+        image.paste(rendered_trap, trap_position, rendered_trap)
+    return True
+
+
+def _trap_marker_position(
+    midpoint: tuple[float, float],
+    marker_position: tuple[int, int],
+    marker_size: tuple[int, int],
+    trap_size: tuple[int, int],
+    *,
+    vertical: bool,
+) -> tuple[int, int]:
+    """Place traps opposite the lock: right when vertical, below otherwise."""
+    if vertical:
+        return (
+            marker_position[0] + marker_size[0] + TRAP_ART_GAP,
+            round(midpoint[1] - trap_size[1] / 2),
+        )
+    return (
+        round(midpoint[0] - trap_size[0] / 2),
+        marker_position[1] + marker_size[1] + TRAP_ART_GAP,
+    )
+
+
+def _prepared_marker_art(
+    source: Image.Image,
+    scale: float,
+    fog_strength: float,
+) -> Image.Image:
+    artwork = source
+    if scale < 1:
+        artwork = source.resize(
+            (
+                max(1, round(source.width * scale)),
+                max(1, round(source.height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+    if fog_strength:
+        artwork = ImageEnhance.Brightness(artwork).enhance(
+            max(0.25, 1 - fog_strength)
+        )
+    return artwork
+
+
+def _door_marker_layout(
+    midpoint: tuple[float, float],
+    door_size: tuple[int, int],
+    lock_size: tuple[int, int],
+    *,
+    vertical: bool = False,
+    door_visual_anchor: tuple[float, float] | None = None,
+) -> tuple[float, tuple[int, int], tuple[int, int] | None]:
+    """Keep the door full-size and place its lock according to line direction."""
+    anchor = door_visual_anchor or (
+        (door_size[0] - 1) / 2,
+        (door_size[1] - 1) / 2,
+    )
+    door_position = (
+        round(midpoint[0] - anchor[0]),
+        round(midpoint[1] - anchor[1]),
+    )
+    if not lock_size[0] or not lock_size[1]:
+        return 1.0, door_position, None
+    if vertical:
+        lock_position = (
+            door_position[0] - LOCK_ART_GAP - lock_size[0],
+            round(midpoint[1] - lock_size[1] / 2),
+        )
+    else:
+        lock_position = (
+            round(midpoint[0] - lock_size[0] / 2),
+            door_position[1] - LOCK_ART_GAP - lock_size[1],
+        )
+    return 1.0, door_position, lock_position
+
+
+def _draw_connector_dot(
+    draw: ImageDraw.ImageDraw,
+    midpoint: tuple[float, float],
+    *,
+    fog_strength: float,
+) -> None:
+    """Retain the classic marker for connection types without artwork."""
+    draw.ellipse(
+        (midpoint[0] - 8, midpoint[1] - 8, midpoint[0] + 8, midpoint[1] + 8),
+        fill=_fog_colour("#655239", fog_strength),
+        outline=_fog_colour("#c4a66b", fog_strength),
+        width=2,
+    )
+    draw.ellipse(
+        (midpoint[0] - 3, midpoint[1] - 3, midpoint[0] + 3, midpoint[1] + 3),
+        fill=_fog_colour("#dbc38b", fog_strength),
+    )
+
+
+def _draw_room_art(
+    image: Image.Image,
+    box: tuple[float, float, float, float],
+    *,
+    visited: bool,
+) -> bool:
+    """Draw the supplied room art while preserving its border proportions."""
+    source = _loaded_room_art()
+    if source is None:
+        return False
+    if not visited:
+        source = ImageEnhance.Brightness(source).enhance(0.52)
+
+    left, top, right, bottom = (round(value) for value in box)
+    room = _nine_slice(source, (max(1, right - left), max(1, bottom - top)))
+    image.paste(room, (left, top), room)
+    return True
+
+
+def _nine_slice(source: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Resize framed art without stretching its corners and edge thickness."""
+    target_width, target_height = size
+    source_border = min(76, source.width // 3, source.height // 3)
+    target_border = min(42, target_width // 3, target_height // 3)
+    result = Image.new("RGBA", size, (0, 0, 0, 0))
+
+    source_x = (0, source_border, source.width - source_border, source.width)
+    source_y = (0, source_border, source.height - source_border, source.height)
+    target_x = (0, target_border, target_width - target_border, target_width)
+    target_y = (0, target_border, target_height - target_border, target_height)
+    for row in range(3):
+        for column in range(3):
+            source_box = (
+                source_x[column],
+                source_y[row],
+                source_x[column + 1],
+                source_y[row + 1],
+            )
+            target_box = (
+                target_x[column],
+                target_y[row],
+                target_x[column + 1],
+                target_y[row + 1],
+            )
+            target_size = (
+                target_box[2] - target_box[0],
+                target_box[3] - target_box[1],
+            )
+            if target_size[0] <= 0 or target_size[1] <= 0:
+                continue
+            tile = source.crop(source_box).resize(target_size, Image.Resampling.LANCZOS)
+            result.paste(tile, target_box[:2], tile)
+    return result
+
+
 def _dark_fantasy_backdrop(draw: ImageDraw.ImageDraw) -> None:
-    """Paint a restrained stone-and-brass frame without external assets."""
+    """Paint a fallback stone-and-brass frame if the asset is unavailable."""
     for y in range(MAP_HEIGHT):
         shade = 20 + int(8 * y / MAP_HEIGHT)
         draw.line((0, y, MAP_WIDTH, y), fill=(shade, shade - 3, shade - 7))
@@ -272,86 +700,200 @@ def _room_texture(
 
 
 def _layout(view: PlayerMap) -> dict[str, tuple[float, float, float, float]]:
-    coordinate_counts = Counter((room.x, room.y) for room in view.rooms)
-    raw: dict[str, tuple[float, float, float, float]] = {}
-    for index, room in enumerate(view.rooms):
-        x, y = room.x, room.y
-        if coordinate_counts[(x, y)] > 1:
-            x += (index % 4) * 180
-            y += (index // 4) * 125
-        raw[room.id] = (x, y, max(110, room.width * 85), max(72, room.height * 60))
-
-    min_x = min(item[0] for item in raw.values())
-    min_y = min(item[1] for item in raw.values())
-    max_x = max(item[0] + item[2] for item in raw.values())
-    max_y = max(item[1] + item[3] for item in raw.values())
-    viewport_left = PADDING
-    viewport_top = 145
-    viewport_right = MAP_WIDTH - PADDING
-    viewport_bottom = MAP_HEIGHT - PADDING
-    available_width = viewport_right - viewport_left
-    available_height = viewport_bottom - viewport_top
-    scale = min(
-        3.0,
-        available_width / max(1, max_x - min_x),
-        available_height / max(1, max_y - min_y),
-    )
-    # A little breathing room lets the viewport favour the current room instead
-    # of pinning an edge room against the canvas just to maximize raw scale.
-    if view.current_room_id in raw:
-        scale *= 0.84
-
-    current = raw.get(view.current_room_id or "")
-    focused = raw.get(view.focused_room_id or "")
-    anchor = current or focused
-    if (
-        current is not None
-        and focused is not None
-        and view.focused_room_id != view.current_room_id
-    ):
-        current_center = _room_center(current)
-        focused_center = _room_center(focused)
-        anchor_center = (
-            current_center[0] * 0.72 + focused_center[0] * 0.28,
-            current_center[1] * 0.72 + focused_center[1] * 0.28,
-        )
-    elif anchor is not None:
-        anchor_center = _room_center(anchor)
+    """Project persisted dungeon coordinates through a focus-centred camera."""
+    rooms = {room.id: room for room in view.rooms}
+    focus = rooms.get(view.focused_room_id or "")
+    current = rooms.get(view.current_room_id or "")
+    anchor = focus or current
+    if anchor is None:
+        anchor_x = sum(room.x for room in view.rooms) / len(view.rooms)
+        anchor_y = sum(room.y for room in view.rooms) / len(view.rooms)
     else:
-        anchor_center = ((min_x + max_x) / 2, (min_y + max_y) / 2)
+        anchor_x, anchor_y = anchor.x, anchor.y
 
-    viewport_center = (
-        (viewport_left + viewport_right) / 2,
-        (viewport_top + viewport_bottom) / 2,
-    )
-    desired_offset_x = viewport_center[0] - anchor_center[0] * scale
-    desired_offset_y = viewport_center[1] - anchor_center[1] * scale
-    offset_x = _bounded_offset(
-        desired_offset_x,
-        viewport_left - min_x * scale,
-        viewport_right - max_x * scale,
-    )
-    offset_y = _bounded_offset(
-        desired_offset_y,
-        viewport_top - min_y * scale,
-        viewport_bottom - max_y * scale,
-    )
+    viewport_left, viewport_top, viewport_right, viewport_bottom = VIEWPORT_BOUNDS
+    viewport_center_x = (viewport_left + viewport_right) / 2
+    viewport_center_y = (viewport_top + viewport_bottom) / 2
     positioned = {}
-    for room_id, (x, y, width, height) in raw.items():
-        rendered_width = max(MIN_ROOM_WIDTH, width * scale)
-        rendered_height = max(MIN_ROOM_HEIGHT, height * scale)
-        center_x = offset_x + (x + width / 2) * scale
-        center_y = offset_y + (y + height / 2) * scale
-        left = max(
-            viewport_left,
-            min(center_x - rendered_width / 2, viewport_right - rendered_width),
+    for room in view.rooms:
+        width = max(MIN_ROOM_WIDTH, room.width * 85)
+        height = max(MIN_ROOM_HEIGHT, room.height * 60)
+        center_x = viewport_center_x + (room.x - anchor_x) * WORLD_TO_MAP_SCALE
+        center_y = viewport_center_y + (room.y - anchor_y) * WORLD_TO_MAP_SCALE
+        positioned[room.id] = (
+            center_x - width / 2,
+            center_y - height / 2,
+            width,
+            height,
         )
-        top = max(
-            viewport_top,
-            min(center_y - rendered_height / 2, viewport_bottom - rendered_height),
-        )
-        positioned[room_id] = (left, top, rendered_width, rendered_height)
+    _space_door_connections(view, positioned, anchor.id if anchor else None)
     return positioned
+
+
+def _space_door_connections(
+    view: PlayerMap,
+    positioned: dict[str, tuple[float, float, float, float]],
+    anchor_id: str | None,
+) -> None:
+    """Move nearby rooms apart so door artwork always remains full-size."""
+    door = _loaded_door_art()
+    if door is None:
+        return
+    required_horizontal_gap = door.width + CONNECTION_ROOM_GAP
+    required_vertical_gap = door.height + CONNECTION_ROOM_GAP
+    door_connections = tuple(
+        connection
+        for connection in view.connections
+        if connection.connection_type is ConnectionType.DOOR
+        and connection.from_room_id in positioned
+        and connection.to_room_id in positioned
+    )
+    for _ in range(max(1, len(door_connections) * 2)):
+        changed = False
+        for connection in door_connections:
+            first_id = connection.from_room_id
+            second_id = connection.to_room_id
+            first = positioned[first_id]
+            second = positioned[second_id]
+            first_center = (first[0] + first[2] / 2, first[1] + first[3] / 2)
+            second_center = (
+                second[0] + second[2] / 2,
+                second[1] + second[3] / 2,
+            )
+            vertical = abs(second_center[1] - first_center[1]) >= abs(
+                second_center[0] - first_center[0]
+            )
+            if vertical:
+                upper_id, lower_id = (
+                    (first_id, second_id)
+                    if first_center[1] <= second_center[1]
+                    else (second_id, first_id)
+                )
+                upper = positioned[upper_id]
+                lower = positioned[lower_id]
+                gap = lower[1] - (upper[1] + upper[3])
+                deficit = required_vertical_gap - gap
+                if deficit > 0:
+                    positioned[upper_id] = (
+                        upper[0],
+                        upper[1] - deficit,
+                        upper[2],
+                        upper[3],
+                    )
+                    changed = True
+            else:
+                left_id, right_id = (
+                    (first_id, second_id)
+                    if first_center[0] <= second_center[0]
+                    else (second_id, first_id)
+                )
+                left = positioned[left_id]
+                right = positioned[right_id]
+                gap = right[0] - (left[0] + left[2])
+                deficit = required_horizontal_gap - gap
+                if deficit > 0:
+                    positioned[left_id] = (
+                        left[0] - deficit,
+                        left[1],
+                        left[2],
+                        left[3],
+                    )
+                    changed = True
+        if not changed:
+            break
+
+    if anchor_id in positioned:
+        anchor = positioned[anchor_id]
+        viewport_center = (
+            (VIEWPORT_BOUNDS[0] + VIEWPORT_BOUNDS[2]) / 2,
+            (VIEWPORT_BOUNDS[1] + VIEWPORT_BOUNDS[3]) / 2,
+        )
+        offset_x = viewport_center[0] - (anchor[0] + anchor[2] / 2)
+        offset_y = viewport_center[1] - (anchor[1] + anchor[3] / 2)
+        for room_id, (left, top, width, height) in positioned.items():
+            positioned[room_id] = (
+                left + offset_x,
+                top + offset_y,
+                width,
+                height,
+            )
+
+
+def _focus_distances(view: PlayerMap) -> dict[str, int]:
+    """Return graph distance from focus without changing room knowledge."""
+    room_ids = {room.id for room in view.rooms}
+    focus_id = (
+        view.focused_room_id
+        if view.focused_room_id in room_ids
+        else view.current_room_id
+        if view.current_room_id in room_ids
+        else None
+    )
+    if focus_id is None:
+        return {room_id: 0 for room_id in room_ids}
+    neighbours = {room_id: set() for room_id in room_ids}
+    for connection in view.connections:
+        if (
+            connection.from_room_id in room_ids
+            and connection.to_room_id in room_ids
+        ):
+            neighbours[connection.from_room_id].add(connection.to_room_id)
+            neighbours[connection.to_room_id].add(connection.from_room_id)
+    distances = {focus_id: 0}
+    pending = deque((focus_id,))
+    while pending:
+        room_id = pending.popleft()
+        for neighbour in neighbours[room_id]:
+            if neighbour in distances:
+                continue
+            distances[neighbour] = distances[room_id] + 1
+            pending.append(neighbour)
+    return distances
+
+
+def _fog_strength(distance: int) -> float:
+    if distance <= 1:
+        return 0.0
+    if distance == 2:
+        return 0.18
+    if distance == 3:
+        return 0.42
+    return 0.68
+
+
+def _fog_colour(colour: str, strength: float) -> tuple[int, int, int]:
+    source = ImageColor.getrgb(colour)
+    fog = (8, 9, 9)
+    return tuple(
+        round(channel * (1 - strength) + fog_channel * strength)
+        for channel, fog_channel in zip(source, fog, strict=True)
+    )
+
+
+def _fog_room(
+    image: Image.Image,
+    box: tuple[float, float, float, float],
+    strength: float,
+) -> None:
+    left = max(0, round(box[0]))
+    top = max(0, round(box[1]))
+    right = min(image.width, round(box[2]))
+    bottom = min(image.height, round(box[3]))
+    if left >= right or top >= bottom:
+        return
+    region = image.crop((left, top, right, bottom))
+    try:
+        fog = Image.new("RGB", region.size, (8, 9, 9))
+        try:
+            fogged = Image.blend(region, fog, strength)
+            try:
+                image.paste(fogged, (left, top))
+            finally:
+                fogged.close()
+        finally:
+            fog.close()
+    finally:
+        region.close()
 
 
 def _player_markers(
@@ -420,29 +962,31 @@ def _draw_room_label(
     box: tuple[float, float, float, float],
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     colour: str,
-    *,
-    reserve_markers: bool,
 ) -> None:
-    """Wrap by measured width and vertically balance the map label."""
+    """Wrap and geometrically center a label inside the complete room."""
     left, top, right, bottom = box
     lines = _wrap_label(draw, label, font, right - left - 42, max_lines=3)
-    line_height = max(28, draw.textbbox((0, 0), "Ag", font=font)[3] + 5)
-    label_bottom = bottom - (70 if reserve_markers else 22)
-    available_height = max(line_height, label_bottom - (top + 22))
-    text_height = line_height * len(lines)
-    text_y = top + 22 + max(0, (available_height - text_height) / 2)
-    for line in lines:
-        text_box = draw.textbbox((0, 0), line, font=font)
+    text_boxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+    line_gap = 5
+    text_height = sum(box[3] - box[1] for box in text_boxes)
+    text_height += line_gap * max(0, len(lines) - 1)
+    text_top = (top + bottom - text_height) / 2
+
+    for line, text_box in zip(lines, text_boxes, strict=True):
         text_width = text_box[2] - text_box[0]
+        glyph_height = text_box[3] - text_box[1]
         draw.text(
-            (left + (right - left - text_width) / 2, text_y),
+            (
+                left + (right - left - text_width) / 2 - text_box[0],
+                text_top - text_box[1],
+            ),
             line,
             fill=colour,
             font=font,
             stroke_width=1,
             stroke_fill="#17130f",
         )
-        text_y += line_height
+        text_top += glyph_height + line_gap
 
 
 def _wrap_label(
@@ -496,45 +1040,19 @@ def _edge_point(
     return origin[0] + dx * factor, origin[1] + dy * factor
 
 
-def _room_center(room: tuple[float, float, float, float]) -> tuple[float, float]:
-    x, y, width, height = room
-    return x + width / 2, y + height / 2
-
-
-def _bounded_offset(desired: float, fit_at_start: float, fit_at_end: float) -> float:
-    """Prefer the anchor position while keeping the known map inside the viewport."""
-    lower = min(fit_at_start, fit_at_end)
-    upper = max(fit_at_start, fit_at_end)
-    return max(lower, min(desired, upper))
-
-
-def _dashed_rectangle(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[float, float, float, float],
-    colour: str,
-) -> None:
-    left, top, right, bottom = box
-    inset = 8
-    left += inset
-    top += inset
-    right -= inset
-    bottom -= inset
-    dash = 9
-    gap = 7
-    for start in range(int(left), int(right), dash + gap):
-        draw.line((start, top, min(start + dash, right), top), fill=colour, width=2)
-        draw.line(
-            (start, bottom, min(start + dash, right), bottom),
-            fill=colour,
-            width=2,
-        )
-    for start in range(int(top), int(bottom), dash + gap):
-        draw.line((left, start, left, min(start + dash, bottom)), fill=colour, width=2)
-        draw.line(
-            (right, start, right, min(start + dash, bottom)),
-            fill=colour,
-            width=2,
-        )
+def _point_toward(
+    point: tuple[float, float],
+    target: tuple[float, float],
+    distance: float,
+) -> tuple[float, float]:
+    """Move a connector endpoint toward a room center by ``distance``."""
+    dx = target[0] - point[0]
+    dy = target[1] - point[1]
+    length = hypot(dx, dy)
+    if length == 0:
+        return point
+    scale = min(1.0, distance / length)
+    return point[0] + dx * scale, point[1] + dy * scale
 
 
 def _font(

@@ -1,11 +1,22 @@
 """Framework-neutral JSON API for the local DM dashboard."""
 
 from dataclasses import asdict
+from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import quote
 
+from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .inventory import ItemTemplate, ItemType, WeaponGrip
-from .world import AreaGraph, EntityKind, InventoryHolder, RoomEditorNode, WorldError
+from .room_images import InvalidRoomImageError, RoomImageStore
+from .world import (
+    AreaGraph,
+    EntityKind,
+    InventoryHolder,
+    Room,
+    RoomEditorNode,
+    WorldError,
+)
 from .world_service import WorldService
 
 
@@ -22,13 +33,23 @@ def _stack_data(stack: object) -> JsonObject:
     }
 
 
-def _node_data(node: RoomEditorNode) -> JsonObject:
+def _node_data(node: RoomEditorNode, room_images: RoomImageStore) -> JsonObject:
     room = node.room
+    stored_image = room_images.path_for(room.scene_image_path)
+    if stored_image is not None:
+        image_version = stored_image.stem
+        room_image_url = (
+            f"/api/rooms/{quote(room.id, safe='')}/image"
+            f"?version={quote(image_version, safe='')}"
+        )
+    else:
+        room_image_url = room.scene_image_url
     return {
         "id": room.id,
         "area_id": room.area_id,
         "name": room.name,
         "description": room.description or "",
+        "room_image_url": room_image_url,
         "position": {"x": node.x, "y": node.y},
         "counts": {
             "players": len(room.characters),
@@ -47,14 +68,14 @@ def _node_data(node: RoomEditorNode) -> JsonObject:
     }
 
 
-def _graph_data(graph: AreaGraph) -> JsonObject:
+def _graph_data(graph: AreaGraph, room_images: RoomImageStore) -> JsonObject:
     return {
         "area": {
             "id": graph.area.id,
             "name": graph.area.name,
             "description": graph.area.description or "",
         },
-        "nodes": [_node_data(node) for node in graph.nodes],
+        "nodes": [_node_data(node, room_images) for node in graph.nodes],
         "connections": [asdict(connection) for connection in graph.connections],
     }
 
@@ -109,8 +130,44 @@ def _template_data(template: ItemTemplate) -> JsonObject:
 class DashboardAPI:
     """Translate HTTP-shaped requests into deterministic service calls."""
 
-    def __init__(self, world: WorldService) -> None:
+    def __init__(
+        self,
+        world: WorldService,
+        room_images: RoomImageStore | None = None,
+    ) -> None:
         self.world = world
+        self.room_images = room_images or RoomImageStore()
+
+    def upload_room_image(
+        self,
+        room_id: str,
+        content: bytes,
+        content_type: str,
+        original_filename: str | None = None,
+    ) -> ApiResponse:
+        """Validate, persist, and atomically associate a room image."""
+        room = self.world.get_room(room_id)
+        if room is None:
+            return 404, {"error": f"Room '{room_id}' does not exist."}
+        try:
+            new_key = self.room_images.save(
+                content, content_type, original_filename
+            )
+            try:
+                updated = self.world.set_room_scene_image(room_id, new_key)
+            except Exception:
+                self.room_images.remove(new_key)
+                raise
+            self.room_images.remove(room.scene_image_path)
+            return 200, self._room_image_data(updated)
+        except (InvalidRoomImageError, ValueError, WorldError) as error:
+            return 400, {"error": str(error)}
+
+    def room_image_path(self, room_id: str) -> Path | None:
+        room = self.world.get_room(room_id)
+        if room is None:
+            return None
+        return self.room_images.path_for(room.scene_image_path)
 
     def handle(
         self,
@@ -179,7 +236,9 @@ class DashboardAPI:
 
         match = re.fullmatch(r"/api/areas/([^/]+)/graph", path)
         if method == "GET" and match:
-            return 200, _graph_data(self.world.area_graph(match.group(1)))
+            return 200, _graph_data(
+                self.world.area_graph(match.group(1)), self.room_images
+            )
 
         match = re.fullmatch(r"/api/areas/([^/]+)/rooms", path)
         if method == "POST" and match:
@@ -193,6 +252,15 @@ class DashboardAPI:
             )
             return 201, {"id": room.id}
 
+        match = re.fullmatch(r"/api/rooms/([^/]+)/image", path)
+        if match and method == "DELETE":
+            room = self.world.get_room(match.group(1))
+            if room is None:
+                return 404, {"error": f"Room '{match.group(1)}' does not exist."}
+            self.world.set_room_scene_image(room.id, None)
+            self.room_images.remove(room.scene_image_path)
+            return 200, {"id": room.id, "room_image_url": None}
+
         match = re.fullmatch(r"/api/rooms/([^/]+)", path)
         if match and method == "PATCH":
             room = self.world.update_room(
@@ -202,7 +270,10 @@ class DashboardAPI:
             )
             return 200, {"id": room.id, "name": room.name, "description": room.description or ""}
         if match and method == "DELETE":
+            room = self.world.get_room(match.group(1))
             self.world.delete_room(match.group(1))
+            if room is not None:
+                self.room_images.remove(room.scene_image_path)
             return 200, {"deleted": match.group(1)}
 
         match = re.fullmatch(r"/api/rooms/([^/]+)/position", path)
@@ -244,6 +315,49 @@ class DashboardAPI:
 
         if path == "/api/connections" and method == "POST":
             exit_name = self._text(body, "exit_name")
+            connection_type = self._connection_type(
+                body, default=ConnectionType.HALLWAY
+            )
+            is_locked = self._boolean(body, "is_locked", default=False)
+            is_broken = self._boolean(body, "is_broken", default=False)
+            has_lock = self._boolean(
+                body, "has_lock", default=is_locked or is_broken
+            )
+            unlock_difficulty = (
+                self._integer(body, "unlock_difficulty", default=10)
+                if is_locked
+                else None
+            )
+            self._validate_door_lock(
+                connection_type, has_lock, is_locked, is_broken, unlock_difficulty
+            )
+            has_trap = self._boolean(body, "has_trap", default=False)
+            trap_state = (
+                self._trap_state(body, default=TrapState.ARMED)
+                if has_trap
+                else None
+            )
+            trap_detection_difficulty = (
+                self._integer(body, "trap_detection_difficulty", default=10)
+                if has_trap
+                else None
+            )
+            trap_damage_type = (
+                self._trap_damage_type(body, default=TrapDamageType.PHYSICAL)
+                if has_trap
+                else None
+            )
+            trap_damage = (
+                self._integer(body, "trap_damage", default=1)
+                if has_trap
+                else None
+            )
+            self._validate_trap(
+                has_trap,
+                trap_detection_difficulty,
+                trap_damage_type,
+                trap_damage,
+            )
             bidirectional = self._boolean(body, "bidirectional", default=True)
             return_exit_name = (
                 self._optional_text(body, "return_exit_name") or exit_name
@@ -255,6 +369,16 @@ class DashboardAPI:
                 exit_name,
                 self._text(body, "destination_room_id"),
                 return_exit_name=return_exit_name,
+                connection_type=connection_type,
+                has_lock=has_lock,
+                is_locked=is_locked,
+                is_broken=is_broken,
+                unlock_difficulty=unlock_difficulty,
+                has_trap=has_trap,
+                trap_state=trap_state,
+                trap_detection_difficulty=trap_detection_difficulty,
+                trap_damage_type=trap_damage_type,
+                trap_damage=trap_damage,
             )
             return 201, {
                 "source_room_id": body["source_room_id"],
@@ -262,6 +386,18 @@ class DashboardAPI:
                 "destination_room_id": body["destination_room_id"],
                 "return_exit_name": return_exit_name,
                 "bidirectional": bidirectional,
+                "connection_type": connection_type.value,
+                "has_lock": has_lock,
+                "is_locked": is_locked,
+                "is_broken": is_broken,
+                "unlock_difficulty": unlock_difficulty,
+                "has_trap": has_trap,
+                "trap_state": trap_state.value if trap_state is not None else None,
+                "trap_detection_difficulty": trap_detection_difficulty,
+                "trap_damage_type": (
+                    trap_damage_type.value if trap_damage_type is not None else None
+                ),
+                "trap_damage": trap_damage,
             }
         if path == "/api/connections" and method == "PATCH":
             source_room_id = self._text(body, "source_room_id")
@@ -272,17 +408,136 @@ class DashboardAPI:
                 if bidirectional
                 else None
             )
+            connection_type = (
+                self._connection_type(body) if "connection_type" in body else None
+            )
+            lock_was_supplied = (
+                "has_lock" in body
+                or "is_locked" in body
+                or "is_broken" in body
+                or "unlock_difficulty" in body
+            )
+            is_locked = self._boolean(body, "is_locked", default=False)
+            is_broken = self._boolean(body, "is_broken", default=False)
+            has_lock = self._boolean(
+                body, "has_lock", default=is_locked or is_broken
+            )
+            unlock_difficulty = (
+                self._integer(body, "unlock_difficulty", default=10)
+                if is_locked
+                else None
+            )
+            trap_was_supplied = any(
+                field in body
+                for field in (
+                    "has_trap",
+                    "trap_state",
+                    "trap_detection_difficulty",
+                    "trap_damage_type",
+                    "trap_damage",
+                )
+            )
+            has_trap = self._boolean(body, "has_trap", default=False)
+            trap_state = (
+                self._trap_state(body, default=TrapState.ARMED)
+                if has_trap
+                else None
+            )
+            trap_detection_difficulty = (
+                self._integer(body, "trap_detection_difficulty", default=10)
+                if has_trap
+                else None
+            )
+            trap_damage_type = (
+                self._trap_damage_type(body, default=TrapDamageType.PHYSICAL)
+                if has_trap
+                else None
+            )
+            trap_damage = (
+                self._integer(body, "trap_damage", default=1)
+                if has_trap
+                else None
+            )
+            if is_locked and not 1 <= unlock_difficulty <= 30:
+                raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
+            if connection_type is not None:
+                self._validate_door_lock(
+                    connection_type, has_lock, is_locked, is_broken,
+                    unlock_difficulty
+                )
+            if trap_was_supplied:
+                self._validate_trap(
+                    has_trap,
+                    trap_detection_difficulty,
+                    trap_damage_type,
+                    trap_damage,
+                )
             self.world.set_connection_direction(
                 source_room_id,
                 exit_name,
                 bidirectional=bidirectional,
                 return_exit_name=return_exit_name,
             )
+            if connection_type is not None:
+                self.world.set_connection_type(
+                    source_room_id, exit_name, connection_type
+                )
+            if lock_was_supplied:
+                self.world.set_connection_lock(
+                    source_room_id,
+                    exit_name,
+                    has_lock=has_lock,
+                    is_locked=is_locked,
+                    is_broken=is_broken,
+                    unlock_difficulty=unlock_difficulty,
+                )
+            if trap_was_supplied:
+                self.world.set_connection_trap(
+                    source_room_id,
+                    exit_name,
+                    has_trap=has_trap,
+                    trap_state=trap_state,
+                    trap_detection_difficulty=trap_detection_difficulty,
+                    trap_damage_type=trap_damage_type,
+                    trap_damage=trap_damage,
+                )
             return 200, {
                 "source_room_id": source_room_id,
                 "exit_name": exit_name,
                 "bidirectional": bidirectional,
                 "return_exit_name": return_exit_name,
+                **(
+                    {"connection_type": connection_type.value}
+                    if connection_type is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "has_trap": has_trap,
+                        "trap_state": (
+                            trap_state.value if trap_state is not None else None
+                        ),
+                        "trap_detection_difficulty": trap_detection_difficulty,
+                        "trap_damage_type": (
+                            trap_damage_type.value
+                            if trap_damage_type is not None
+                            else None
+                        ),
+                        "trap_damage": trap_damage,
+                    }
+                    if trap_was_supplied
+                    else {}
+                ),
+                **(
+                    {
+                        "has_lock": has_lock,
+                        "is_locked": is_locked,
+                        "is_broken": is_broken,
+                        "unlock_difficulty": unlock_difficulty,
+                    }
+                    if lock_was_supplied
+                    else {}
+                ),
             }
         if path == "/api/connections" and method == "DELETE":
             self.world.disconnect_connection(
@@ -291,6 +546,18 @@ class DashboardAPI:
             return 200, {"deleted": True}
 
         return 404, {"error": "Not found."}
+
+    def _room_image_data(self, room: Room) -> JsonObject:
+        path = self.room_images.path_for(room.scene_image_path)
+        return {
+            "id": room.id,
+            "room_image_url": (
+                f"/api/rooms/{quote(room.id, safe='')}/image"
+                f"?version={quote(path.stem, safe='')}"
+                if path is not None
+                else room.scene_image_url
+            ),
+        }
 
     @staticmethod
     def _text(body: JsonObject, field: str) -> str:
@@ -307,6 +574,88 @@ class DashboardAPI:
         if not isinstance(value, str):
             raise ValueError(f"'{field}' must be text.")
         return value.strip() or None
+
+    @staticmethod
+    def _connection_type(
+        body: JsonObject,
+        *,
+        default: ConnectionType | None = None,
+    ) -> ConnectionType:
+        value = body.get("connection_type")
+        if value is None and default is not None:
+            return default
+        try:
+            connection_type = ConnectionType(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Connection type must be door or hallway.") from error
+        if connection_type not in (ConnectionType.DOOR, ConnectionType.HALLWAY):
+            raise ValueError("Connection type must be door or hallway.")
+        return connection_type
+
+    @staticmethod
+    def _validate_door_lock(
+        connection_type: ConnectionType,
+        has_lock: bool,
+        is_locked: bool,
+        is_broken: bool,
+        unlock_difficulty: int | None,
+    ) -> None:
+        if has_lock and connection_type is not ConnectionType.DOOR:
+            raise ValueError("Only door connections can have a lock.")
+        if (is_locked or is_broken) and not has_lock:
+            raise ValueError("A door without a lock cannot be locked or broken.")
+        if is_locked and is_broken:
+            raise ValueError("A broken lock cannot also be locked.")
+        if is_locked and (
+            unlock_difficulty is None or not 1 <= unlock_difficulty <= 30
+        ):
+            raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
+
+    @staticmethod
+    def _trap_damage_type(
+        body: JsonObject,
+        *,
+        default: TrapDamageType,
+    ) -> TrapDamageType:
+        value = body.get("trap_damage_type", default.value)
+        try:
+            return TrapDamageType(value)
+        except (TypeError, ValueError) as error:
+            allowed = ", ".join(item.value for item in TrapDamageType)
+            raise ValueError(f"Trap damage type must be one of: {allowed}.") from error
+
+    @staticmethod
+    def _trap_state(
+        body: JsonObject,
+        *,
+        default: TrapState,
+    ) -> TrapState:
+        value = body.get("trap_state", default.value)
+        try:
+            return TrapState(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Trap state must be armed, disarmed, or triggered."
+            ) from error
+
+    @staticmethod
+    def _validate_trap(
+        has_trap: bool,
+        trap_detection_difficulty: int | None,
+        trap_damage_type: TrapDamageType | None,
+        trap_damage: int | None,
+    ) -> None:
+        if not has_trap:
+            return
+        if (
+            trap_detection_difficulty is None
+            or not 1 <= trap_detection_difficulty <= 30
+        ):
+            raise ValueError("Trap detection difficulty must be an integer from 1 to 30.")
+        if trap_damage_type is None:
+            raise ValueError("Trap damage type is required.")
+        if trap_damage is None or trap_damage <= 0:
+            raise ValueError("Trap damage must be a positive integer.")
 
     @staticmethod
     def _number(body: JsonObject, field: str) -> float:

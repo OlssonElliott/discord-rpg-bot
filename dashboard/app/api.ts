@@ -41,6 +41,7 @@ export type RoomData = {
   area_id: string;
   name: string;
   description: string;
+  room_image_url: string | null;
   position: { x: number; y: number };
   counts: { players: number; enemies: number; items: number; containers: number };
   players: { id: number; name: string }[];
@@ -58,6 +59,16 @@ export type ConnectionData = {
   return_exit_name: string | null;
   bidirectional: boolean;
   hidden: boolean;
+  connection_type: string;
+  has_lock: boolean;
+  is_locked: boolean;
+  is_broken: boolean;
+  unlock_difficulty: number | null;
+  has_trap: boolean;
+  trap_state: 'armed' | 'disarmed' | 'triggered' | null;
+  trap_detection_difficulty: number | null;
+  trap_damage_type: string | null;
+  trap_damage: number | null;
 };
 
 export type AreaGraphData = {
@@ -67,6 +78,11 @@ export type AreaGraphData = {
 };
 
 const API_ROOT = process.env.NEXT_PUBLIC_RPG_API_URL || 'http://localhost:8765/api';
+
+export function apiAssetUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_ROOT.replace(/\/api\/?$/, '')}${path}`;
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -78,6 +94,22 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const payload = await response.json() as T & { error?: string };
   if (!response.ok) {
     throw new Error(payload.error || `Request failed (${response.status}).`);
+  }
+  return payload;
+}
+
+export async function uploadRoomImage<T>(roomId: string, file: File): Promise<T> {
+  const response = await fetch(`${API_ROOT}/rooms/${encodeURIComponent(roomId)}/image`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const payload = await response.json() as T & { error?: string };
+  if (!response.ok) {
+    throw new Error(payload.error || `Image upload failed (${response.status}).`);
   }
   return payload;
 }

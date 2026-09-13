@@ -85,6 +85,7 @@ class PlayerViewService:
         )
         if character is None:
             raise ValueError("That character does not exist.")
+        focused_room_id = state.focused_room_id or character.current_room_id
         knowledge_rows = self.database.list_character_knowledge(
             character_id, floor_id=chosen_floor_id
         )
@@ -105,7 +106,7 @@ class PlayerViewService:
                     room.height,
                     knowledge.state,
                     room.id == character.current_room_id,
-                    room.id == state.focused_room_id,
+                    room.id == focused_room_id,
                     (
                         (character.name,)
                         + tuple(
@@ -136,13 +137,18 @@ class PlayerViewService:
                     target.floor_id or "",
                     connection.connection_type,
                     connection.bidirectional,
+                    connection.has_lock,
+                    connection.is_locked,
+                    connection.is_broken,
+                    connection.has_trap,
+                    connection.trap_state,
                 )
             )
 
         focused = self._focused_room(
             character_id,
             character.current_room_id,
-            state.focused_room_id,
+            focused_room_id,
             knowledge_by_room,
         )
         view = PlayerMap(
@@ -150,7 +156,7 @@ class PlayerViewService:
             floor.dungeon_id,
             floor,
             character.current_room_id,
-            state.focused_room_id,
+            focused_room_id,
             tuple(rooms),
             tuple(connections),
             focused,

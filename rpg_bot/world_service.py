@@ -16,6 +16,8 @@ from .dungeon import (
     Floor,
     GameLock,
     RoomConnection,
+    TrapDamageType,
+    TrapState,
 )
 from .world import (
     Area,
@@ -89,6 +91,11 @@ class WorldService:
     ) -> Room:
         return self.database.update_room(room_id, name, description)
 
+    def set_room_scene_image(
+        self, room_id: str, scene_image_path: str | None
+    ) -> Room:
+        return self.database.set_room_scene_image(room_id, scene_image_path)
+
     def delete_room(self, room_id: str) -> None:
         self.database.delete_room(room_id)
 
@@ -104,6 +111,15 @@ class WorldService:
         return_exit_name: str | None = None,
         connection_type: ConnectionType = ConnectionType.PASSAGE,
         hidden: bool = False,
+        has_lock: bool = False,
+        is_locked: bool = False,
+        unlock_difficulty: int | None = None,
+        is_broken: bool = False,
+        has_trap: bool = False,
+        trap_state: TrapState | None = None,
+        trap_detection_difficulty: int | None = None,
+        trap_damage_type: TrapDamageType | None = None,
+        trap_damage: int | None = None,
     ) -> RoomConnection:
         return self.database.connect_rooms(
             room_id,
@@ -112,6 +128,15 @@ class WorldService:
             return_exit_name=return_exit_name,
             connection_type=connection_type,
             hidden=hidden,
+            has_lock=has_lock,
+            is_locked=is_locked,
+            unlock_difficulty=unlock_difficulty,
+            is_broken=is_broken,
+            has_trap=has_trap,
+            trap_state=trap_state,
+            trap_detection_difficulty=trap_detection_difficulty,
+            trap_damage_type=trap_damage_type,
+            trap_damage=trap_damage,
         )
 
     def set_connection_direction(
@@ -129,8 +154,56 @@ class WorldService:
             return_exit_name=return_exit_name,
         )
 
+    def set_connection_type(
+        self,
+        room_id: str,
+        exit_name: str,
+        connection_type: ConnectionType,
+    ) -> None:
+        self.database.set_connection_type(room_id, exit_name, connection_type)
+
+    def set_connection_lock(
+        self,
+        room_id: str,
+        exit_name: str,
+        *,
+        has_lock: bool,
+        is_locked: bool,
+        is_broken: bool = False,
+        unlock_difficulty: int | None = None,
+    ) -> None:
+        self.database.set_connection_lock(
+            room_id,
+            exit_name,
+            has_lock=has_lock,
+            is_locked=is_locked,
+            is_broken=is_broken,
+            unlock_difficulty=unlock_difficulty,
+        )
+
     def disconnect_connection(self, room_id: str, exit_name: str) -> None:
         self.database.disconnect_connection(room_id, exit_name)
+
+    def set_connection_trap(
+        self,
+        room_id: str,
+        exit_name: str,
+        *,
+        has_trap: bool,
+        trap_state: TrapState | None = None,
+        trap_detection_difficulty: int | None = None,
+        trap_damage_type: TrapDamageType | None = None,
+        trap_damage: int | None = None,
+    ) -> None:
+        self.database.set_connection_trap(
+            room_id,
+            exit_name,
+            has_trap=has_trap,
+            trap_state=trap_state,
+            trap_detection_difficulty=trap_detection_difficulty,
+            trap_damage_type=trap_damage_type,
+            trap_damage=trap_damage,
+        )
 
     def create_floor(
         self, floor_id: str, dungeon_id: str, floor_number: int, name: str

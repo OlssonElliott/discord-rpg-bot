@@ -8,6 +8,7 @@ import discord
 
 from rpg_bot.commands.dm import DMCommands
 from rpg_bot.commands.inventory import (
+    _get_or_create_game_channel,
     InventoryCommands,
     InventoryView,
     forget_open_inventory,
@@ -99,6 +100,28 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call.kwargs["embeds"][0].title, "Olof's Inventory")
         self.assertIsInstance(call.kwargs["view"], InventoryView)
 
+    async def test_game_channel_is_created_once_when_missing(self) -> None:
+        channel = SimpleNamespace(name="game")
+        guild = SimpleNamespace(
+            id=44,
+            text_channels=[],
+            me=SimpleNamespace(
+                guild_permissions=SimpleNamespace(manage_channels=True)
+            ),
+            create_text_channel=AsyncMock(return_value=channel),
+        )
+        interaction = interaction_for(7)
+        interaction.guild = guild
+
+        resolved = await _get_or_create_game_channel(interaction)
+
+        self.assertIs(resolved, channel)
+        guild.create_text_channel.assert_awaited_once_with(
+            "game",
+            topic="In-world actions witnessed by other player characters.",
+            reason="Public Rollkeeper game-event channel",
+        )
+
     def test_inventory_embed_shows_flat_storage_and_equipped_capacity(self) -> None:
         backpack_id = self.service.grant(self.character, "traveler_backpack")
         self.service.grant(self.character, "iron_dagger")
@@ -184,14 +207,83 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
             {"Unequip"},
         )
 
+    async def test_equip_announces_publicly_and_refreshes_character_sheet(self) -> None:
+        dagger_id = self.service.grant(self.character, "iron_dagger")
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            self.service, 7, self.character.character_id, inventory, dagger_id
+        )
+        interaction = interaction_for(7)
+        game_channel = SimpleNamespace(name="game", send=AsyncMock())
+        interaction.guild = SimpleNamespace(text_channels=[game_channel])
+        world = WorldService(self.database, self.catalog)
+        world.create_area("crypt", "Crypt")
+        world.create_room("hall", "crypt", "Hall")
+        world.place_character(self.character.character_id, "hall")
+        witness = self.database.create_character(8, "Sven", 12)
+        world.place_character(witness.character_id, "hall")
+        character_cog = SimpleNamespace(
+            portrait_store=SimpleNamespace(path_for=lambda _key: None),
+            refresh_dedicated_sheet_for=AsyncMock(return_value=True),
+        )
+        interaction.client = SimpleNamespace(
+            get_cog=lambda name: character_cog if name == "CharacterCommands" else None
+        )
+        equip = next(
+            child
+            for child in view.children
+            if isinstance(child, discord.ui.Button) and child.label == "Equip"
+        )
+
+        await equip.callback(interaction)
+
+        public_embed = game_channel.send.await_args.kwargs["embed"]
+        self.assertEqual(public_embed.author.name, "Olof")
+        self.assertEqual(
+            public_embed.description,
+            "**Olof** equips **Iron Dagger** as **Main Hand**.",
+        )
+        character_cog.refresh_dedicated_sheet_for.assert_awaited_once()
+
+    async def test_equip_is_announced_without_another_character_present(self) -> None:
+        dagger_id = self.service.grant(self.character, "iron_dagger")
+        inventory = self.database.get_character_inventory(self.character.character_id)
+        view = InventoryView(
+            self.service, 7, self.character.character_id, inventory, dagger_id
+        )
+        interaction = interaction_for(7)
+        game_channel = SimpleNamespace(name="game", send=AsyncMock())
+        interaction.guild = SimpleNamespace(text_channels=[game_channel])
+        equip = next(
+            child
+            for child in view.children
+            if isinstance(child, discord.ui.Button) and child.label == "Equip"
+        )
+
+        await equip.callback(interaction)
+
+        public_embed = game_channel.send.await_args.kwargs["embed"]
+        self.assertEqual(
+            public_embed.description,
+            "**Olof** equips **Iron Dagger** as **Main Hand**.",
+        )
+
     async def test_read_opens_separate_panel_without_consuming_item(self) -> None:
         service, note_id, template = self.readable_service()
+        world = WorldService(self.database, service.catalog)
+        world.create_area("crypt", "Crypt")
+        world.create_room("library", "crypt", "Library")
+        world.place_character(self.character.character_id, "library")
+        witness = self.database.create_character(8, "Sven", 12)
+        world.place_character(witness.character_id, "library")
         inventory = self.database.get_character_inventory(self.character.character_id)
 
         view = InventoryView(
             service, 7, self.character.character_id, inventory, note_id
         )
         interaction = interaction_for(7)
+        game_channel = SimpleNamespace(name="game", send=AsyncMock())
+        interaction.guild = SimpleNamespace(text_channels=[game_channel])
         await view.read_button.callback(interaction)
 
         edited = interaction.response.edit_message.await_args.kwargs
@@ -202,6 +294,29 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(template.description, embeds[1].description)
         self.assertIn(template.content, embeds[1].description)
         self.assertNotIn("Use", button_labels(view))
+        public_embed = game_channel.send.await_args.kwargs["embed"]
+        self.assertEqual(public_embed.author.name, "Olof")
+        self.assertEqual(
+            public_embed.description,
+            "**Olof** takes out **Bloodstained Note** and starts reading.",
+        )
+        reading_view = edited["view"]
+        close_reading = next(
+            child
+            for child in reading_view.children
+            if isinstance(child, discord.ui.Button) and child.label == "Close reading"
+        )
+        close_interaction = interaction_for(7)
+        close_interaction.guild = interaction.guild
+
+        await close_reading.callback(close_interaction)
+
+        closing_embed = game_channel.send.await_args_list[1].kwargs["embed"]
+        self.assertEqual(closing_embed.author.name, "Olof")
+        self.assertEqual(
+            closing_embed.description,
+            "**Olof** stops reading and puts **Bloodstained Note** away.",
+        )
         self.assertEqual(
             self.database.get_character_inventory(
                 self.character.character_id

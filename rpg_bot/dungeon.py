@@ -13,11 +13,27 @@ from typing import Protocol
 
 class ConnectionType(str, Enum):
     DOOR = "door"
+    HALLWAY = "hallway"
     PASSAGE = "passage"
     STAIRS_UP = "stairs_up"
     STAIRS_DOWN = "stairs_down"
     LADDER = "ladder"
     OPENING = "opening"
+
+
+class TrapDamageType(str, Enum):
+    PHYSICAL = "physical"
+    FIRE = "fire"
+    COLD = "cold"
+    LIGHTNING = "lightning"
+    POISON = "poison"
+    ACID = "acid"
+
+
+class TrapState(str, Enum):
+    ARMED = "armed"
+    DISARMED = "disarmed"
+    TRIGGERED = "triggered"
 
 
 class KnowledgeState(str, Enum):
@@ -60,6 +76,15 @@ class RoomConnection:
     connection_type: ConnectionType
     hidden: bool = False
     bidirectional: bool = False
+    has_lock: bool = False
+    is_locked: bool = False
+    unlock_difficulty: int | None = None
+    is_broken: bool = False
+    has_trap: bool = False
+    trap_state: TrapState | None = None
+    trap_detection_difficulty: int | None = None
+    trap_damage_type: TrapDamageType | None = None
+    trap_damage: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +145,11 @@ class PlayerMapConnection:
     to_floor_id: str
     connection_type: ConnectionType
     bidirectional: bool
+    has_lock: bool = False
+    is_locked: bool = False
+    is_broken: bool = False
+    has_trap: bool = False
+    trap_state: TrapState | None = None
 
 
 @dataclass(frozen=True, slots=True)

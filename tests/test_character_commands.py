@@ -5,6 +5,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import discord
 from PIL import Image
 
 from rpg_bot.character_creation import CharacterCreationFlow, CreationStep
@@ -198,9 +199,17 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
         channel.send.assert_awaited_once()
         sent_view = channel.send.await_args.kwargs["view"]
         self.assertEqual(
-            [button.label for button in sent_view.children],
-            ["Manage inventory", "Refresh"],
+            [
+                button.label
+                for button in sent_view.children
+                if isinstance(button, discord.ui.Button)
+            ],
+            ["Refresh"],
         )
+        self.assertTrue(
+            any(isinstance(control, discord.ui.Select) for control in sent_view.children)
+        )
+        self.assertTrue(sent_view.is_persistent())
         sent_embeds = channel.send.await_args.kwargs["embeds"]
         self.assertEqual([embed.title for embed in sent_embeds], ["Olof", "Olof's Inventory"])
         self.assertIn("Money:", sent_embeds[1].description)
@@ -650,6 +659,43 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
 
         bot.add_dynamic_items.assert_called_once_with(DynamicCharacterManageItem)
         bot.add_view.assert_not_called()
+
+    async def test_startup_repairs_private_channels_for_active_members(self) -> None:
+        active = SimpleNamespace(
+            character_id=1,
+            discord_user_id=7,
+            name="Olof",
+            is_active=True,
+            is_archived=False,
+        )
+        inactive = SimpleNamespace(
+            character_id=2,
+            discord_user_id=8,
+            name="Aria",
+            is_active=False,
+            is_archived=False,
+        )
+        database = Mock()
+        database.list_all_characters.return_value = [active, inactive]
+        database.get_character_sheet_view_state.return_value = None
+        bot = SimpleNamespace()
+        cog = CharacterCommands(database, bot=bot)
+        cog.active_character_changed = AsyncMock()
+        member = SimpleNamespace(id=7)
+        guild = SimpleNamespace(
+            id=44,
+            get_member=Mock(side_effect=lambda user_id: member if user_id == 7 else None),
+        )
+
+        await cog.ensure_required_player_channels(guild)
+
+        cog.active_character_changed.assert_awaited_once()
+        interaction, previous, selected = cog.active_character_changed.await_args.args
+        self.assertIs(interaction.guild, guild)
+        self.assertIs(interaction.user, member)
+        self.assertIs(interaction.client, bot)
+        self.assertIsNone(previous)
+        self.assertIs(selected, active)
 
     async def test_dynamic_manage_item_rebuilds_from_component_id(self) -> None:
         character = SimpleNamespace(
