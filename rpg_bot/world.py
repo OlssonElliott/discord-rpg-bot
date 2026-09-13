@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .models import Character
 
 
@@ -125,6 +126,16 @@ class GraphConnection:
     return_exit_name: str | None = None
     bidirectional: bool = False
     hidden: bool = False
+    connection_type: ConnectionType = ConnectionType.PASSAGE
+    has_lock: bool = False
+    is_locked: bool = False
+    unlock_difficulty: int | None = None
+    is_broken: bool = False
+    has_trap: bool = False
+    trap_state: TrapState | None = None
+    trap_detection_difficulty: int | None = None
+    trap_damage_type: TrapDamageType | None = None
+    trap_damage: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

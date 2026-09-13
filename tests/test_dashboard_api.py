@@ -51,6 +51,7 @@ class DashboardAPITests(unittest.TestCase):
                 "source_room_id": "entrance",
                 "destination_room_id": "hall",
                 "exit_name": "north",
+                "connection_type": "door",
             },
         )
         self.assertEqual(status, 201)
@@ -67,6 +68,7 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(graph["connections"][0]["exit_name"], "north")
         self.assertEqual(graph["connections"][0]["return_exit_name"], "north")
         self.assertTrue(graph["connections"][0]["bidirectional"])
+        self.assertEqual(graph["connections"][0]["connection_type"], "door")
         self.assertEqual(
             [(exit.name, exit.destination_room_id) for exit in self.world.get_room("hall").exits],
             [("north", "entrance")],
@@ -193,6 +195,191 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(len(graph["connections"]), 1)
         self.assertTrue(graph["connections"][0]["bidirectional"])
         self.assertEqual(graph["connections"][0]["return_exit_name"], "south")
+
+    def test_connection_map_type_can_be_changed_through_api(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+        _, created = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "north",
+                "connection_type": "hallway",
+            },
+        )
+        self.assertEqual(created["connection_type"], "hallway")
+        self.assertFalse(created["has_lock"])
+        self.assertFalse(created["is_locked"])
+        self.assertIsNone(created["unlock_difficulty"])
+
+        status, updated = self.api.handle(
+            "PATCH",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "exit_name": "north",
+                "connection_type": "door",
+                "is_locked": True,
+                "unlock_difficulty": 17,
+                "bidirectional": True,
+                "return_exit_name": "south",
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["connection_type"], "door")
+        self.assertTrue(updated["has_lock"])
+        self.assertTrue(updated["is_locked"])
+        self.assertEqual(updated["unlock_difficulty"], 17)
+        _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+        self.assertEqual(graph["connections"][0]["connection_type"], "door")
+        self.assertTrue(graph["connections"][0]["has_lock"])
+        self.assertTrue(graph["connections"][0]["is_locked"])
+        self.assertEqual(graph["connections"][0]["unlock_difficulty"], 17)
+
+        _, broken = self.api.handle(
+            "PATCH",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "exit_name": "north",
+                "connection_type": "door",
+                "has_lock": True,
+                "is_locked": False,
+                "is_broken": True,
+                "bidirectional": True,
+                "return_exit_name": "south",
+            },
+        )
+        self.assertTrue(broken["is_broken"])
+        self.assertFalse(broken["is_locked"])
+        _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+        self.assertTrue(graph["connections"][0]["is_broken"])
+
+    def test_hallway_cannot_be_locked(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+
+        status, error = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "north",
+                "connection_type": "hallway",
+                "is_locked": True,
+                "unlock_difficulty": 12,
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("Only door", error["error"])
+
+    def test_door_and_hallway_traps_can_be_configured(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall", "vault"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+
+        _, door = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "north",
+                "connection_type": "door",
+                "has_trap": True,
+                "trap_state": "armed",
+                "trap_detection_difficulty": 16,
+                "trap_damage_type": "fire",
+                "trap_damage": 8,
+            },
+        )
+        _, hallway = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "hall",
+                "destination_room_id": "vault",
+                "exit_name": "east",
+                "connection_type": "hallway",
+                "has_trap": True,
+                "trap_detection_difficulty": 12,
+                "trap_damage_type": "poison",
+                "trap_damage": 5,
+            },
+        )
+
+        self.assertEqual(
+            (door["has_trap"], door["trap_state"], door["trap_detection_difficulty"], door["trap_damage_type"], door["trap_damage"]),
+            (True, "armed", 16, "fire", 8),
+        )
+        self.assertEqual(hallway["trap_damage_type"], "poison")
+        _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+        traps = {item["exit_name"]: item for item in graph["connections"]}
+        self.assertEqual(traps["north"]["trap_damage"], 8)
+        self.assertEqual(traps["east"]["trap_detection_difficulty"], 12)
+
+        _, updated = self.api.handle(
+            "PATCH",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "exit_name": "north",
+                "connection_type": "door",
+                "has_trap": True,
+                "trap_state": "disarmed",
+                "trap_detection_difficulty": 16,
+                "trap_damage_type": "fire",
+                "trap_damage": 8,
+                "bidirectional": True,
+                "return_exit_name": "north",
+            },
+        )
+        self.assertEqual(updated["trap_state"], "disarmed")
+        _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+        self.assertEqual(graph["connections"][0]["trap_state"], "disarmed")
+
+    def test_trap_configuration_is_validated(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+        status, error = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "north",
+                "has_trap": True,
+                "trap_detection_difficulty": 31,
+                "trap_damage_type": "fire",
+                "trap_damage": 2,
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("difficulty", error["error"])
 
     def test_connection_can_be_created_explicitly_one_way(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})

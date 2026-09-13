@@ -6,6 +6,7 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .inventory import ItemTemplate, ItemType, WeaponGrip
 from .room_images import InvalidRoomImageError, RoomImageStore
 from .world import (
@@ -314,6 +315,49 @@ class DashboardAPI:
 
         if path == "/api/connections" and method == "POST":
             exit_name = self._text(body, "exit_name")
+            connection_type = self._connection_type(
+                body, default=ConnectionType.HALLWAY
+            )
+            is_locked = self._boolean(body, "is_locked", default=False)
+            is_broken = self._boolean(body, "is_broken", default=False)
+            has_lock = self._boolean(
+                body, "has_lock", default=is_locked or is_broken
+            )
+            unlock_difficulty = (
+                self._integer(body, "unlock_difficulty", default=10)
+                if is_locked
+                else None
+            )
+            self._validate_door_lock(
+                connection_type, has_lock, is_locked, is_broken, unlock_difficulty
+            )
+            has_trap = self._boolean(body, "has_trap", default=False)
+            trap_state = (
+                self._trap_state(body, default=TrapState.ARMED)
+                if has_trap
+                else None
+            )
+            trap_detection_difficulty = (
+                self._integer(body, "trap_detection_difficulty", default=10)
+                if has_trap
+                else None
+            )
+            trap_damage_type = (
+                self._trap_damage_type(body, default=TrapDamageType.PHYSICAL)
+                if has_trap
+                else None
+            )
+            trap_damage = (
+                self._integer(body, "trap_damage", default=1)
+                if has_trap
+                else None
+            )
+            self._validate_trap(
+                has_trap,
+                trap_detection_difficulty,
+                trap_damage_type,
+                trap_damage,
+            )
             bidirectional = self._boolean(body, "bidirectional", default=True)
             return_exit_name = (
                 self._optional_text(body, "return_exit_name") or exit_name
@@ -325,6 +369,16 @@ class DashboardAPI:
                 exit_name,
                 self._text(body, "destination_room_id"),
                 return_exit_name=return_exit_name,
+                connection_type=connection_type,
+                has_lock=has_lock,
+                is_locked=is_locked,
+                is_broken=is_broken,
+                unlock_difficulty=unlock_difficulty,
+                has_trap=has_trap,
+                trap_state=trap_state,
+                trap_detection_difficulty=trap_detection_difficulty,
+                trap_damage_type=trap_damage_type,
+                trap_damage=trap_damage,
             )
             return 201, {
                 "source_room_id": body["source_room_id"],
@@ -332,6 +386,18 @@ class DashboardAPI:
                 "destination_room_id": body["destination_room_id"],
                 "return_exit_name": return_exit_name,
                 "bidirectional": bidirectional,
+                "connection_type": connection_type.value,
+                "has_lock": has_lock,
+                "is_locked": is_locked,
+                "is_broken": is_broken,
+                "unlock_difficulty": unlock_difficulty,
+                "has_trap": has_trap,
+                "trap_state": trap_state.value if trap_state is not None else None,
+                "trap_detection_difficulty": trap_detection_difficulty,
+                "trap_damage_type": (
+                    trap_damage_type.value if trap_damage_type is not None else None
+                ),
+                "trap_damage": trap_damage,
             }
         if path == "/api/connections" and method == "PATCH":
             source_room_id = self._text(body, "source_room_id")
@@ -342,17 +408,136 @@ class DashboardAPI:
                 if bidirectional
                 else None
             )
+            connection_type = (
+                self._connection_type(body) if "connection_type" in body else None
+            )
+            lock_was_supplied = (
+                "has_lock" in body
+                or "is_locked" in body
+                or "is_broken" in body
+                or "unlock_difficulty" in body
+            )
+            is_locked = self._boolean(body, "is_locked", default=False)
+            is_broken = self._boolean(body, "is_broken", default=False)
+            has_lock = self._boolean(
+                body, "has_lock", default=is_locked or is_broken
+            )
+            unlock_difficulty = (
+                self._integer(body, "unlock_difficulty", default=10)
+                if is_locked
+                else None
+            )
+            trap_was_supplied = any(
+                field in body
+                for field in (
+                    "has_trap",
+                    "trap_state",
+                    "trap_detection_difficulty",
+                    "trap_damage_type",
+                    "trap_damage",
+                )
+            )
+            has_trap = self._boolean(body, "has_trap", default=False)
+            trap_state = (
+                self._trap_state(body, default=TrapState.ARMED)
+                if has_trap
+                else None
+            )
+            trap_detection_difficulty = (
+                self._integer(body, "trap_detection_difficulty", default=10)
+                if has_trap
+                else None
+            )
+            trap_damage_type = (
+                self._trap_damage_type(body, default=TrapDamageType.PHYSICAL)
+                if has_trap
+                else None
+            )
+            trap_damage = (
+                self._integer(body, "trap_damage", default=1)
+                if has_trap
+                else None
+            )
+            if is_locked and not 1 <= unlock_difficulty <= 30:
+                raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
+            if connection_type is not None:
+                self._validate_door_lock(
+                    connection_type, has_lock, is_locked, is_broken,
+                    unlock_difficulty
+                )
+            if trap_was_supplied:
+                self._validate_trap(
+                    has_trap,
+                    trap_detection_difficulty,
+                    trap_damage_type,
+                    trap_damage,
+                )
             self.world.set_connection_direction(
                 source_room_id,
                 exit_name,
                 bidirectional=bidirectional,
                 return_exit_name=return_exit_name,
             )
+            if connection_type is not None:
+                self.world.set_connection_type(
+                    source_room_id, exit_name, connection_type
+                )
+            if lock_was_supplied:
+                self.world.set_connection_lock(
+                    source_room_id,
+                    exit_name,
+                    has_lock=has_lock,
+                    is_locked=is_locked,
+                    is_broken=is_broken,
+                    unlock_difficulty=unlock_difficulty,
+                )
+            if trap_was_supplied:
+                self.world.set_connection_trap(
+                    source_room_id,
+                    exit_name,
+                    has_trap=has_trap,
+                    trap_state=trap_state,
+                    trap_detection_difficulty=trap_detection_difficulty,
+                    trap_damage_type=trap_damage_type,
+                    trap_damage=trap_damage,
+                )
             return 200, {
                 "source_room_id": source_room_id,
                 "exit_name": exit_name,
                 "bidirectional": bidirectional,
                 "return_exit_name": return_exit_name,
+                **(
+                    {"connection_type": connection_type.value}
+                    if connection_type is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "has_trap": has_trap,
+                        "trap_state": (
+                            trap_state.value if trap_state is not None else None
+                        ),
+                        "trap_detection_difficulty": trap_detection_difficulty,
+                        "trap_damage_type": (
+                            trap_damage_type.value
+                            if trap_damage_type is not None
+                            else None
+                        ),
+                        "trap_damage": trap_damage,
+                    }
+                    if trap_was_supplied
+                    else {}
+                ),
+                **(
+                    {
+                        "has_lock": has_lock,
+                        "is_locked": is_locked,
+                        "is_broken": is_broken,
+                        "unlock_difficulty": unlock_difficulty,
+                    }
+                    if lock_was_supplied
+                    else {}
+                ),
             }
         if path == "/api/connections" and method == "DELETE":
             self.world.disconnect_connection(
@@ -389,6 +574,88 @@ class DashboardAPI:
         if not isinstance(value, str):
             raise ValueError(f"'{field}' must be text.")
         return value.strip() or None
+
+    @staticmethod
+    def _connection_type(
+        body: JsonObject,
+        *,
+        default: ConnectionType | None = None,
+    ) -> ConnectionType:
+        value = body.get("connection_type")
+        if value is None and default is not None:
+            return default
+        try:
+            connection_type = ConnectionType(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Connection type must be door or hallway.") from error
+        if connection_type not in (ConnectionType.DOOR, ConnectionType.HALLWAY):
+            raise ValueError("Connection type must be door or hallway.")
+        return connection_type
+
+    @staticmethod
+    def _validate_door_lock(
+        connection_type: ConnectionType,
+        has_lock: bool,
+        is_locked: bool,
+        is_broken: bool,
+        unlock_difficulty: int | None,
+    ) -> None:
+        if has_lock and connection_type is not ConnectionType.DOOR:
+            raise ValueError("Only door connections can have a lock.")
+        if (is_locked or is_broken) and not has_lock:
+            raise ValueError("A door without a lock cannot be locked or broken.")
+        if is_locked and is_broken:
+            raise ValueError("A broken lock cannot also be locked.")
+        if is_locked and (
+            unlock_difficulty is None or not 1 <= unlock_difficulty <= 30
+        ):
+            raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
+
+    @staticmethod
+    def _trap_damage_type(
+        body: JsonObject,
+        *,
+        default: TrapDamageType,
+    ) -> TrapDamageType:
+        value = body.get("trap_damage_type", default.value)
+        try:
+            return TrapDamageType(value)
+        except (TypeError, ValueError) as error:
+            allowed = ", ".join(item.value for item in TrapDamageType)
+            raise ValueError(f"Trap damage type must be one of: {allowed}.") from error
+
+    @staticmethod
+    def _trap_state(
+        body: JsonObject,
+        *,
+        default: TrapState,
+    ) -> TrapState:
+        value = body.get("trap_state", default.value)
+        try:
+            return TrapState(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Trap state must be armed, disarmed, or triggered."
+            ) from error
+
+    @staticmethod
+    def _validate_trap(
+        has_trap: bool,
+        trap_detection_difficulty: int | None,
+        trap_damage_type: TrapDamageType | None,
+        trap_damage: int | None,
+    ) -> None:
+        if not has_trap:
+            return
+        if (
+            trap_detection_difficulty is None
+            or not 1 <= trap_detection_difficulty <= 30
+        ):
+            raise ValueError("Trap detection difficulty must be an integer from 1 to 30.")
+        if trap_damage_type is None:
+            raise ValueError("Trap damage type is required.")
+        if trap_damage is None or trap_damage <= 0:
+            raise ValueError("Trap damage must be a positive integer.")
 
     @staticmethod
     def _number(body: JsonObject, field: str) -> float:

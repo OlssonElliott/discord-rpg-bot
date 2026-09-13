@@ -23,7 +23,7 @@ ROOM_PANEL_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "map" / "panel-square.png"
 )
 PANEL_SIZE = (1448, 1086)
-SCENE_APERTURE_BOUNDS = (113, 111, 1335, 629)
+SCENE_APERTURE_BOUNDS = (118, 108, 1330, 629)
 SCENE_UNDERLAY = 18
 SCENE_LAYER_BOUNDS = (
     SCENE_APERTURE_BOUNDS[0] - SCENE_UNDERLAY,

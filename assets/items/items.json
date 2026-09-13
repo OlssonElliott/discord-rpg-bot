@@ -538,5 +538,19 @@
     "modifiers": [],
     "requirements": [],
     "content": "Don't eat the red mushroom, they taste awful. It could also kill you, they smell delicious but just DONT!"
+  },
+  {
+    "item_type": "readable",
+    "id": "gay_book_3903d3",
+    "name": "Gay book",
+    "rarity": "Common",
+    "value": 0,
+    "description": "Gay book",
+    "weight": 0,
+    "slot_cost": 0,
+    "tags": [],
+    "modifiers": [],
+    "requirements": [],
+    "content": "You are now a gay"
   }
 ]

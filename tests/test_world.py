@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from rpg_bot.database import Database
+from rpg_bot.dungeon import ConnectionType
 from rpg_bot.world import (
     EntityKind,
     InvalidMovementError,
@@ -76,6 +77,46 @@ class WorldServiceTests(unittest.TestCase):
         self.assertEqual(
             self.world.get_character_room(self.character_id).id, self.entrance.id
         )
+
+    def test_locked_door_blocks_movement_until_dm_unlocks_it(self) -> None:
+        self.world.place_character(self.character_id, self.entrance.id)
+        self.world.set_connection_type(
+            self.entrance.id, "north", ConnectionType.DOOR
+        )
+        self.world.set_connection_lock(
+            self.entrance.id,
+            "north",
+            has_lock=True,
+            is_locked=True,
+            unlock_difficulty=16,
+        )
+
+        with self.assertRaisesRegex(InvalidMovementError, "door is locked"):
+            self.world.move_character(self.character_id, "north")
+
+        self.world.set_connection_lock(
+            self.entrance.id, "north", has_lock=True, is_locked=False
+        )
+        moved = self.world.move_character(self.character_id, "north")
+
+        self.assertEqual(moved.id, self.hall.id)
+
+    def test_broken_lock_does_not_block_movement(self) -> None:
+        self.world.place_character(self.character_id, self.entrance.id)
+        self.world.set_connection_type(
+            self.entrance.id, "north", ConnectionType.DOOR
+        )
+        self.world.set_connection_lock(
+            self.entrance.id,
+            "north",
+            has_lock=True,
+            is_locked=False,
+            is_broken=True,
+        )
+
+        moved = self.world.move_character(self.character_id, "north")
+
+        self.assertEqual(moved.id, self.hall.id)
 
     def test_takes_and_drops_loose_stacked_items_without_duplication(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)

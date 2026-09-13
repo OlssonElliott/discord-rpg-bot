@@ -137,6 +137,11 @@ class PlayerViewService:
                     target.floor_id or "",
                     connection.connection_type,
                     connection.bidirectional,
+                    connection.has_lock,
+                    connection.is_locked,
+                    connection.is_broken,
+                    connection.has_trap,
+                    connection.trap_state,
                 )
             )
 

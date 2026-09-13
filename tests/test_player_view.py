@@ -19,23 +19,49 @@ from rpg_bot.dungeon import (
     PlayerMap,
     PlayerMapConnection,
     PlayerMapRoom,
+    TrapDamageType,
+    TrapState,
 )
 from rpg_bot.player_view_service import PlayerViewMessageService, PlayerViewService
 from rpg_bot.room_images import RoomImageStore
 from rpg_bot.map_renderer import (
+    CONNECTION_ART_HEIGHT,
+    CONNECTION_ROOM_GAP,
+    DOOR_ART_PATH,
+    HALLWAY_ART_PATH,
+    LOCKED_ART_PATH,
+    BROKEN_LOCK_ART_PATH,
+    LOCK_ART_HEIGHT,
     MAP_BACKGROUND_PATH,
     MAP_HEIGHT,
     MAP_WIDTH,
     MIN_ROOM_HEIGHT,
     MIN_ROOM_WIDTH,
     ROOM_ART_PATH,
+    UNLOCKED_ART_PATH,
+    TRAP_ART_HEIGHT,
+    TRAP_ART_PATH,
+    TRAP_DISARMED_ART_PATH,
+    TRAP_TRIGGERED_ART_PATH,
     VIEWPORT_BOUNDS,
     WORLD_TO_MAP_SCALE,
+    _draw_connector_art,
+    _door_visual_anchor,
+    _door_marker_layout,
     _focus_distances,
     _fog_strength,
     _layout,
     _loaded_room_art,
+    _loaded_door_art,
+    _loaded_hallway_art,
+    _loaded_locked_art,
+    _loaded_broken_lock_art,
     _map_canvas,
+    _loaded_unlocked_art,
+    _loaded_trap_art,
+    _loaded_disarmed_trap_art,
+    _loaded_triggered_trap_art,
+    _trap_marker_position,
     render_player_map,
 )
 from rpg_bot.world import InvalidMovementError, InventoryHolder
@@ -161,6 +187,250 @@ class PlayerViewServiceTests(unittest.TestCase):
             lambda value: 255 if value >= 16 else 0
         ).getbbox()
         self.assertEqual(visible_bounds, (0, 0, room.width, room.height))
+
+    def test_hud_uses_equally_sized_upright_connection_art(self) -> None:
+        self.assertTrue(DOOR_ART_PATH.is_file())
+        self.assertTrue(HALLWAY_ART_PATH.is_file())
+
+        door = _loaded_door_art()
+        hallway = _loaded_hallway_art()
+
+        self.assertIsNotNone(door)
+        self.assertIsNotNone(hallway)
+        assert door is not None
+        assert hallway is not None
+        for connection_type, artwork in (
+            (ConnectionType.DOOR, door),
+            (ConnectionType.HALLWAY, hallway),
+        ):
+            with self.subTest(connection_type=connection_type):
+                self.assertEqual(artwork.mode, "RGBA")
+                self.assertEqual(artwork.height, CONNECTION_ART_HEIGHT)
+                self.assertGreater(artwork.height, artwork.width)
+                canvas = Image.new("RGB", (160, 160), "black")
+                self.assertTrue(
+                    _draw_connector_art(
+                        canvas, (80, 80), connection_type, fog_strength=0
+                    )
+                )
+                changed_bounds = canvas.convert("L").point(
+                    lambda value: 255 if value else 0
+                ).getbbox()
+                self.assertIsNotNone(changed_bounds)
+                assert changed_bounds is not None
+                self.assertGreater(
+                    changed_bounds[3] - changed_bounds[1],
+                    changed_bounds[2] - changed_bounds[0],
+                )
+
+    def test_legacy_passage_uses_hallway_art(self) -> None:
+        hallway = _loaded_hallway_art()
+        self.assertIsNotNone(hallway)
+        canvas = Image.new("RGB", (160, 160), "black")
+
+        self.assertTrue(
+            _draw_connector_art(
+                canvas, (80, 80), ConnectionType.PASSAGE, fog_strength=0
+            )
+        )
+
+    def test_door_uses_locked_and_unlocked_overlay_art(self) -> None:
+        self.assertTrue(LOCKED_ART_PATH.is_file())
+        self.assertTrue(UNLOCKED_ART_PATH.is_file())
+        locked_art = _loaded_locked_art()
+        unlocked_art = _loaded_unlocked_art()
+        self.assertIsNotNone(locked_art)
+        self.assertIsNotNone(unlocked_art)
+        assert locked_art is not None
+        assert unlocked_art is not None
+        self.assertEqual(locked_art.height, LOCK_ART_HEIGHT)
+        self.assertEqual(unlocked_art.height, LOCK_ART_HEIGHT)
+
+        locked = Image.new("RGB", (160, 160), "black")
+        unlocked = Image.new("RGB", (160, 160), "black")
+        _draw_connector_art(
+            locked,
+            (80, 80),
+            ConnectionType.DOOR,
+            has_lock=True,
+            is_locked=True,
+            fog_strength=0,
+        )
+        _draw_connector_art(
+            unlocked,
+            (80, 80),
+            ConnectionType.DOOR,
+            has_lock=True,
+            is_locked=False,
+            fog_strength=0,
+        )
+
+        self.assertNotEqual(locked.tobytes(), unlocked.tobytes())
+
+        no_lock = Image.new("RGB", (160, 160), "black")
+        _draw_connector_art(
+            no_lock,
+            (80, 80),
+            ConnectionType.DOOR,
+            has_lock=False,
+            fog_strength=0,
+        )
+        self.assertNotEqual(no_lock.tobytes(), unlocked.tobytes())
+
+    def test_broken_lock_uses_its_distinct_overlay_art(self) -> None:
+        self.assertTrue(BROKEN_LOCK_ART_PATH.is_file())
+        broken_art = _loaded_broken_lock_art()
+        self.assertIsNotNone(broken_art)
+        assert broken_art is not None
+        self.assertEqual(broken_art.height, LOCK_ART_HEIGHT)
+
+        broken = Image.new("RGB", (180, 180), "black")
+        unlocked = Image.new("RGB", (180, 180), "black")
+        _draw_connector_art(
+            broken,
+            (90, 90),
+            ConnectionType.DOOR,
+            has_lock=True,
+            is_broken=True,
+            fog_strength=0,
+        )
+        _draw_connector_art(
+            unlocked,
+            (90, 90),
+            ConnectionType.DOOR,
+            has_lock=True,
+            fog_strength=0,
+        )
+        self.assertNotEqual(broken.tobytes(), unlocked.tobytes())
+
+    def test_vertical_door_stays_full_size_with_lock_to_its_left(self) -> None:
+        scale, door_position, lock_position = _door_marker_layout(
+            (80, 80),
+            (48, 72),
+            (28, 28),
+            vertical=True,
+            door_visual_anchor=(23.5, 38.5),
+        )
+
+        self.assertEqual(scale, 1)
+        self.assertIsNotNone(lock_position)
+        assert lock_position is not None
+        self.assertLessEqual(lock_position[0] + 28, door_position[0])
+        self.assertAlmostEqual(
+            door_position[0] + 23.5,
+            80,
+            delta=0.5,
+        )
+        self.assertAlmostEqual(
+            door_position[1] + 38.5,
+            80,
+            delta=0.5,
+        )
+
+    def test_trap_art_is_lock_sized_and_placed_opposite_the_lock(self) -> None:
+        self.assertTrue(TRAP_ART_PATH.is_file())
+        trap = _loaded_trap_art()
+        self.assertIsNotNone(trap)
+        assert trap is not None
+        self.assertEqual(trap.height, TRAP_ART_HEIGHT)
+
+        vertical = _trap_marker_position(
+            (80, 80), (56, 44), (48, 72), trap.size, vertical=True
+        )
+        horizontal = _trap_marker_position(
+            (80, 80), (56, 44), (48, 72), trap.size, vertical=False
+        )
+        self.assertGreaterEqual(vertical[0], 56 + 48)
+        self.assertGreaterEqual(horizontal[1], 44 + 72)
+
+    def test_trap_state_selects_distinct_map_art(self) -> None:
+        self.assertTrue(TRAP_DISARMED_ART_PATH.is_file())
+        self.assertTrue(TRAP_TRIGGERED_ART_PATH.is_file())
+        armed = _loaded_trap_art()
+        disarmed = _loaded_disarmed_trap_art()
+        triggered = _loaded_triggered_trap_art()
+        self.assertIsNotNone(armed)
+        self.assertIsNotNone(disarmed)
+        self.assertIsNotNone(triggered)
+        assert armed is not None and disarmed is not None and triggered is not None
+        self.assertEqual(armed.height, disarmed.height)
+        self.assertEqual(armed.height, triggered.height)
+        self.assertNotEqual(armed.tobytes(), disarmed.tobytes())
+        self.assertNotEqual(armed.tobytes(), triggered.tobytes())
+
+        renders = []
+        for state in TrapState:
+            canvas = Image.new("RGB", (220, 180), "black")
+            _draw_connector_art(
+                canvas,
+                (100, 80),
+                ConnectionType.DOOR,
+                has_trap=True,
+                trap_state=state,
+                fog_strength=0,
+                vertical=True,
+            )
+            renders.append(canvas.tobytes())
+        self.assertEqual(len(set(renders)), 3)
+
+    def test_packaged_door_uses_its_visible_center_as_connector_anchor(self) -> None:
+        anchor = _door_visual_anchor()
+        self.assertIsNotNone(anchor)
+        assert anchor is not None
+        door = _loaded_door_art()
+        assert door is not None
+
+        _scale, door_position, _lock_position = _door_marker_layout(
+            (100, 100),
+            door.size,
+            (28, 28),
+            door_visual_anchor=anchor,
+        )
+
+        self.assertAlmostEqual(door_position[0] + anchor[0], 100, delta=0.5)
+        self.assertAlmostEqual(door_position[1] + anchor[1], 100, delta=0.5)
+
+    def test_player_map_carries_persisted_door_lock_state(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+        self.world.set_connection_lock(
+            self.entrance.id,
+            "east",
+            has_lock=True,
+            is_locked=True,
+            unlock_difficulty=18,
+        )
+
+        view = self.views.build_player_map(self.alice_id)
+        door = next(
+            connection
+            for connection in view.connections
+            if connection.id == self.door.id
+        )
+
+        self.assertTrue(door.is_locked)
+        self.assertTrue(door.has_lock)
+
+    def test_player_map_carries_persisted_trap_marker_state(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+        self.world.set_connection_trap(
+            self.entrance.id,
+            "east",
+            has_trap=True,
+            trap_state=TrapState.TRIGGERED,
+            trap_detection_difficulty=15,
+            trap_damage_type=TrapDamageType.POISON,
+            trap_damage=6,
+        )
+
+        view = self.views.build_player_map(self.alice_id)
+        door = next(
+            connection
+            for connection in view.connections
+            if connection.id == self.door.id
+        )
+
+        self.assertTrue(door.has_trap)
+        self.assertIs(door.trap_state, TrapState.TRIGGERED)
 
     def test_hud_centers_current_room_when_known_bounds_allow_it(self) -> None:
         self.world.place_character(self.alice_id, self.entrance.id)
@@ -368,6 +638,62 @@ class PlayerViewServiceTests(unittest.TestCase):
                 )
             finally:
                 background.close()
+
+    def test_layout_moves_upper_room_to_preserve_full_vertical_door_size(self) -> None:
+        rooms = (
+            PlayerMapRoom(
+                "upper", "floor", "Upper", 0, 0, 1, 1, KnowledgeState.VISITED
+            ),
+            PlayerMapRoom(
+                "lower",
+                "floor",
+                "Lower",
+                0,
+                180,
+                1,
+                1,
+                KnowledgeState.VISITED,
+                is_current=True,
+                is_focused=True,
+            ),
+        )
+        connection = PlayerMapConnection(
+            "door",
+            "upper",
+            "lower",
+            "floor",
+            "floor",
+            ConnectionType.DOOR,
+            True,
+            has_lock=True,
+        )
+        view = PlayerMap(
+            1,
+            "dungeon",
+            Floor("floor", "dungeon", 1, "Floor 1"),
+            "lower",
+            "lower",
+            rooms,
+            (connection,),
+        )
+
+        positions = _layout(view)
+        upper = positions["upper"]
+        lower = positions["lower"]
+        door = _loaded_door_art()
+        assert door is not None
+
+        self.assertGreaterEqual(
+            lower[1] - (upper[1] + upper[3]),
+            door.height + CONNECTION_ROOM_GAP,
+        )
+        self.assertEqual(
+            (lower[0] + lower[2] / 2, lower[1] + lower[3] / 2),
+            (
+                (VIEWPORT_BOUNDS[0] + VIEWPORT_BOUNDS[2]) / 2,
+                (VIEWPORT_BOUNDS[1] + VIEWPORT_BOUNDS[3]) / 2,
+            ),
+        )
 
     def test_focus_fog_uses_graph_distance_without_changing_knowledge(self) -> None:
         rooms = tuple(

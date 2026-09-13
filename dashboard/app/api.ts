@@ -59,6 +59,16 @@ export type ConnectionData = {
   return_exit_name: string | null;
   bidirectional: boolean;
   hidden: boolean;
+  connection_type: string;
+  has_lock: boolean;
+  is_locked: boolean;
+  is_broken: boolean;
+  unlock_difficulty: number | null;
+  has_trap: boolean;
+  trap_state: 'armed' | 'disarmed' | 'triggered' | null;
+  trap_detection_difficulty: number | null;
+  trap_damage_type: string | null;
+  trap_damage: number | null;
 };
 
 export type AreaGraphData = {

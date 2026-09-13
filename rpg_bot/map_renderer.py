@@ -9,7 +9,7 @@ from random import Random
 
 from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFont
 
-from .dungeon import KnowledgeState, PlayerMap
+from .dungeon import ConnectionType, KnowledgeState, PlayerMap, TrapState
 
 
 MAP_WIDTH = 1600
@@ -23,6 +23,28 @@ MAP_BACKGROUND_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "map" / "background.png"
 )
 ROOM_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "room.png"
+DOOR_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "door.png"
+HALLWAY_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "hallway.png"
+LOCKED_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "lock.png"
+UNLOCKED_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "lock-unlocked.png"
+)
+BROKEN_LOCK_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "lock-broken.png"
+)
+TRAP_ART_PATH = Path(__file__).resolve().parents[1] / "assets" / "map" / "trap.png"
+TRAP_DISARMED_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "trap-disarmed.png"
+)
+TRAP_TRIGGERED_ART_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "map" / "trap-triggered.png"
+)
+CONNECTION_ART_HEIGHT = 72
+LOCK_ART_HEIGHT = 34
+LOCK_ART_GAP = 4
+TRAP_ART_HEIGHT = LOCK_ART_HEIGHT
+TRAP_ART_GAP = LOCK_ART_GAP
+CONNECTION_ROOM_GAP = 12
 
 
 def render_player_map(view: PlayerMap) -> BytesIO:
@@ -115,16 +137,19 @@ def render_player_map(view: PlayerMap) -> BytesIO:
                 width=2,
             )
             midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
-            draw.ellipse(
-                (midpoint[0] - 8, midpoint[1] - 8, midpoint[0] + 8, midpoint[1] + 8),
-                fill=_fog_colour("#655239", connection_fog),
-                outline=_fog_colour("#c4a66b", connection_fog),
-                width=2,
-            )
-            draw.ellipse(
-                (midpoint[0] - 3, midpoint[1] - 3, midpoint[0] + 3, midpoint[1] + 3),
-                fill=_fog_colour("#dbc38b", connection_fog),
-            )
+            if not _draw_connector_art(
+                image,
+                midpoint,
+                connection.connection_type,
+                has_lock=connection.has_lock,
+                is_locked=connection.is_locked,
+                is_broken=connection.is_broken,
+                has_trap=connection.has_trap,
+                trap_state=connection.trap_state,
+                fog_strength=connection_fog,
+                vertical=abs(target[1] - source[1]) >= abs(target[0] - source[0]),
+            ):
+                _draw_connector_dot(draw, midpoint, fog_strength=connection_fog)
         else:
             local_id = (
                 connection.from_room_id
@@ -275,6 +300,251 @@ def _loaded_room_art() -> Image.Image | None:
         return room.crop(visible_bounds)
     except (OSError, ValueError):
         return None
+
+
+@lru_cache(maxsize=1)
+def _loaded_door_art() -> Image.Image | None:
+    """Load the door marker, crop transparent padding, and keep it upright."""
+    return _load_map_marker_art(DOOR_ART_PATH, CONNECTION_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_hallway_art() -> Image.Image | None:
+    """Load the hallway marker at the same visual height as the door."""
+    return _load_map_marker_art(HALLWAY_ART_PATH, CONNECTION_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_locked_art() -> Image.Image | None:
+    return _load_map_marker_art(LOCKED_ART_PATH, LOCK_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_unlocked_art() -> Image.Image | None:
+    return _load_map_marker_art(UNLOCKED_ART_PATH, LOCK_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_broken_lock_art() -> Image.Image | None:
+    return _load_map_marker_art(BROKEN_LOCK_ART_PATH, LOCK_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_trap_art() -> Image.Image | None:
+    return _load_map_marker_art(TRAP_ART_PATH, TRAP_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_disarmed_trap_art() -> Image.Image | None:
+    return _load_map_marker_art(TRAP_DISARMED_ART_PATH, TRAP_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _loaded_triggered_trap_art() -> Image.Image | None:
+    return _load_map_marker_art(TRAP_TRIGGERED_ART_PATH, TRAP_ART_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _door_visual_anchor() -> tuple[float, float] | None:
+    """Return the alpha-weighted center of the visible door motif."""
+    door = _loaded_door_art()
+    if door is None:
+        return None
+    alpha = door.getchannel("A")
+    values = tuple(alpha.getdata())
+    total_alpha = sum(values)
+    if not total_alpha:
+        return ((door.width - 1) / 2, (door.height - 1) / 2)
+    return (
+        sum((index % door.width) * value for index, value in enumerate(values))
+        / total_alpha,
+        sum((index // door.width) * value for index, value in enumerate(values))
+        / total_alpha,
+    )
+
+
+def _load_map_marker_art(path: Path, target_height: int) -> Image.Image | None:
+    """Crop transparent padding and uniformly size map-marker artwork."""
+    try:
+        with Image.open(path) as source:
+            artwork = source.convert("RGBA")
+        visible_bounds = artwork.getchannel("A").point(
+            lambda value: 255 if value >= 16 else 0
+        ).getbbox()
+        if visible_bounds is None:
+            return None
+        artwork = artwork.crop(visible_bounds)
+        target_width = max(
+            1, round(target_height * artwork.width / artwork.height)
+        )
+        return artwork.resize(
+            (target_width, target_height), Image.Resampling.LANCZOS
+        )
+    except (OSError, ValueError):
+        return None
+
+
+def _draw_connector_art(
+    image: Image.Image,
+    midpoint: tuple[float, float],
+    connection_type: ConnectionType,
+    *,
+    has_lock: bool = False,
+    is_locked: bool = False,
+    is_broken: bool = False,
+    has_trap: bool = False,
+    trap_state: TrapState | None = None,
+    fog_strength: float,
+    vertical: bool = False,
+) -> bool:
+    """Place the selected, unrotated artwork at a connector midpoint."""
+    if connection_type is ConnectionType.DOOR:
+        source = _loaded_door_art()
+    elif connection_type in (ConnectionType.HALLWAY, ConnectionType.PASSAGE):
+        source = _loaded_hallway_art()
+    else:
+        source = None
+    if source is None:
+        return False
+    trap_art = None
+    if has_trap:
+        if trap_state is TrapState.DISARMED:
+            trap_art = _loaded_disarmed_trap_art()
+        elif trap_state is TrapState.TRIGGERED:
+            trap_art = _loaded_triggered_trap_art()
+        else:
+            trap_art = _loaded_trap_art()
+    if connection_type is ConnectionType.DOOR:
+        lock_art = None
+        if has_lock:
+            if is_broken:
+                lock_art = _loaded_broken_lock_art()
+            elif is_locked:
+                lock_art = _loaded_locked_art()
+            else:
+                lock_art = _loaded_unlocked_art()
+        scale, door_position, lock_position = _door_marker_layout(
+            midpoint,
+            source.size,
+            lock_art.size if lock_art is not None else (0, 0),
+            vertical=vertical,
+            door_visual_anchor=_door_visual_anchor(),
+        )
+        artwork = _prepared_marker_art(source, scale, fog_strength)
+        image.paste(artwork, door_position, artwork)
+        if lock_art is not None and lock_position is not None:
+            rendered_lock = _prepared_marker_art(lock_art, scale, fog_strength)
+            image.paste(rendered_lock, lock_position, rendered_lock)
+        marker_position = door_position
+    else:
+        artwork = _prepared_marker_art(source, 1.0, fog_strength)
+        left = round(midpoint[0] - artwork.width / 2)
+        top = round(midpoint[1] - artwork.height / 2)
+        marker_position = (left, top)
+        image.paste(artwork, marker_position, artwork)
+    if trap_art is not None:
+        rendered_trap = _prepared_marker_art(trap_art, 1.0, fog_strength)
+        trap_position = _trap_marker_position(
+            midpoint,
+            marker_position,
+            artwork.size,
+            rendered_trap.size,
+            vertical=vertical,
+        )
+        image.paste(rendered_trap, trap_position, rendered_trap)
+    return True
+
+
+def _trap_marker_position(
+    midpoint: tuple[float, float],
+    marker_position: tuple[int, int],
+    marker_size: tuple[int, int],
+    trap_size: tuple[int, int],
+    *,
+    vertical: bool,
+) -> tuple[int, int]:
+    """Place traps opposite the lock: right when vertical, below otherwise."""
+    if vertical:
+        return (
+            marker_position[0] + marker_size[0] + TRAP_ART_GAP,
+            round(midpoint[1] - trap_size[1] / 2),
+        )
+    return (
+        round(midpoint[0] - trap_size[0] / 2),
+        marker_position[1] + marker_size[1] + TRAP_ART_GAP,
+    )
+
+
+def _prepared_marker_art(
+    source: Image.Image,
+    scale: float,
+    fog_strength: float,
+) -> Image.Image:
+    artwork = source
+    if scale < 1:
+        artwork = source.resize(
+            (
+                max(1, round(source.width * scale)),
+                max(1, round(source.height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+    if fog_strength:
+        artwork = ImageEnhance.Brightness(artwork).enhance(
+            max(0.25, 1 - fog_strength)
+        )
+    return artwork
+
+
+def _door_marker_layout(
+    midpoint: tuple[float, float],
+    door_size: tuple[int, int],
+    lock_size: tuple[int, int],
+    *,
+    vertical: bool = False,
+    door_visual_anchor: tuple[float, float] | None = None,
+) -> tuple[float, tuple[int, int], tuple[int, int] | None]:
+    """Keep the door full-size and place its lock according to line direction."""
+    anchor = door_visual_anchor or (
+        (door_size[0] - 1) / 2,
+        (door_size[1] - 1) / 2,
+    )
+    door_position = (
+        round(midpoint[0] - anchor[0]),
+        round(midpoint[1] - anchor[1]),
+    )
+    if not lock_size[0] or not lock_size[1]:
+        return 1.0, door_position, None
+    if vertical:
+        lock_position = (
+            door_position[0] - LOCK_ART_GAP - lock_size[0],
+            round(midpoint[1] - lock_size[1] / 2),
+        )
+    else:
+        lock_position = (
+            round(midpoint[0] - lock_size[0] / 2),
+            door_position[1] - LOCK_ART_GAP - lock_size[1],
+        )
+    return 1.0, door_position, lock_position
+
+
+def _draw_connector_dot(
+    draw: ImageDraw.ImageDraw,
+    midpoint: tuple[float, float],
+    *,
+    fog_strength: float,
+) -> None:
+    """Retain the classic marker for connection types without artwork."""
+    draw.ellipse(
+        (midpoint[0] - 8, midpoint[1] - 8, midpoint[0] + 8, midpoint[1] + 8),
+        fill=_fog_colour("#655239", fog_strength),
+        outline=_fog_colour("#c4a66b", fog_strength),
+        width=2,
+    )
+    draw.ellipse(
+        (midpoint[0] - 3, midpoint[1] - 3, midpoint[0] + 3, midpoint[1] + 3),
+        fill=_fog_colour("#dbc38b", fog_strength),
+    )
 
 
 def _draw_room_art(
@@ -456,7 +726,97 @@ def _layout(view: PlayerMap) -> dict[str, tuple[float, float, float, float]]:
             width,
             height,
         )
+    _space_door_connections(view, positioned, anchor.id if anchor else None)
     return positioned
+
+
+def _space_door_connections(
+    view: PlayerMap,
+    positioned: dict[str, tuple[float, float, float, float]],
+    anchor_id: str | None,
+) -> None:
+    """Move nearby rooms apart so door artwork always remains full-size."""
+    door = _loaded_door_art()
+    if door is None:
+        return
+    required_horizontal_gap = door.width + CONNECTION_ROOM_GAP
+    required_vertical_gap = door.height + CONNECTION_ROOM_GAP
+    door_connections = tuple(
+        connection
+        for connection in view.connections
+        if connection.connection_type is ConnectionType.DOOR
+        and connection.from_room_id in positioned
+        and connection.to_room_id in positioned
+    )
+    for _ in range(max(1, len(door_connections) * 2)):
+        changed = False
+        for connection in door_connections:
+            first_id = connection.from_room_id
+            second_id = connection.to_room_id
+            first = positioned[first_id]
+            second = positioned[second_id]
+            first_center = (first[0] + first[2] / 2, first[1] + first[3] / 2)
+            second_center = (
+                second[0] + second[2] / 2,
+                second[1] + second[3] / 2,
+            )
+            vertical = abs(second_center[1] - first_center[1]) >= abs(
+                second_center[0] - first_center[0]
+            )
+            if vertical:
+                upper_id, lower_id = (
+                    (first_id, second_id)
+                    if first_center[1] <= second_center[1]
+                    else (second_id, first_id)
+                )
+                upper = positioned[upper_id]
+                lower = positioned[lower_id]
+                gap = lower[1] - (upper[1] + upper[3])
+                deficit = required_vertical_gap - gap
+                if deficit > 0:
+                    positioned[upper_id] = (
+                        upper[0],
+                        upper[1] - deficit,
+                        upper[2],
+                        upper[3],
+                    )
+                    changed = True
+            else:
+                left_id, right_id = (
+                    (first_id, second_id)
+                    if first_center[0] <= second_center[0]
+                    else (second_id, first_id)
+                )
+                left = positioned[left_id]
+                right = positioned[right_id]
+                gap = right[0] - (left[0] + left[2])
+                deficit = required_horizontal_gap - gap
+                if deficit > 0:
+                    positioned[left_id] = (
+                        left[0] - deficit,
+                        left[1],
+                        left[2],
+                        left[3],
+                    )
+                    changed = True
+        if not changed:
+            break
+
+    if anchor_id in positioned:
+        anchor = positioned[anchor_id]
+        viewport_center = (
+            (VIEWPORT_BOUNDS[0] + VIEWPORT_BOUNDS[2]) / 2,
+            (VIEWPORT_BOUNDS[1] + VIEWPORT_BOUNDS[3]) / 2,
+        )
+        offset_x = viewport_center[0] - (anchor[0] + anchor[2] / 2)
+        offset_y = viewport_center[1] - (anchor[1] + anchor[3] / 2)
+        for room_id, (left, top, width, height) in positioned.items():
+            positioned[room_id] = (
+                left + offset_x,
+                top + offset_y,
+                width,
+                height,
+            )
 
 
 def _focus_distances(view: PlayerMap) -> dict[str, int]:
