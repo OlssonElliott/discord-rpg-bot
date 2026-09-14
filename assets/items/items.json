@@ -552,5 +552,37 @@
     "modifiers": [],
     "requirements": [],
     "content": "You are now a gay"
+  },
+  {
+    "item_type": "tool",
+    "id": "lockpicks",
+    "name": "Lockpicks",
+    "rarity": "Common",
+    "value": 15,
+    "description": "A compact set of picks and tension tools used to manipulate locks.",
+    "weight": 0,
+    "slot_cost": 1,
+    "tags": [
+      "tool",
+      "lockpicking"
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "tool",
+    "id": "trap_disarm_kit",
+    "name": "Trap Disarm Kit",
+    "rarity": "Common",
+    "value": 25,
+    "description": "Specialized probes, clamps, wedges, and cutters for safely disarming traps.",
+    "weight": 1,
+    "slot_cost": 1,
+    "tags": [
+      "tool",
+      "trap_disarming"
+    ],
+    "modifiers": [],
+    "requirements": []
   }
 ]

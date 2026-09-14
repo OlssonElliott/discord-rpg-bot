@@ -72,6 +72,7 @@ type RoomNodeData = RoomData & Record<string, unknown>;
 type ContentKind = 'enemy' | 'item' | 'container';
 type MapConnectionType = 'door' | 'hallway';
 type DoorLockState = 'none' | 'unlocked' | 'locked' | 'broken';
+type DoorState = 'closed' | 'open';
 type TrapDamageType = 'physical' | 'fire' | 'cold' | 'lightning' | 'poison' | 'acid';
 type TrapState = 'armed' | 'disarmed' | 'triggered';
 
@@ -373,6 +374,7 @@ export function DungeonEditor() {
           has_lock: { type: 'boolean', default: false },
           is_locked: { type: 'boolean', default: false },
           is_broken: { type: 'boolean', default: false },
+          is_open: { type: 'boolean', default: false },
           unlock_difficulty: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
           has_trap: { type: 'boolean', default: false },
           trap_state: { type: 'string', enum: ['armed', 'disarmed', 'triggered'], default: 'armed' },
@@ -396,6 +398,7 @@ export function DungeonEditor() {
         const hasLock = connectionType === 'door' && values.has_lock === true;
         const isBroken = hasLock && values.is_broken === true;
         const isLocked = hasLock && !isBroken && values.is_locked === true;
+        const isOpen = connectionType === 'door' && !isLocked && values.is_open === true;
         const hasTrap = values.has_trap === true;
         const payload = {
           ...values,
@@ -403,6 +406,7 @@ export function DungeonEditor() {
           has_lock: hasLock,
           is_locked: isLocked,
           is_broken: isBroken,
+          is_open: isOpen,
           unlock_difficulty: isLocked && typeof values.unlock_difficulty === 'number'
             ? values.unlock_difficulty
             : isLocked ? 10 : null,
@@ -563,6 +567,10 @@ export function DungeonEditor() {
                 'Room image removed',
               )}
               onAddContent={setContentKind}
+              onRemoveContent={(kind, id) => mutate(
+                () => api(`/rooms/${selectedRoom.id}/${kind === 'item' ? 'items' : 'entities'}/${id}`, { method: 'DELETE' }),
+                `${kind === 'item' ? 'Item' : kind === 'container' ? 'Container' : 'Enemy'} removed`,
+              )}
               onPlaceCharacter={(characterId) => mutate(
                 () => api(`/characters/${characterId}/room`, {
                   method: 'PATCH',
@@ -575,16 +583,17 @@ export function DungeonEditor() {
             />
           ) : selectedConnection ? (
             <ConnectionInspector
-              key={`${edgeId(selectedConnection)}:${selectedConnection.connection_type}:${selectedConnection.has_lock}:${selectedConnection.is_locked}:${selectedConnection.is_broken}:${selectedConnection.unlock_difficulty ?? ''}:${selectedConnection.has_trap}:${selectedConnection.trap_state ?? ''}:${selectedConnection.trap_detection_difficulty ?? ''}:${selectedConnection.trap_damage_type ?? ''}:${selectedConnection.trap_damage ?? ''}:${selectedConnection.bidirectional}:${selectedConnection.return_exit_name || ''}`}
+              key={`${edgeId(selectedConnection)}:${selectedConnection.connection_type}:${selectedConnection.is_open}:${selectedConnection.has_lock}:${selectedConnection.is_locked}:${selectedConnection.is_broken}:${selectedConnection.unlock_difficulty ?? ''}:${selectedConnection.has_trap}:${selectedConnection.trap_state ?? ''}:${selectedConnection.trap_detection_difficulty ?? ''}:${selectedConnection.trap_damage_type ?? ''}:${selectedConnection.trap_damage ?? ''}:${selectedConnection.bidirectional}:${selectedConnection.return_exit_name || ''}`}
               connection={selectedConnection}
               rooms={graph?.nodes ?? []}
-              onSave={(connectionType, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => mutate(
+              onSave={(connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => mutate(
                 () => api('/connections', {
                   method: 'PATCH',
                   body: JSON.stringify({
                     source_room_id: selectedConnection.source_room_id,
                     exit_name: selectedConnection.exit_name,
                     connection_type: connectionType,
+                    is_open: connectionType === 'door' && doorState === 'open',
                     has_lock: connectionType === 'door' && lockState !== 'none',
                     is_locked: connectionType === 'door' && lockState === 'locked',
                     is_broken: connectionType === 'door' && lockState === 'broken',
@@ -630,10 +639,10 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
-      <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, connectionType, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => {
+      <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
-          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, connection_type: connectionType, has_lock: connectionType === 'door' && lockState !== 'none', is_locked: connectionType === 'door' && lockState === 'locked', is_broken: connectionType === 'door' && lockState === 'broken', unlock_difficulty: connectionType === 'door' && lockState === 'locked' ? unlockDifficulty : null, has_trap: hasTrap, trap_state: hasTrap ? trapState : null, trap_detection_difficulty: hasTrap ? trapDetectionDifficulty : null, trap_damage_type: hasTrap ? trapDamageType : null, trap_damage: hasTrap ? trapDamage : null, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
+          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, connection_type: connectionType, is_open: connectionType === 'door' && doorState === 'open', has_lock: connectionType === 'door' && lockState !== 'none', is_locked: connectionType === 'door' && lockState === 'locked', is_broken: connectionType === 'door' && lockState === 'broken', unlock_difficulty: connectionType === 'door' && lockState === 'locked' ? unlockDifficulty : null, has_trap: hasTrap, trap_state: hasTrap ? trapState : null, trap_detection_difficulty: hasTrap ? trapDetectionDifficulty : null, trap_damage_type: hasTrap ? trapDamageType : null, trap_damage: hasTrap ? trapDamage : null, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
           'Connection created',
         );
         if (ok) setConnection(null);
@@ -683,7 +692,7 @@ export function DungeonEditor() {
   );
 }
 
-function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onPlaceCharacter, onDelete, onSelectConnection }: {
+function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onRemoveContent, onPlaceCharacter, onDelete, onSelectConnection }: {
   room: RoomData;
   connections: ConnectionData[];
   rooms: RoomData[];
@@ -692,6 +701,7 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   onUploadImage: (file: File) => Promise<boolean>;
   onRemoveImage: () => Promise<boolean>;
   onAddContent: (kind: ContentKind) => void;
+  onRemoveContent: (kind: ContentKind, id: string) => Promise<boolean>;
   onPlaceCharacter: (characterId: number) => Promise<boolean>;
   onDelete: () => void;
   onSelectConnection: (connection: ConnectionData) => void;
@@ -842,9 +852,9 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
       <div className="inspector__section content-summary">
         <h3>Room contents</h3>
         {room.players.map((item) => <p key={item.id}><Users size={15} />{item.name}</p>)}
-        {room.enemies.map((item) => <p key={item.id}><Skull size={15} />{item.name}</p>)}
-        {room.loose_items.map((item) => <p key={item.id}><Sparkles size={15} />{item.name}<strong>×{item.quantity}</strong></p>)}
-        {room.containers.map((item) => <p key={item.id}><Box size={15} />{item.name}</p>)}
+        {room.enemies.map((item) => <p key={item.id}><Skull size={15} />{item.name}<button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('enemy', item.id)}><Trash2 size={14} /></button></p>)}
+        {room.loose_items.map((item) => <p key={item.id}><Sparkles size={15} />{item.name}<strong>×{item.quantity}</strong><button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('item', item.id)}><Trash2 size={14} /></button></p>)}
+        {room.containers.map((item) => <p key={item.id}><Box size={15} />{item.name}<button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('container', item.id)}><Trash2 size={14} /></button></p>)}
         {!room.players.length && !room.enemies.length && !room.loose_items.length && !room.containers.length && <p className="muted-row">This location is empty.</p>}
       </div>
       <div className="inspector__actions">
@@ -857,11 +867,12 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   );
 }
 
-function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onSave: (connectionType: MapConnectionType, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnExitName: string) => Promise<boolean>; onRemove: () => void }) {
+function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onSave: (connectionType: MapConnectionType, doorState: DoorState, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnExitName: string) => Promise<boolean>; onRemove: () => void }) {
   const roomName = (id: string) => rooms.find((room) => room.id === id)?.name || id;
   const [bidirectional, setBidirectional] = useState(connection.bidirectional);
   const [returnExitName, setReturnExitName] = useState(connection.return_exit_name || connection.exit_name);
   const [connectionType, setConnectionType] = useState<MapConnectionType>(connection.connection_type === 'door' ? 'door' : 'hallway');
+  const [doorState, setDoorState] = useState<DoorState>(connection.is_open ? 'open' : 'closed');
   const [lockState, setLockState] = useState<DoorLockState>(connection.has_lock ? (connection.is_broken ? 'broken' : connection.is_locked ? 'locked' : 'unlocked') : 'none');
   const [unlockDifficulty, setUnlockDifficulty] = useState(connection.unlock_difficulty ?? 10);
   const [hasTrap, setHasTrap] = useState(connection.has_trap);
@@ -880,8 +891,13 @@ function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connecti
         <NativeSelectOption value="hallway">Hallway</NativeSelectOption>
       </NativeSelect>
       {connectionType === 'door' && <>
+        <label className="dialog-label" htmlFor="connection-door-state">Door state</label>
+        <NativeSelect id="connection-door-state" value={doorState} onChange={(event) => { const next = event.target.value as DoorState; setDoorState(next); if (next === 'open' && lockState === 'locked') setLockState('unlocked'); }}>
+          <NativeSelectOption value="closed">Closed</NativeSelectOption>
+          <NativeSelectOption value="open">Open</NativeSelectOption>
+        </NativeSelect>
         <label className="dialog-label" htmlFor="connection-lock-state">Lock state</label>
-        <NativeSelect id="connection-lock-state" value={lockState} onChange={(event) => setLockState(event.target.value as DoorLockState)}>
+        <NativeSelect id="connection-lock-state" value={lockState} onChange={(event) => { const next = event.target.value as DoorLockState; setLockState(next); if (next === 'locked') setDoorState('closed'); }}>
           <NativeSelectOption value="none">No lock</NativeSelectOption>
           <NativeSelectOption value="unlocked">Unlocked</NativeSelectOption>
           <NativeSelectOption value="locked">Locked</NativeSelectOption>
@@ -917,7 +933,7 @@ function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connecti
       </NativeSelect>
       {bidirectional && <><label className="dialog-label" htmlFor="return-exit-name">Return exit name</label><Input id="return-exit-name" value={returnExitName} onChange={(event) => setReturnExitName(event.target.value)} /></>}
       <p className="inspector-note">Movement rules update immediately when this passage is saved.</p>
-      <Button disabled={(bidirectional && !returnExitName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onSave(connectionType, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName)}><Save /> Save connection</Button>
+      <Button disabled={(bidirectional && !returnExitName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onSave(connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName)}><Save /> Save connection</Button>
       <Button variant="destructive" onClick={onRemove}><Trash2 /> Remove connection</Button>
     </>
   );
@@ -951,10 +967,11 @@ function EditorDialog({ open, onOpenChange, title, description, name, setName, d
   );
 }
 
-function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, connectionType: MapConnectionType, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnName: string) => Promise<void> }) {
+function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, connectionType: MapConnectionType, doorState: DoorState, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnName: string) => Promise<void> }) {
   const [name, setName] = useState(() => exitNameForHandle(connection?.sourceHandle));
   const [bidirectional, setBidirectional] = useState(true);
   const [connectionType, setConnectionType] = useState<MapConnectionType>('hallway');
+  const [doorState, setDoorState] = useState<DoorState>('closed');
   const [lockState, setLockState] = useState<DoorLockState>('none');
   const [unlockDifficulty, setUnlockDifficulty] = useState(10);
   const [hasTrap, setHasTrap] = useState(false);
@@ -975,8 +992,13 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
           <NativeSelectOption value="hallway">Hallway</NativeSelectOption>
         </NativeSelect>
         {connectionType === 'door' && <>
+          <label className="dialog-label" htmlFor="new-connection-door-state">Door state</label>
+          <NativeSelect id="new-connection-door-state" value={doorState} onChange={(event) => { const next = event.target.value as DoorState; setDoorState(next); if (next === 'open' && lockState === 'locked') setLockState('unlocked'); }}>
+            <NativeSelectOption value="closed">Closed</NativeSelectOption>
+            <NativeSelectOption value="open">Open</NativeSelectOption>
+          </NativeSelect>
           <label className="dialog-label" htmlFor="new-connection-lock-state">Lock state</label>
-          <NativeSelect id="new-connection-lock-state" value={lockState} onChange={(event) => setLockState(event.target.value as DoorLockState)}>
+          <NativeSelect id="new-connection-lock-state" value={lockState} onChange={(event) => { const next = event.target.value as DoorLockState; setLockState(next); if (next === 'locked') setDoorState('closed'); }}>
             <NativeSelectOption value="none">No lock</NativeSelectOption>
             <NativeSelectOption value="unlocked">Unlocked</NativeSelectOption>
             <NativeSelectOption value="locked">Locked</NativeSelectOption>
@@ -1011,7 +1033,7 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
           <NativeSelectOption value="one-way">One-way passage</NativeSelectOption>
         </NativeSelect>
         {bidirectional && <><label className="dialog-label" htmlFor="new-return-exit-name">Return exit name</label><Input id="new-return-exit-name" value={returnName} onChange={(event) => setReturnName(event.target.value)} /></>}
-        <DialogFooter><Button disabled={!name.trim() || (bidirectional && !returnName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onCreate(name, connectionType, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnName)}>Create connection</Button></DialogFooter>
+        <DialogFooter><Button disabled={!name.trim() || (bidirectional && !returnName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onCreate(name, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnName)}>Create connection</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -1116,12 +1138,12 @@ function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open: boolea
         </div>
         <div className="catalog-grid">
           <label className="dialog-label" htmlFor="item-name">Name<Input id="item-name" value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} disabled={Boolean(editingId)} onChange={(event) => { const nextType = event.target.value as CatalogItem['item_type']; setItemType(nextType); if (nextType === 'readable' && weight === 0) setSlotCost(0); }}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption><NativeSelectOption value="readable">Readable</NativeSelectOption></NativeSelect></label>
+          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} disabled={Boolean(editingId)} onChange={(event) => { const nextType = event.target.value as CatalogItem['item_type']; setItemType(nextType); if (nextType === 'readable' && weight === 0) setSlotCost(0); }}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="tool">Tool</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption><NativeSelectOption value="readable">Readable</NativeSelectOption></NativeSelect></label>
           <label className="dialog-label" htmlFor="item-rarity">Rarity<Input id="item-rarity" value={rarity} onChange={(event) => setRarity(event.target.value)} /></label>
           <label className="dialog-label" htmlFor="item-value">Value<Input id="item-value" type="number" min={0} value={value} onChange={(event) => setValue(Number(event.target.value))} /></label>
           <label className="dialog-label" htmlFor="item-weight">Weight<Input id="item-weight" type="number" min={0} value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
           <label className="dialog-label" htmlFor="item-slots">Storage slots<Input id="item-slots" type="number" min={0} value={slotCost} onChange={(event) => setSlotCost(Number(event.target.value))} /></label>
-          {!['misc', 'clothing', 'readable'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
+          {!['misc', 'tool', 'clothing', 'readable'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
           {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
           {itemType === 'container' && <label className="catalog-check"><input type="checkbox" checked={canEquip} onChange={(event) => setCanEquip(event.target.checked)} /> Can be equipped</label>}
         </div>

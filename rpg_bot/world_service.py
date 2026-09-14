@@ -28,6 +28,7 @@ from .world import (
     InventoryHolder,
     Item,
     ItemStack,
+    MovementResult,
     Room,
     WorldEntity,
 )
@@ -115,9 +116,11 @@ class WorldService:
         is_locked: bool = False,
         unlock_difficulty: int | None = None,
         is_broken: bool = False,
+        is_open: bool = False,
         has_trap: bool = False,
         trap_state: TrapState | None = None,
         trap_detection_difficulty: int | None = None,
+        trap_disarm_difficulty: int | None = None,
         trap_damage_type: TrapDamageType | None = None,
         trap_damage: int | None = None,
     ) -> RoomConnection:
@@ -132,9 +135,11 @@ class WorldService:
             is_locked=is_locked,
             unlock_difficulty=unlock_difficulty,
             is_broken=is_broken,
+            is_open=is_open,
             has_trap=has_trap,
             trap_state=trap_state,
             trap_detection_difficulty=trap_detection_difficulty,
+            trap_disarm_difficulty=trap_disarm_difficulty,
             trap_damage_type=trap_damage_type,
             trap_damage=trap_damage,
         )
@@ -180,6 +185,36 @@ class WorldService:
             is_broken=is_broken,
             unlock_difficulty=unlock_difficulty,
         )
+
+    def set_connection_open(
+        self,
+        room_id: str,
+        exit_name: str,
+        *,
+        is_open: bool,
+    ) -> None:
+        self.database.set_connection_open(
+            room_id,
+            exit_name,
+            is_open=is_open,
+        )
+
+    def set_connection_trap_disarm_difficulty(
+        self,
+        room_id: str,
+        exit_name: str,
+        difficulty: int | None,
+    ) -> None:
+        self.database.set_connection_trap_disarm_difficulty(
+            room_id, exit_name, difficulty
+        )
+
+    def set_connection_trap_state(
+        self,
+        connection_id: str,
+        state: TrapState,
+    ) -> None:
+        self.database.set_connection_trap_state(connection_id, state)
 
     def disconnect_connection(self, room_id: str, exit_name: str) -> None:
         self.database.disconnect_connection(room_id, exit_name)
@@ -238,12 +273,17 @@ class WorldService:
         return self.database.place_character(character_id, room_id)
 
     def move_character(self, character_id: int, destination: str) -> Room:
+        return self.move_character_with_result(character_id, destination).room
+
+    def move_character_with_result(
+        self, character_id: int, destination: str
+    ) -> MovementResult:
         if self.database.get_game_lock() in (
             GameLock.MOVEMENT_LOCKED,
             GameLock.ALL_ACTIONS_LOCKED,
         ):
             raise InvalidMovementError("Movement is currently locked by the DM.")
-        return self.database.move_character(character_id, destination)
+        return self.database.move_character_with_result(character_id, destination)
 
     def game_lock(self) -> GameLock:
         return self.database.get_game_lock()
@@ -331,6 +371,9 @@ class WorldService:
         self, holder: InventoryHolder, item_id: str, quantity: int = 1
     ) -> ItemStack:
         return self.database.add_item(holder, item_id, quantity)
+
+    def remove_item(self, holder: InventoryHolder, item_id: str) -> None:
+        self.database.remove_item(holder, item_id)
 
     def inventory(self, holder: InventoryHolder) -> tuple[ItemStack, ...]:
         return self.database.get_inventory(holder)

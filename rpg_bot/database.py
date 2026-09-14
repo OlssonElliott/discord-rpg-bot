@@ -52,6 +52,7 @@ from .world import (
     NotFoundError,
     Room,
     RoomEditorNode,
+    MovementResult,
     WorldEntity,
 )
 
@@ -72,12 +73,115 @@ class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
+    def get_character_skill_rank(self, character_id: int, skill: str) -> int:
+        """Return a case-insensitive skill-tree rank, or zero if it is unknown."""
+        normalized = skill.strip()
+        if not normalized:
+            return 0
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT rank FROM character_skills "
+                "WHERE character_id = ? AND skill = ? COLLATE NOCASE",
+                (character_id, normalized),
+            ).fetchone()
+        return int(row["rank"]) if row is not None else 0
+
+    def get_character_attribute(self, character_id: int, attribute: str) -> int:
+        """Return a persisted character attribute, defaulting an unset score to 10."""
+        normalized = attribute.casefold().strip()
+        allowed_attributes = {
+            "strength",
+            "dexterity",
+            "arcana",
+            "vitality",
+            "insight",
+            "personality",
+        }
+        if normalized not in allowed_attributes:
+            raise ValueError(f"Unknown character attribute '{attribute}'.")
+
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT {normalized} FROM characters WHERE id = ?",
+                (character_id,),
+            ).fetchone()
+        if row is None:
+            raise CharacterNotFoundError(f"Character {character_id} does not exist.")
+        value = row[normalized]
+        return int(value) if value is not None else 10
+
+    def character_has_usable_item(self, character_id: int, template_id: str) -> bool:
+        """Return whether a character carries an unbroken instance of an item."""
+        normalized = template_id.strip()
+        if not normalized:
+            return False
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM character_items
+                WHERE character_id = ?
+                  AND template_id = ? COLLATE NOCASE
+                  AND (durability IS NULL OR durability > 0)
+                LIMIT 1
+                """,
+                (character_id, normalized),
+            ).fetchone()
+        return row is not None
+
+    def break_character_item(self, character_id: int, template_id: str) -> bool:
+        """Break one usable carried item instance and return whether one was found."""
+        normalized = template_id.strip()
+        if not normalized:
+            return False
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT instance_id
+                FROM character_items
+                WHERE character_id = ?
+                  AND template_id = ? COLLATE NOCASE
+                  AND (durability IS NULL OR durability > 0)
+                ORDER BY rowid
+                LIMIT 1
+                """,
+                (character_id, normalized),
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                "UPDATE character_items SET durability = 0 WHERE instance_id = ?",
+                (row["instance_id"],),
+            )
+        return True
+
     def initialize(self) -> None:
         if self.path.parent != Path("."):
             self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             self._initialize_characters(connection)
             self._initialize_world(connection)
+            connection_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(room_connections)")
+            }
+            if "trap_disarm_difficulty" not in connection_columns:
+                connection.execute(
+                    "ALTER TABLE room_connections "
+                    "ADD COLUMN trap_disarm_difficulty INTEGER "
+                    "CHECK (trap_disarm_difficulty BETWEEN 1 AND 30)"
+                )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_known_traps (
+                    character_id INTEGER NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    PRIMARY KEY (character_id, connection_id),
+                    FOREIGN KEY (character_id) REFERENCES characters(id),
+                    FOREIGN KEY (connection_id) REFERENCES room_connections(id)
+                )
+                """
+            )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_preferences (
@@ -532,6 +636,7 @@ class Database:
                 has_lock INTEGER NOT NULL DEFAULT 0 CHECK (has_lock IN (0, 1)),
                 is_locked INTEGER NOT NULL DEFAULT 0 CHECK (is_locked IN (0, 1)),
                 is_broken INTEGER NOT NULL DEFAULT 0 CHECK (is_broken IN (0, 1)),
+                is_open INTEGER NOT NULL DEFAULT 0 CHECK (is_open IN (0, 1)),
                 unlock_difficulty INTEGER CHECK (
                     unlock_difficulty BETWEEN 1 AND 30
                 ),
@@ -608,6 +713,10 @@ class Database:
             "is_broken": (
                 "ALTER TABLE room_connections ADD COLUMN is_broken INTEGER "
                 "NOT NULL DEFAULT 0 CHECK (is_broken IN (0, 1))"
+            ),
+            "is_open": (
+                "ALTER TABLE room_connections ADD COLUMN is_open INTEGER "
+                "NOT NULL DEFAULT 0 CHECK (is_open IN (0, 1))"
             ),
             "unlock_difficulty": (
                 "ALTER TABLE room_connections ADD COLUMN unlock_difficulty INTEGER "
@@ -1553,9 +1662,11 @@ class Database:
         is_locked: bool = False,
         unlock_difficulty: int | None = None,
         is_broken: bool = False,
+        is_open: bool = False,
         has_trap: bool = False,
         trap_state: TrapState | None = None,
         trap_detection_difficulty: int | None = None,
+        trap_disarm_difficulty: int | None = None,
         trap_damage_type: TrapDamageType | None = None,
         trap_damage: int | None = None,
     ) -> RoomConnection:
@@ -1565,6 +1676,7 @@ class Database:
         unlock_difficulty = self._validate_connection_lock(
             connection_type, has_lock, is_locked, is_broken, unlock_difficulty
         )
+        self._validate_connection_open(connection_type, is_open, is_locked)
         trap_state, trap_detection_difficulty, trap_damage_type, trap_damage = (
             self._validate_connection_trap(
                 connection_type,
@@ -1575,6 +1687,14 @@ class Database:
                 trap_damage,
             )
         )
+        if has_trap:
+            trap_disarm_difficulty = trap_disarm_difficulty or 10
+            if not 1 <= trap_disarm_difficulty <= 30:
+                raise ValueError(
+                    "Trap disarm difficulty must be an integer from 1 to 30."
+                )
+        else:
+            trap_disarm_difficulty = None
         with self._connect() as connection:
             source_room = self._require_room(connection, room_id)
             destination_room = self._require_room(connection, destination_room_id)
@@ -1644,10 +1764,10 @@ class Database:
                 INSERT INTO room_connections (
                     id, from_room_id, to_room_id, exit_name, return_exit_name,
                     connection_type, hidden, bidirectional, is_locked,
-                    is_broken, unlock_difficulty, has_lock, has_trap,
-                    trap_state, trap_detection_difficulty, trap_damage_type,
-                    trap_damage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_broken, is_open, unlock_difficulty, has_lock, has_trap,
+                    trap_state, trap_detection_difficulty,
+                    trap_disarm_difficulty, trap_damage_type, trap_damage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     connection_id,
@@ -1660,11 +1780,13 @@ class Database:
                     int(return_exit_name is not None),
                     int(is_locked),
                     int(is_broken),
+                    int(is_open),
                     unlock_difficulty,
                     int(has_lock),
                     int(has_trap),
                     trap_state.value if trap_state is not None else None,
                     trap_detection_difficulty,
+                    trap_disarm_difficulty,
                     trap_damage_type.value if trap_damage_type is not None else None,
                     trap_damage,
                 ),
@@ -1699,6 +1821,8 @@ class Database:
                         """,
                         (character_id, connection_id),
                     )
+                    if connection_type is ConnectionType.DOOR and not is_open:
+                        continue
                     connection.execute(
                         """
                         INSERT INTO character_room_knowledge (
@@ -1721,9 +1845,11 @@ class Database:
             is_locked,
             unlock_difficulty,
             is_broken,
+            is_open,
             has_trap,
             trap_state,
             trap_detection_difficulty,
+            trap_disarm_difficulty,
             trap_damage_type,
             trap_damage,
         )
@@ -1823,7 +1949,7 @@ class Database:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT id, from_room_id, to_room_id
+                SELECT id, from_room_id, to_room_id, bidirectional
                 FROM room_connections
                 WHERE from_room_id = ? AND exit_name = ? COLLATE NOCASE
                 """,
@@ -1842,7 +1968,7 @@ class Database:
                     """
                     UPDATE room_connections
                     SET has_lock = 0, is_locked = 0, is_broken = 0,
-                        unlock_difficulty = NULL
+                        is_open = 0, unlock_difficulty = NULL
                     WHERE id = ?
                     """,
                     (row["id"],),
@@ -1862,6 +1988,26 @@ class Database:
                     """,
                     (row["id"],),
                 )
+            if connection_type is not ConnectionType.DOOR:
+                present = connection.execute(
+                    """
+                    SELECT id, current_room_id
+                    FROM characters
+                    WHERE is_archived = 0 AND (
+                        current_room_id = ?
+                        OR (current_room_id = ? AND ? = 1)
+                    )
+                    """,
+                    (
+                        row["from_room_id"],
+                        row["to_room_id"],
+                        row["bidirectional"],
+                    ),
+                ).fetchall()
+                for character in present:
+                    self._record_visible_connections(
+                        connection, character["id"], character["current_room_id"]
+                    )
             self._queue_map_refresh_for_room(connection, row["from_room_id"])
             self._queue_map_refresh_for_room(connection, row["to_room_id"])
 
@@ -1881,9 +2027,14 @@ class Database:
                 """
                 SELECT id, from_room_id, to_room_id, connection_type
                 FROM room_connections
-                WHERE from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                WHERE (
+                    from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                ) OR (
+                    to_room_id = ? AND bidirectional = 1
+                    AND return_exit_name = ? COLLATE NOCASE
+                )
                 """,
-                (room_id, exit_name),
+                (room_id, exit_name, room_id, exit_name),
             ).fetchone()
             if row is None:
                 raise NotFoundError(
@@ -1900,14 +2051,74 @@ class Database:
                 """
                 UPDATE room_connections
                 SET has_lock = ?, is_locked = ?, is_broken = ?,
-                    unlock_difficulty = ?
+                    unlock_difficulty = ?,
+                    is_open = CASE WHEN ? = 1 THEN 0 ELSE is_open END
                 WHERE id = ?
                 """,
                 (
                     int(has_lock), int(is_locked), int(is_broken),
-                    difficulty, row["id"],
+                    difficulty, int(is_locked), row["id"],
                 ),
             )
+            self._queue_map_refresh_for_room(connection, row["from_room_id"])
+            self._queue_map_refresh_for_room(connection, row["to_room_id"])
+
+    def set_connection_open(
+        self,
+        room_id: str,
+        exit_name: str,
+        *,
+        is_open: bool,
+    ) -> None:
+        """Open or close a door, revealing its far room only while observed."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, from_room_id, to_room_id, bidirectional,
+                       connection_type, is_locked
+                FROM room_connections
+                WHERE (
+                    from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                ) OR (
+                    to_room_id = ? AND bidirectional = 1
+                    AND return_exit_name = ? COLLATE NOCASE
+                )
+                """,
+                (room_id, exit_name, room_id, exit_name),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(
+                    f"Connection '{exit_name}' does not exist on room '{room_id}'."
+                )
+            self._validate_connection_open(
+                ConnectionType(row["connection_type"]),
+                is_open,
+                bool(row["is_locked"]),
+            )
+            connection.execute(
+                "UPDATE room_connections SET is_open = ? WHERE id = ?",
+                (int(is_open), row["id"]),
+            )
+            if is_open:
+                present = connection.execute(
+                    """
+                    SELECT id, current_room_id
+                    FROM characters
+                    WHERE is_archived = 0 AND (
+                        current_room_id = ?
+                        OR (current_room_id = ? AND ? = 1)
+                    )
+                    """,
+                    (
+                        row["from_room_id"],
+                        row["to_room_id"],
+                        row["bidirectional"],
+                    ),
+                ).fetchall()
+                for character in present:
+                    self._record_visible_connections(
+                        connection, character["id"], character["current_room_id"]
+                    )
             self._queue_map_refresh_for_room(connection, row["from_room_id"])
             self._queue_map_refresh_for_room(connection, row["to_room_id"])
 
@@ -1938,6 +2149,152 @@ class Database:
         ):
             raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
         return unlock_difficulty
+
+    @staticmethod
+    def _validate_connection_open(
+        connection_type: ConnectionType,
+        is_open: bool,
+        is_locked: bool,
+    ) -> None:
+        if is_open and connection_type is not ConnectionType.DOOR:
+            raise ValueError("Only door connections can be open.")
+        if is_open and is_locked:
+            raise ValueError("A locked door cannot be open.")
+
+    def get_connection_trap_details(
+        self,
+        room_id: str,
+        exit_name: str,
+    ) -> tuple[str, bool, TrapState | None, int | None, int | None]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, has_trap, trap_state,
+                       trap_detection_difficulty, trap_disarm_difficulty
+                FROM room_connections
+                WHERE (
+                    from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                ) OR (
+                    to_room_id = ? AND bidirectional = 1
+                    AND return_exit_name = ? COLLATE NOCASE
+                )
+                """,
+                (room_id, exit_name, room_id, exit_name),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(
+                f"Connection '{exit_name}' does not exist on room '{room_id}'."
+            )
+        return (
+            row["id"],
+            bool(row["has_trap"]),
+            TrapState(row["trap_state"]) if row["trap_state"] else None,
+            row["trap_detection_difficulty"],
+            row["trap_disarm_difficulty"],
+        )
+
+    def character_knows_trap(
+        self,
+        character_id: int,
+        connection_id: str,
+    ) -> bool:
+        with self._connect() as connection:
+            return (
+                connection.execute(
+                    """
+                    SELECT 1 FROM character_known_traps
+                    WHERE character_id = ? AND connection_id = ?
+                    """,
+                    (character_id, connection_id),
+                ).fetchone()
+                is not None
+            )
+
+    def mark_trap_detected(
+        self,
+        character_id: int,
+        connection_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            character = connection.execute(
+                "SELECT 1 FROM characters WHERE id = ? AND is_archived = 0",
+                (character_id,),
+            ).fetchone()
+            if character is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO character_known_traps (
+                    character_id, connection_id
+                ) VALUES (?, ?)
+                """,
+                (character_id, connection_id),
+            )
+        self.request_player_map_refresh(character_id)
+
+    def set_connection_trap_state(
+        self,
+        connection_id: str,
+        state: TrapState,
+    ) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, from_room_id, to_room_id, has_trap
+                FROM room_connections
+                WHERE id = ?
+                """,
+                (connection_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"Connection '{connection_id}' does not exist.")
+            if not row["has_trap"]:
+                raise ValueError("That connection does not have a trap.")
+            connection.execute(
+                "UPDATE room_connections SET trap_state = ? WHERE id = ?",
+                (state.value, connection_id),
+            )
+            self._queue_map_refresh_for_room(connection, row["from_room_id"])
+            self._queue_map_refresh_for_room(connection, row["to_room_id"])
+
+    def set_connection_trap_disarm_difficulty(
+        self,
+        room_id: str,
+        exit_name: str,
+        difficulty: int | None,
+    ) -> None:
+        if difficulty is not None and not 1 <= difficulty <= 30:
+            raise ValueError(
+                "Trap disarm difficulty must be an integer from 1 to 30."
+            )
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, from_room_id, to_room_id, has_trap
+                FROM room_connections
+                WHERE (
+                    from_room_id = ? AND exit_name = ? COLLATE NOCASE
+                ) OR (
+                    to_room_id = ? AND bidirectional = 1
+                    AND return_exit_name = ? COLLATE NOCASE
+                )
+                """,
+                (room_id, exit_name, room_id, exit_name),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(
+                    f"Connection '{exit_name}' does not exist on room '{room_id}'."
+                )
+            connection.execute(
+                """
+                UPDATE room_connections
+                SET trap_disarm_difficulty = ?
+                WHERE id = ?
+                """,
+                (difficulty if row["has_trap"] else None, row["id"]),
+            )
+            self._queue_map_refresh_for_room(connection, row["from_room_id"])
+            self._queue_map_refresh_for_room(connection, row["to_room_id"])
 
     def set_connection_trap(
         self,
@@ -2179,7 +2536,7 @@ class Database:
                        links.to_room_id, links.return_exit_name,
                        links.bidirectional, links.hidden, links.connection_type,
                        links.has_lock, links.is_locked, links.unlock_difficulty,
-                       links.is_broken,
+                       links.is_broken, links.is_open,
                        links.has_trap, links.trap_state,
                        links.trap_detection_difficulty,
                        links.trap_damage_type, links.trap_damage
@@ -2204,6 +2561,7 @@ class Database:
                     bool(row["is_locked"]),
                     row["unlock_difficulty"],
                     bool(row["is_broken"]),
+                    bool(row["is_open"]),
                     bool(row["has_trap"]),
                     (
                         TrapState(row["trap_state"])
@@ -2327,10 +2685,18 @@ class Database:
                 )
 
     def move_character(self, character_id: int, destination: str) -> Room:
+        return self.move_character_with_result(character_id, destination).room
+
+    def move_character_with_result(
+        self, character_id: int, destination: str
+    ) -> MovementResult:
         destination = destination.strip()
+        trap_triggered = False
+        trap_damage = 0
+        trap_damage_type = None
         with self._connect() as connection:
             character = connection.execute(
-                "SELECT current_room_id FROM characters WHERE id = ? AND is_archived = 0",
+                "SELECT current_room_id, hp FROM characters WHERE id = ? AND is_archived = 0",
                 (character_id,),
             ).fetchone()
             if character is None:
@@ -2352,7 +2718,11 @@ class Database:
             destination_id = exit_row["destination_room_id"]
             locked = connection.execute(
                 """
-                SELECT is_locked FROM room_connections
+                SELECT id, from_room_id, to_room_id,
+                       is_locked, is_open, connection_type,
+                       has_trap, trap_state, trap_damage_type,
+                       trap_damage
+                FROM room_connections
                 WHERE (
                     from_room_id = ? AND exit_name = ? COLLATE NOCASE
                     AND to_room_id = ?
@@ -2373,6 +2743,42 @@ class Database:
             if locked is not None and locked["is_locked"]:
                 raise InvalidMovementError("That door is locked.")
             self._require_room(connection, destination_id)
+            if (
+                locked is not None
+                and locked["has_trap"]
+                and locked["trap_state"] == TrapState.ARMED.value
+            ):
+                configured_damage = max(0, int(locked["trap_damage"] or 0))
+                trap_triggered = True
+                trap_damage = min(int(character["hp"]), configured_damage)
+                trap_damage_type = (
+                    TrapDamageType(locked["trap_damage_type"])
+                    if locked["trap_damage_type"]
+                    else None
+                )
+                if configured_damage:
+                    connection.execute(
+                        "UPDATE characters SET hp = MAX(0, hp - ?) WHERE id = ?",
+                        (configured_damage, character_id),
+                    )
+                connection.execute(
+                    "UPDATE room_connections SET trap_state = ? WHERE id = ?",
+                    (TrapState.TRIGGERED.value, locked["id"]),
+                )
+                self._queue_map_refresh_for_room(connection, locked["from_room_id"])
+                self._queue_map_refresh_for_room(connection, locked["to_room_id"])
+            if (
+                locked is not None
+                and ConnectionType(locked["connection_type"])
+                is ConnectionType.DOOR
+                and not locked["is_open"]
+            ):
+                connection.execute(
+                    "UPDATE room_connections SET is_open = 1 WHERE id = ?",
+                    (locked["id"],),
+                )
+                self._queue_map_refresh_for_room(connection, locked["from_room_id"])
+                self._queue_map_refresh_for_room(connection, locked["to_room_id"])
             connection.execute(
                 "UPDATE characters SET current_room_id = ? WHERE id = ?",
                 (destination_id, character_id),
@@ -2382,7 +2788,12 @@ class Database:
             self._queue_map_refresh_for_room(connection, destination_id)
         room = self.get_room(destination_id)
         assert room is not None
-        return room
+        return MovementResult(
+            room=room,
+            trap_triggered=trap_triggered,
+            trap_damage=trap_damage,
+            trap_damage_type=trap_damage_type,
+        )
 
     def create_floor(
         self, floor_id: str, dungeon_id: str, floor_number: int, name: str
@@ -2579,19 +2990,14 @@ class Database:
                 """
                 SELECT c.id, c.from_room_id, c.to_room_id, c.connection_type,
                        c.hidden, c.bidirectional, c.has_lock, c.is_locked,
-                       c.unlock_difficulty, c.is_broken, c.has_trap,
+                       c.unlock_difficulty, c.is_broken, c.is_open, c.has_trap,
                        c.trap_state, c.trap_detection_difficulty,
+                       c.trap_disarm_difficulty,
                        c.trap_damage_type,
                        c.trap_damage
                 FROM room_connections AS c
                 JOIN character_known_connections AS known
                   ON known.connection_id = c.id
-                JOIN character_room_knowledge AS source_room
-                  ON source_room.character_id = known.character_id
-                 AND source_room.room_id = c.from_room_id
-                JOIN character_room_knowledge AS target_room
-                  ON target_room.character_id = known.character_id
-                 AND target_room.room_id = c.to_room_id
                 WHERE known.character_id = ? AND c.hidden = 0
                 ORDER BY c.id
                 """,
@@ -2605,6 +3011,7 @@ class Database:
                 bool(row["has_lock"]),
                 bool(row["is_locked"]), row["unlock_difficulty"],
                 bool(row["is_broken"]),
+                bool(row["is_open"]),
                 bool(row["has_trap"]),
                 (
                     TrapState(row["trap_state"])
@@ -2612,6 +3019,7 @@ class Database:
                     else None
                 ),
                 row["trap_detection_difficulty"],
+                row["trap_disarm_difficulty"],
                 (
                     TrapDamageType(row["trap_damage_type"])
                     if row["trap_damage_type"] is not None
@@ -2932,6 +3340,24 @@ class Database:
             if holder.kind is HolderKind.ROOM:
                 self._queue_map_refresh_for_room(connection, holder.id)
         return ItemStack(item, existing + quantity)
+
+    def remove_item(self, holder: InventoryHolder, item_id: str) -> None:
+        """Remove an entire item stack from a world inventory."""
+        with self._connect() as connection:
+            self._validate_holder(connection, holder)
+            cursor = connection.execute(
+                """
+                DELETE FROM inventory_stacks
+                WHERE holder_kind = ? AND holder_id = ? AND item_id = ?
+                """,
+                (holder.kind.value, holder.id, item_id),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Item '{item_id}' does not exist in that inventory."
+                )
+            if holder.kind is HolderKind.ROOM:
+                self._queue_map_refresh_for_room(connection, holder.id)
 
     def get_inventory(self, holder: InventoryHolder) -> tuple[ItemStack, ...]:
         with self._connect() as connection:
@@ -3420,7 +3846,8 @@ class Database:
         """Reveal every currently visible exit from a character's room."""
         connection_rows = connection.execute(
             """
-            SELECT id, from_room_id, to_room_id, bidirectional
+                SELECT id, from_room_id, to_room_id, bidirectional,
+                       connection_type, is_open
             FROM room_connections
             WHERE hidden = 0 AND (
                 from_room_id = ? OR (to_room_id = ? AND bidirectional = 1)
@@ -3442,6 +3869,12 @@ class Database:
                 if connection_row["from_room_id"] == room_id
                 else connection_row["from_room_id"]
             )
+            if (
+                ConnectionType(connection_row["connection_type"])
+                is ConnectionType.DOOR
+                and not connection_row["is_open"]
+            ):
+                continue
             connection.execute(
                 """
                 INSERT INTO character_room_knowledge (

@@ -40,6 +40,20 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNotNone(character)
         self.assertEqual(character.hp, 17)
 
+    def test_character_attribute_reads_persisted_profile_score(self) -> None:
+        character = self.database.create_character(123, "Olof", 22)
+        assert character.character_id is not None
+        with self.database._connect() as connection:
+            connection.execute(
+                "UPDATE characters SET dexterity = 16 WHERE id = ?",
+                (character.character_id,),
+            )
+
+        self.assertEqual(
+            self.database.get_character_attribute(character.character_id, "dexterity"),
+            16,
+        )
+
     def test_connection_lock_columns_are_migrated_for_existing_databases(self) -> None:
         legacy_path = Path(self.temp_directory.name) / "legacy-connections.db"
         with closing(sqlite3.connect(legacy_path)) as connection:
@@ -69,10 +83,12 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("has_lock", columns)
         self.assertIn("is_locked", columns)
         self.assertIn("is_broken", columns)
+        self.assertIn("is_open", columns)
         self.assertIn("unlock_difficulty", columns)
         self.assertIn("has_trap", columns)
         self.assertIn("trap_state", columns)
         self.assertIn("trap_detection_difficulty", columns)
+        self.assertIn("trap_disarm_difficulty", columns)
         self.assertIn("trap_damage_type", columns)
         self.assertIn("trap_damage", columns)
 

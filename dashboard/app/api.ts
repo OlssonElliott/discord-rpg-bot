@@ -15,7 +15,7 @@ export type CharacterSummary = {
 
 export type CatalogItem = {
   id: string;
-  item_type: 'weapon' | 'armor' | 'clothing' | 'container' | 'consumable' | 'readable' | 'misc';
+  item_type: 'weapon' | 'armor' | 'clothing' | 'container' | 'consumable' | 'readable' | 'tool' | 'misc';
   name: string;
   rarity: string;
   value: number;
@@ -63,10 +63,12 @@ export type ConnectionData = {
   has_lock: boolean;
   is_locked: boolean;
   is_broken: boolean;
+  is_open: boolean;
   unlock_difficulty: number | null;
   has_trap: boolean;
   trap_state: 'armed' | 'disarmed' | 'triggered' | null;
   trap_detection_difficulty: number | null;
+  trap_disarm_difficulty: number | null;
   trap_damage_type: string | null;
   trap_damage: number | null;
 };

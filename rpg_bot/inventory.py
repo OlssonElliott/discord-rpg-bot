@@ -25,6 +25,7 @@ class ItemType(str, Enum):
     CONTAINER = "container"
     CONSUMABLE = "consumable"
     READABLE = "readable"
+    TOOL = "tool"
     MISC = "misc"
 
 
