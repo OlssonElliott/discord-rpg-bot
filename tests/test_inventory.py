@@ -308,6 +308,17 @@ class InventoryTests(unittest.TestCase):
 
 
 class ItemCatalogTests(unittest.TestCase):
+    def test_default_catalog_contains_lock_and_trap_tools(self) -> None:
+        catalog = ItemCatalog.load(Path("assets/items/items.json"))
+
+        lockpicks = catalog.get("lockpicks")
+        disarm_kit = catalog.get("trap_disarm_kit")
+
+        self.assertIs(lockpicks.item_type, ItemType.TOOL)
+        self.assertIs(disarm_kit.item_type, ItemType.TOOL)
+        self.assertFalse(lockpicks.stackable)
+        self.assertFalse(disarm_kit.stackable)
+
     def test_readable_content_persists_and_can_be_edited(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "items.json"

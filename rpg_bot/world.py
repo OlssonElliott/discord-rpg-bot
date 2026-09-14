@@ -111,6 +111,14 @@ class Room:
 
 
 @dataclass(frozen=True, slots=True)
+class MovementResult:
+    room: Room
+    trap_triggered: bool = False
+    trap_damage: int = 0
+    trap_damage_type: TrapDamageType | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RoomEditorNode:
     room: Room
     x: float
@@ -131,9 +139,11 @@ class GraphConnection:
     is_locked: bool = False
     unlock_difficulty: int | None = None
     is_broken: bool = False
+    is_open: bool = False
     has_trap: bool = False
     trap_state: TrapState | None = None
     trap_detection_difficulty: int | None = None
+    trap_disarm_difficulty: int | None = None
     trap_damage_type: TrapDamageType | None = None
     trap_damage: int | None = None
 

@@ -140,8 +140,13 @@ class PlayerViewService:
                     connection.has_lock,
                     connection.is_locked,
                     connection.is_broken,
+                    connection.is_open,
                     connection.has_trap,
                     connection.trap_state,
+                    source.x,
+                    source.y,
+                    target.x,
+                    target.y,
                 )
             )
 

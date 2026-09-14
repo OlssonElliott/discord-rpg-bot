@@ -263,6 +263,22 @@ class DashboardAPITests(unittest.TestCase):
         _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
         self.assertTrue(graph["connections"][0]["is_broken"])
 
+        _, opened = self.api.handle(
+            "PATCH",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "exit_name": "north",
+                "connection_type": "door",
+                "is_open": True,
+                "bidirectional": True,
+                "return_exit_name": "south",
+            },
+        )
+        self.assertTrue(opened["is_open"])
+        _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+        self.assertTrue(graph["connections"][0]["is_open"])
+
     def test_hallway_cannot_be_locked(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
         for room_id in ("entrance", "hall"):
@@ -561,6 +577,26 @@ class DashboardAPITests(unittest.TestCase):
         )
         self.assertEqual(reloaded.get("iron_key").name, "Iron Key")
 
+    def test_tool_item_can_be_created(self) -> None:
+        status, created = self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "fine_lockpicks",
+                "item_type": "tool",
+                "name": "Fine Lockpicks",
+                "description": "Tools for delicate locks.",
+                "rarity": "Uncommon",
+                "value": 30,
+                "weight": 0,
+                "slot_cost": 1,
+            },
+        )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(created["item_type"], "tool")
+        self.assertFalse(created["stackable"])
+
     def test_creating_catalog_item_migrates_matching_legacy_character_item(self) -> None:
         character = self.database.create_character(123, "Olof", 20)
         self.world.create_item("old_key", "Key", stackable=False)
@@ -601,6 +637,51 @@ class DashboardAPITests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("Unknown item template", payload["error"])
+
+    def test_room_items_enemies_and_containers_can_be_removed(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "lockpicks",
+                "item_type": "tool",
+                "name": "Lockpicks",
+                "rarity": "Common",
+                "value": 15,
+                "weight": 0,
+            },
+        )
+        self.api.handle(
+            "POST", "/api/rooms/hall/items", {"item_id": "lockpicks", "quantity": 1}
+        )
+        for entity_id, kind in (("rat", "enemy"), ("chest", "container")):
+            self.api.handle(
+                "POST",
+                "/api/rooms/hall/entities",
+                {"id": entity_id, "name": entity_id.title(), "kind": kind},
+            )
+
+        item_status, _ = self.api.handle(
+            "DELETE", "/api/rooms/hall/items/lockpicks"
+        )
+        enemy_status, _ = self.api.handle(
+            "DELETE", "/api/rooms/hall/entities/rat"
+        )
+        container_status, _ = self.api.handle(
+            "DELETE", "/api/rooms/hall/entities/chest"
+        )
+
+        room = self.world.get_room("hall")
+        self.assertEqual((item_status, enemy_status, container_status), (200, 200, 200))
+        self.assertEqual(room.loose_items, ())
+        self.assertEqual(room.enemies, ())
+        self.assertEqual(room.containers, ())
 
     def test_readable_item_content_is_created_and_edited(self) -> None:
         created_status, created = self.api.handle(

@@ -80,9 +80,11 @@ class RoomConnection:
     is_locked: bool = False
     unlock_difficulty: int | None = None
     is_broken: bool = False
+    is_open: bool = False
     has_trap: bool = False
     trap_state: TrapState | None = None
     trap_detection_difficulty: int | None = None
+    trap_disarm_difficulty: int | None = None
     trap_damage_type: TrapDamageType | None = None
     trap_damage: int | None = None
 
@@ -148,8 +150,13 @@ class PlayerMapConnection:
     has_lock: bool = False
     is_locked: bool = False
     is_broken: bool = False
+    is_open: bool = False
     has_trap: bool = False
     trap_state: TrapState | None = None
+    from_x: float | None = None
+    from_y: float | None = None
+    to_x: float | None = None
+    to_y: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

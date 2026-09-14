@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from rpg_bot.database import Database
-from rpg_bot.dungeon import ConnectionType
+from rpg_bot.dungeon import ConnectionType, TrapDamageType, TrapState
 from rpg_bot.world import (
     EntityKind,
     InvalidMovementError,
@@ -97,6 +97,9 @@ class WorldServiceTests(unittest.TestCase):
         self.world.set_connection_lock(
             self.entrance.id, "north", has_lock=True, is_locked=False
         )
+        self.world.set_connection_open(
+            self.entrance.id, "north", is_open=True
+        )
         moved = self.world.move_character(self.character_id, "north")
 
         self.assertEqual(moved.id, self.hall.id)
@@ -113,10 +116,48 @@ class WorldServiceTests(unittest.TestCase):
             is_locked=False,
             is_broken=True,
         )
+        self.world.set_connection_open(
+            self.entrance.id, "north", is_open=True
+        )
 
         moved = self.world.move_character(self.character_id, "north")
 
         self.assertEqual(moved.id, self.hall.id)
+
+    def test_closed_unlocked_door_opens_automatically_when_moving_through(self) -> None:
+        self.world.place_character(self.character_id, self.entrance.id)
+        self.world.set_connection_type(
+            self.entrance.id, "north", ConnectionType.DOOR
+        )
+
+        moved = self.world.move_character(self.character_id, "north")
+
+        self.assertEqual(moved.id, self.hall.id)
+
+    def test_movement_result_reports_triggered_trap_damage(self) -> None:
+        self.world.place_character(self.character_id, self.entrance.id)
+        self.world.set_connection_type(
+            self.entrance.id, "north", ConnectionType.HALLWAY
+        )
+        self.world.set_connection_trap(
+            self.entrance.id,
+            "north",
+            has_trap=True,
+            trap_state=TrapState.ARMED,
+            trap_detection_difficulty=14,
+            trap_damage_type=TrapDamageType.FIRE,
+            trap_damage=6,
+        )
+
+        result = self.world.move_character_with_result(
+            self.character_id, "north"
+        )
+
+        self.assertEqual(result.room.id, self.hall.id)
+        self.assertTrue(result.trap_triggered)
+        self.assertEqual(result.trap_damage, 6)
+        self.assertIs(result.trap_damage_type, TrapDamageType.FIRE)
+        self.assertEqual(self.database.get_character(123).hp, 14)
 
     def test_takes_and_drops_loose_stacked_items_without_duplication(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)

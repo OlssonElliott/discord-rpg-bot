@@ -298,6 +298,19 @@ class DashboardAPI:
             )
             return 201, asdict(entity)
 
+        match = re.fullmatch(r"/api/rooms/([^/]+)/entities/([^/]+)", path)
+        if match and method == "DELETE":
+            room_id, entity_id = match.groups()
+            room = self.world.get_room(room_id)
+            if room is None:
+                raise ValueError(f"Room '{room_id}' does not exist.")
+            if not any(entity.id == entity_id for entity in room.entities):
+                raise ValueError(
+                    f"Entity '{entity_id}' does not exist in room '{room_id}'."
+                )
+            self.world.remove_entity(entity_id)
+            return 200, {"deleted": entity_id}
+
         match = re.fullmatch(r"/api/rooms/([^/]+)/items", path)
         if match and method == "POST":
             room_id = match.group(1)
@@ -312,6 +325,12 @@ class DashboardAPI:
                 quantity,
             )
             return 201, _stack_data(stack)
+
+        match = re.fullmatch(r"/api/rooms/([^/]+)/items/([^/]+)", path)
+        if match and method == "DELETE":
+            room_id, item_id = match.groups()
+            self.world.remove_item(InventoryHolder.room(room_id), item_id)
+            return 200, {"deleted": item_id}
 
         if path == "/api/connections" and method == "POST":
             exit_name = self._text(body, "exit_name")
@@ -331,6 +350,8 @@ class DashboardAPI:
             self._validate_door_lock(
                 connection_type, has_lock, is_locked, is_broken, unlock_difficulty
             )
+            is_open = self._boolean(body, "is_open", default=False)
+            self._validate_door_open(connection_type, is_open, is_locked)
             has_trap = self._boolean(body, "has_trap", default=False)
             trap_state = (
                 self._trap_state(body, default=TrapState.ARMED)
@@ -373,6 +394,7 @@ class DashboardAPI:
                 has_lock=has_lock,
                 is_locked=is_locked,
                 is_broken=is_broken,
+                is_open=is_open,
                 unlock_difficulty=unlock_difficulty,
                 has_trap=has_trap,
                 trap_state=trap_state,
@@ -390,6 +412,7 @@ class DashboardAPI:
                 "has_lock": has_lock,
                 "is_locked": is_locked,
                 "is_broken": is_broken,
+                "is_open": is_open,
                 "unlock_difficulty": unlock_difficulty,
                 "has_trap": has_trap,
                 "trap_state": trap_state.value if trap_state is not None else None,
@@ -411,6 +434,8 @@ class DashboardAPI:
             connection_type = (
                 self._connection_type(body) if "connection_type" in body else None
             )
+            open_was_supplied = "is_open" in body
+            is_open = self._boolean(body, "is_open", default=False)
             lock_was_supplied = (
                 "has_lock" in body
                 or "is_locked" in body
@@ -465,6 +490,9 @@ class DashboardAPI:
                     connection_type, has_lock, is_locked, is_broken,
                     unlock_difficulty
                 )
+                self._validate_door_open(connection_type, is_open, is_locked)
+            elif is_open and is_locked:
+                raise ValueError("A locked door cannot be open.")
             if trap_was_supplied:
                 self._validate_trap(
                     has_trap,
@@ -491,6 +519,12 @@ class DashboardAPI:
                     is_broken=is_broken,
                     unlock_difficulty=unlock_difficulty,
                 )
+            if open_was_supplied:
+                self.world.set_connection_open(
+                    source_room_id,
+                    exit_name,
+                    is_open=is_open,
+                )
             if trap_was_supplied:
                 self.world.set_connection_trap(
                     source_room_id,
@@ -506,6 +540,9 @@ class DashboardAPI:
                 "exit_name": exit_name,
                 "bidirectional": bidirectional,
                 "return_exit_name": return_exit_name,
+                **(
+                    {"is_open": is_open} if open_was_supplied else {}
+                ),
                 **(
                     {"connection_type": connection_type.value}
                     if connection_type is not None
@@ -612,6 +649,17 @@ class DashboardAPI:
             raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
 
     @staticmethod
+    def _validate_door_open(
+        connection_type: ConnectionType,
+        is_open: bool,
+        is_locked: bool,
+    ) -> None:
+        if is_open and connection_type is not ConnectionType.DOOR:
+            raise ValueError("Only door connections can be open.")
+        if is_open and is_locked:
+            raise ValueError("A locked door cannot be open.")
+
+    @staticmethod
     def _trap_damage_type(
         body: JsonObject,
         *,
@@ -677,7 +725,8 @@ class DashboardAPI:
             item_type = ItemType(cls._text(body, "item_type"))
         except ValueError as error:
             raise ValueError(
-                "Item type must be weapon, armor, clothing, container, consumable, readable, or misc."
+                "Item type must be weapon, armor, clothing, container, consumable, "
+                "readable, tool, or misc."
             ) from error
 
         value = cls._integer(body, "value", default=0)

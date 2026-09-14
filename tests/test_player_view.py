@@ -28,6 +28,7 @@ from rpg_bot.map_renderer import (
     CONNECTION_ART_HEIGHT,
     CONNECTION_ROOM_GAP,
     DOOR_ART_PATH,
+    OPEN_DOOR_ART_PATH,
     HALLWAY_ART_PATH,
     LOCKED_ART_PATH,
     BROKEN_LOCK_ART_PATH,
@@ -53,6 +54,7 @@ from rpg_bot.map_renderer import (
     _layout,
     _loaded_room_art,
     _loaded_door_art,
+    _loaded_open_door_art,
     _loaded_hallway_art,
     _loaded_locked_art,
     _loaded_broken_lock_art,
@@ -104,6 +106,7 @@ class PlayerViewServiceTests(unittest.TestCase):
         self.door = self.world.connect_rooms(
             "entrance", "east", "chapel", return_exit_name="west",
             connection_type=ConnectionType.DOOR,
+            is_open=True,
         )
         self.stairs = self.world.connect_rooms(
             "chapel", "down", "cellar", return_exit_name="up",
@@ -222,6 +225,29 @@ class PlayerViewServiceTests(unittest.TestCase):
                     changed_bounds[3] - changed_bounds[1],
                     changed_bounds[2] - changed_bounds[0],
                 )
+
+    def test_open_door_uses_distinct_equally_sized_art(self) -> None:
+        self.assertTrue(OPEN_DOOR_ART_PATH.is_file())
+        closed_art = _loaded_door_art()
+        open_art = _loaded_open_door_art()
+        self.assertIsNotNone(closed_art)
+        self.assertIsNotNone(open_art)
+        assert closed_art is not None and open_art is not None
+        self.assertEqual(closed_art.height, open_art.height)
+
+        closed = Image.new("RGB", (180, 180), "black")
+        opened = Image.new("RGB", (180, 180), "black")
+        _draw_connector_art(
+            closed, (90, 90), ConnectionType.DOOR, fog_strength=0
+        )
+        _draw_connector_art(
+            opened,
+            (90, 90),
+            ConnectionType.DOOR,
+            is_open=True,
+            fog_strength=0,
+        )
+        self.assertNotEqual(closed.tobytes(), opened.tobytes())
 
     def test_legacy_passage_uses_hallway_art(self) -> None:
         hallway = _loaded_hallway_art()
@@ -514,6 +540,36 @@ class PlayerViewServiceTests(unittest.TestCase):
 
         self.assertNotIn(connection.id, [item.id for item in view.connections])
         self.assertNotIn(self.unknown.id, [room.id for room in view.rooms])
+
+    def test_closed_door_opens_automatically_when_walked_through_and_stays_open(self) -> None:
+        self.world.place_character(self.alice_id, self.entrance.id)
+        connection = self.world.connect_rooms(
+            self.entrance.id,
+            "south",
+            self.unknown.id,
+            return_exit_name="north",
+            connection_type=ConnectionType.DOOR,
+            is_open=False,
+        )
+
+        closed_view = self.views.build_player_map(self.alice_id)
+        self.assertNotIn(self.unknown.id, [room.id for room in closed_view.rooms])
+        closed_door = next(
+            item for item in closed_view.connections if item.id == connection.id
+        )
+        self.assertFalse(closed_door.is_open)
+        self.assertEqual(render_player_map(closed_view).read(8), b"\x89PNG\r\n\x1a\n")
+
+        self.world.move_character(self.alice_id, "south")
+        opened_view = self.views.build_player_map(self.alice_id)
+        self.assertTrue(
+            next(item for item in opened_view.connections if item.id == connection.id).is_open
+        )
+        self.assertIn(self.unknown.id, [room.id for room in opened_view.rooms])
+        remembered = next(
+            room for room in opened_view.rooms if room.id == self.unknown.id
+        )
+        self.assertEqual(remembered.knowledge_state, KnowledgeState.VISITED)
 
     def test_ensure_location_knowledge_repairs_a_missing_current_room_connector(self) -> None:
         self.world.place_character(self.alice_id, self.entrance.id)

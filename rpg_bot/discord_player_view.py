@@ -215,7 +215,7 @@ class DungeonMapControls(discord.ui.View):
             custom_id=f"dungeon-map:refresh:{view.character_id}",
             row=2,
         )
-        refresh.callback = self._refresh
+        refresh.callback = self._refresh_map
         self.add_item(refresh)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -240,7 +240,7 @@ class DungeonMapControls(discord.ui.View):
         self.adapter.views.focus_room(self.character_id, selected)
         await self._replace(interaction)
 
-    async def _refresh(self, interaction: discord.Interaction) -> None:
+    async def _refresh_map(self, interaction: discord.Interaction) -> None:
         await self._replace(interaction)
 
     async def _replace(self, interaction: discord.Interaction) -> None:

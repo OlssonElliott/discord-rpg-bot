@@ -119,6 +119,10 @@ button, input, textarea { font: inherit; }
 .content-summary p { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: #bcc5d0; font-size: .82rem; }
 .content-summary svg { color: #d39a4a; }
 .content-summary strong { margin-left: auto; }
+.content-summary .remove-content { display: grid; place-items: center; margin-left: auto; padding: 3px; color: #8e9bae; border-radius: 4px; }
+.content-summary strong + .remove-content { margin-left: 0; }
+.content-summary .remove-content:hover { color: #df8580; background: rgba(223, 133, 128, .1); }
+.content-summary .remove-content svg { color: currentColor; }
 .inspector__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 24px; }
 .inspector__actions button:last-child { grid-column: 1 / -1; }
 .delete-location { width: 100%; margin-top: 22px; color: #df8580; }
