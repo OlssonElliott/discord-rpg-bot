@@ -1,6 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Background,
+  ConnectionMode,
+  Controls,
+  Handle,
+  MiniMap,
+  Position,
+  ReactFlow,
+  useEdgesState,
+  useNodesState,
+  type Connection,
+  type Edge,
+  type Node,
+  type NodeProps,
+} from '@xyflow/react';
 import {
   CircleAlert,
   Flag,
@@ -17,6 +32,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import type {
+  CombatLandmarkData,
   CombatSceneData,
   CombatantData,
   RoomData,
@@ -60,6 +76,134 @@ function fallbackPosition(index: number, count: number) {
 
 function clamp(value: number) {
   return Math.min(0.94, Math.max(0.06, value));
+}
+
+const COMBAT_LAYOUT_WIDTH = 1000;
+const COMBAT_LAYOUT_HEIGHT = 700;
+
+type CombatLandmarkNodeData = {
+  landmark: CombatLandmarkData;
+  combatants: CombatantData[];
+} & Record<string, unknown>;
+
+type CardinalHandle = 'top' | 'right' | 'bottom' | 'left';
+
+function routeKey(sourceId: string, destinationId: string) {
+  return [sourceId, destinationId].sort().join('::');
+}
+
+function connectionHandles(
+  source: { x: number; y: number } | undefined,
+  target: { x: number; y: number } | undefined,
+): { sourceHandle?: CardinalHandle; targetHandle?: CardinalHandle } {
+  if (!source || !target) return {};
+  const horizontal = Math.abs(target.x - source.x) > Math.abs(target.y - source.y);
+  if (horizontal) {
+    return target.x >= source.x
+      ? { sourceHandle: 'right', targetHandle: 'left' }
+      : { sourceHandle: 'left', targetHandle: 'right' };
+  }
+  return target.y >= source.y
+    ? { sourceHandle: 'bottom', targetHandle: 'top' }
+    : { sourceHandle: 'top', targetHandle: 'bottom' };
+}
+
+function CombatLandmarkNode({
+  data,
+  selected,
+}: NodeProps<Node<CombatLandmarkNodeData>>) {
+  const { landmark, combatants } = data;
+  const kind = landmark.synthetic
+    ? 'Anchor'
+    : landmark.feature_type === 'door'
+      ? 'Door'
+      : 'Landmark';
+
+  return (
+    <article
+      className={[
+        'combat-landmark-node',
+        landmark.synthetic ? 'combat-landmark-node--synthetic' : '',
+        landmark.feature_type === 'door' ? 'combat-landmark-node--door' : '',
+        selected ? 'combat-landmark-node--selected' : '',
+      ].filter(Boolean).join(' ')}
+    >
+      <Handle id="top" type="source" position={Position.Top} />
+      <Handle id="right" type="source" position={Position.Right} />
+      <Handle id="bottom" type="source" position={Position.Bottom} />
+      <Handle id="left" type="source" position={Position.Left} />
+      <div className="combat-landmark-node__eyebrow">{kind}</div>
+      <div className="combat-landmark-node__title">
+        <Flag size={14} />
+        <strong>{landmark.name}</strong>
+      </div>
+      {landmark.feature_type && landmark.feature_type !== 'door' && (
+        <span className="combat-landmark-node__type">{landmark.feature_type}</span>
+      )}
+      {landmark.source_connection_id && (
+        <span className="combat-landmark-node__type">linked room exit</span>
+      )}
+      <div className="combat-landmark-node__occupants">
+        {combatants.map((combatant) => (
+          <span
+            key={`${combatant.kind}:${combatant.source_id}`}
+            className={`combat-token combat-token--${combatant.kind}`}
+          >
+            {combatant.kind === 'character' ? <Users size={12} /> : <Skull size={12} />}
+            {combatant.name}
+            {combatant.relation !== 'at' && <small>{combatant.relation}</small>}
+          </span>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+const combatNodeTypes = { landmark: CombatLandmarkNode };
+
+function combatNodes(scene: CombatSceneData): Node<CombatLandmarkNodeData>[] {
+  return scene.landmarks.map((landmark, index) => {
+    const fallback = fallbackPosition(index, scene.landmarks.length);
+    const x = landmark.x ?? fallback.x;
+    const y = landmark.y ?? fallback.y;
+    return {
+      id: landmark.id,
+      type: 'landmark',
+      position: {
+        x: x * COMBAT_LAYOUT_WIDTH,
+        y: y * COMBAT_LAYOUT_HEIGHT,
+      },
+      data: {
+        landmark,
+        combatants: scene.combatants.filter(
+          (combatant) => combatant.landmark_id === landmark.id,
+        ),
+      },
+    };
+  });
+}
+
+function combatEdges(
+  scene: CombatSceneData,
+  nodes: Node<CombatLandmarkNodeData>[],
+): Edge[] {
+  const positions = new globalThis.Map(
+    nodes.map((node) => [node.id, node.position]),
+  );
+  return scene.routes.map((route) => ({
+    id: routeKey(route.source_landmark_id, route.destination_landmark_id),
+    source: route.source_landmark_id,
+    target: route.destination_landmark_id,
+    ...connectionHandles(
+      positions.get(route.source_landmark_id),
+      positions.get(route.destination_landmark_id),
+    ),
+    type: 'straight',
+    label: route.blocked ? `${route.distance} · blocked` : route.distance,
+    className: route.blocked
+      ? 'combat-connection-edge combat-connection-edge--blocked'
+      : 'combat-connection-edge',
+  }));
 }
 
 function CombatantEditor({
@@ -136,8 +280,10 @@ export function CombatWorkspace({
   onMoveCombatant,
   onConnectLandmarks,
 }: CombatWorkspaceProps) {
-  const board = useRef<HTMLDivElement>(null);
   const [startRoomId, setStartRoomId] = useState(preferredRoomId || rooms[0]?.id || '');
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<CombatLandmarkNodeData>>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routeSource, setRouteSource] = useState('');
   const [routeDestination, setRouteDestination] = useState('');
   const [routeDistance, setRouteDistance] = useState<Distance>('close');
@@ -166,29 +312,96 @@ export function CombatWorkspace({
     }
   }, [routeDestination, routeSource, scene]);
 
-  const positions = useMemo(() => {
-    const result = new Map<string, { x: number; y: number }>();
-    if (!scene) return result;
-    scene.landmarks.forEach((landmark, index) => {
-      const fallback = fallbackPosition(index, scene.landmarks.length);
-      result.set(landmark.id, {
-        x: landmark.x ?? fallback.x,
-        y: landmark.y ?? fallback.y,
-      });
-    });
-    return result;
+  useEffect(() => {
+    if (!scene) {
+      setNodes([]);
+      setEdges([]);
+      setSelectedRouteId(null);
+      return;
+    }
+    const nextNodes = combatNodes(scene);
+    setNodes(nextNodes);
+    setEdges(combatEdges(scene, nextNodes));
+    if (
+      selectedRouteId
+      && !scene.routes.some(
+        (route) => routeKey(
+          route.source_landmark_id,
+          route.destination_landmark_id,
+        ) === selectedRouteId,
+      )
+    ) {
+      setSelectedRouteId(null);
+    }
+  }, [scene, selectedRouteId, setEdges, setNodes]);
+
+  const selectRoute = useCallback((sourceId: string, destinationId: string) => {
+    if (!scene) return;
+    const key = routeKey(sourceId, destinationId);
+    const route = scene.routes.find(
+      (item) => routeKey(
+        item.source_landmark_id,
+        item.destination_landmark_id,
+      ) === key,
+    );
+    if (!route) return;
+    setSelectedRouteId(key);
+    setRouteSource(route.source_landmark_id);
+    setRouteDestination(route.destination_landmark_id);
+    setRouteDistance(route.distance);
+    setRouteObstacle(route.obstacle || '');
+    setRouteBlocked(route.blocked);
   }, [scene]);
 
-  const combatantsByLandmark = useMemo(() => {
-    const result = new Map<string, CombatantData[]>();
-    for (const combatant of scene?.combatants ?? []) {
-      result.set(
-        combatant.landmark_id,
-        [...(result.get(combatant.landmark_id) ?? []), combatant],
-      );
+  const connectNodes = useCallback((candidate: Connection) => {
+    if (
+      !scene
+      || busy
+      || !candidate.source
+      || !candidate.target
+      || candidate.source === candidate.target
+    ) {
+      return;
     }
-    return result;
-  }, [scene]);
+    const existing = scene.routes.find(
+      (route) => routeKey(
+        route.source_landmark_id,
+        route.destination_landmark_id,
+      ) === routeKey(candidate.source!, candidate.target!),
+    );
+    if (existing) {
+      selectRoute(existing.source_landmark_id, existing.destination_landmark_id);
+      return;
+    }
+
+    setRouteSource(candidate.source);
+    setRouteDestination(candidate.target);
+    setRouteDistance('close');
+    setRouteObstacle('');
+    setRouteBlocked(false);
+    void onConnectLandmarks(
+      candidate.source,
+      candidate.target,
+      'close',
+      '',
+      false,
+    ).then((saved) => {
+      if (saved) {
+        setSelectedRouteId(routeKey(candidate.source!, candidate.target!));
+      }
+    });
+  }, [busy, onConnectLandmarks, scene, selectRoute]);
+
+  const saveLandmarkPosition = useCallback(
+    (_event: unknown, node: Node<CombatLandmarkNodeData>) => {
+      void onPositionLandmark(
+        node.id,
+        clamp(node.position.x / COMBAT_LAYOUT_WIDTH),
+        clamp(node.position.y / COMBAT_LAYOUT_HEIGHT),
+      );
+    },
+    [onPositionLandmark],
+  );
 
   if (!scene) {
     return (
@@ -198,8 +411,8 @@ export function CombatWorkspace({
           <p className="kicker">Combat workspace</p>
           <h2>No active combat</h2>
           <p>
-            Start from a location. Its room features become persistent combat
-            landmarks and everyone currently in the room joins the scene.
+            Start from a location. Its room features and doors become persistent
+            combat landmarks and everyone currently in the room joins the scene.
           </p>
           <label htmlFor="combat-start-room">Location</label>
           <NativeSelect
@@ -248,69 +461,37 @@ export function CombatWorkspace({
             <RefreshCw /> Refresh
           </Button>
         </div>
-        <div ref={board} className="combat-board">
-          <svg className="combat-route-lines" aria-hidden="true">
-            {scene.routes.map((route) => {
-              const source = positions.get(route.source_landmark_id);
-              const destination = positions.get(route.destination_landmark_id);
-              if (!source || !destination) return null;
-              return (
-                <line
-                  key={`${route.source_landmark_id}:${route.destination_landmark_id}`}
-                  x1={`${source.x * 100}%`}
-                  y1={`${source.y * 100}%`}
-                  x2={`${destination.x * 100}%`}
-                  y2={`${destination.y * 100}%`}
-                  className={route.blocked ? 'combat-route-line combat-route-line--blocked' : 'combat-route-line'}
-                />
-              );
-            })}
-          </svg>
-          {scene.landmarks.map((landmark) => {
-            const position = positions.get(landmark.id) || { x: 0.5, y: 0.5 };
-            const occupants = combatantsByLandmark.get(landmark.id) ?? [];
-            return (
-              <div
-                key={landmark.id}
-                className={`combat-landmark${landmark.synthetic ? ' combat-landmark--synthetic' : ''}`}
-                style={{
-                  left: `${position.x * 100}%`,
-                  top: `${position.y * 100}%`,
-                }}
-                draggable={!busy}
-                onDragEnd={(event) => {
-                  const bounds = board.current?.getBoundingClientRect();
-                  if (!bounds || event.clientX === 0 || event.clientY === 0) return;
-                  void onPositionLandmark(
-                    landmark.id,
-                    clamp((event.clientX - bounds.left) / bounds.width),
-                    clamp((event.clientY - bounds.top) / bounds.height),
-                  );
-                }}
-              >
-                <div className="combat-landmark__title">
-                  <Flag size={14} />
-                  <strong>{landmark.name}</strong>
-                </div>
-                {landmark.feature_type && (
-                  <span className="combat-landmark__type">{landmark.feature_type}</span>
-                )}
-                <div className="combat-landmark__occupants">
-                  {occupants.map((combatant) => (
-                    <span
-                      key={`${combatant.kind}:${combatant.source_id}`}
-                      className={`combat-token combat-token--${combatant.kind}`}
-                    >
-                      {combatant.kind === 'character' ? <Users size={12} /> : <Skull size={12} />}
-                      {combatant.name}
-                      {combatant.relation !== 'at' && <small>{combatant.relation}</small>}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-          <div className="combat-board__hint">Drag a landmark to persist its visual position.</div>
+        <div className="combat-board">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={combatNodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onNodeDragStop={saveLandmarkPosition}
+            onConnect={connectNodes}
+            onEdgeClick={(_, edge) => selectRoute(edge.source, edge.target)}
+            onPaneClick={() => setSelectedRouteId(null)}
+            connectionMode={ConnectionMode.Loose}
+            nodesDraggable={!busy}
+            nodesConnectable={!busy}
+            fitView
+            minZoom={0.35}
+            maxZoom={1.8}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background color="#334155" gap={28} size={1} />
+            <MiniMap
+              pannable
+              zoomable
+              nodeColor="#d39a4a"
+              maskColor="rgba(8, 15, 26, 0.72)"
+            />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+          <div className="combat-board__hint">
+            Drag landmarks to arrange · Drag a handle to connect · Click a connection to edit
+          </div>
         </div>
       </div>
 
@@ -340,7 +521,11 @@ export function CombatWorkspace({
         </section>
 
         <section className="combat-control-section">
-          <h3><Route size={15} /> Landmark route</h3>
+          <h3><Route size={15} /> Connection</h3>
+          <p className="combat-connection-help">
+            Drag between landmark handles to create a close connection. Click an
+            existing connection on the map to edit its distance, obstacle or state.
+          </p>
           <label htmlFor="combat-route-source">From</label>
           <NativeSelect id="combat-route-source" value={routeSource} onChange={(event) => setRouteSource(event.target.value)}>
             {scene.landmarks.map((landmark) => (
@@ -372,7 +557,7 @@ export function CombatWorkspace({
               checked={routeBlocked}
               onChange={(event) => setRouteBlocked(event.target.checked)}
             />
-            Route is blocked
+            Connection is blocked
           </label>
           <Button
             size="sm"
@@ -385,7 +570,7 @@ export function CombatWorkspace({
               routeBlocked,
             )}
           >
-            Save route
+            Save connection
           </Button>
           <div className="combat-route-list">
             {scene.routes.map((route) => {

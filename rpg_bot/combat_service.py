@@ -12,6 +12,7 @@ from .combat import (
 )
 from .combat_repository import CombatRepository
 from .database import Database
+from .dungeon import ConnectionType
 from .world_service import WorldService
 
 
@@ -58,6 +59,33 @@ class CombatService:
             )
             for feature in self.world.list_room_features(room_id)
         )
+
+        for connection in self.world.area_graph(room.area_id).connections:
+            if connection.connection_type is not ConnectionType.DOOR:
+                continue
+            if connection.source_room_id == room_id:
+                exit_name = connection.exit_name
+                adjacent_room_id = connection.destination_room_id
+            elif connection.bidirectional and connection.destination_room_id == room_id:
+                exit_name = connection.return_exit_name or connection.exit_name
+                adjacent_room_id = connection.source_room_id
+            else:
+                continue
+
+            adjacent_room = self.world.get_room(adjacent_room_id)
+            connection_key = connection.connection_id or f"{room_id}:{len(landmarks)}"
+            landmarks.append(
+                CombatLandmark(
+                    id=f"door:{connection_key}",
+                    name=f"Door: {exit_name}",
+                    description=(
+                        f"Exit to "
+                        f"{adjacent_room.name if adjacent_room is not None else adjacent_room_id}."
+                    ),
+                    source_connection_id=connection.connection_id,
+                    feature_type="door",
+                )
+            )
 
         combatants = [
             CombatantState(

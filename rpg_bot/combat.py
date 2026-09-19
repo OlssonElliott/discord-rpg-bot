@@ -34,6 +34,7 @@ class CombatLandmark:
     name: str
     description: str | None = None
     source_feature_id: str | None = None
+    source_connection_id: str | None = None
     feature_type: str | None = None
     synthetic: bool = False
     x: float | None = None

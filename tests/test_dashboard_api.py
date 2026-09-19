@@ -220,6 +220,46 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(ended["scene"])
 
+    def test_combat_scene_exposes_linked_room_door_landmark(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "gatehouse", "name": "Gatehouse"})
+        for room_id, name in (("hall", "Hall"), ("yard", "Yard")):
+            self.api.handle(
+                "POST",
+                "/api/areas/gatehouse/rooms",
+                {"id": room_id, "name": name, "x": 0, "y": 0},
+            )
+        connection_status, connection = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "hall",
+                "destination_room_id": "yard",
+                "exit_name": "north gate",
+                "return_exit_name": "south gate",
+                "connection_type": "door",
+            },
+        )
+        self.assertEqual(connection_status, 201)
+
+        status, state = self.api.handle(
+            "POST",
+            "/api/combat",
+            {"room_id": "hall"},
+        )
+
+        self.assertEqual(status, 201)
+        door = next(
+            landmark
+            for landmark in state["scene"]["landmarks"]
+            if landmark["feature_type"] == "door"
+        )
+        self.assertEqual(door["name"], "Door: north gate")
+        self.assertEqual(
+            door["source_connection_id"],
+            connection["connection_id"],
+        )
+        self.assertIn("Yard", door["description"])
+
     def test_room_feature_templates_are_reusable_and_independent(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
         for room_id in ("hall", "vault"):

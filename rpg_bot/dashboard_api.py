@@ -179,6 +179,7 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "name": landmark.name,
                 "description": landmark.description or "",
                 "source_feature_id": landmark.source_feature_id,
+                "source_connection_id": landmark.source_connection_id,
                 "feature_type": landmark.feature_type,
                 "synthetic": landmark.synthetic,
                 "x": landmark.x,
@@ -1008,7 +1009,7 @@ class DashboardAPI:
                 if bidirectional
                 else None
             )
-            self.world.connect_rooms(
+            connection = self.world.connect_rooms(
                 self._text(body, "source_room_id"),
                 exit_name,
                 self._text(body, "destination_room_id"),
@@ -1031,6 +1032,7 @@ class DashboardAPI:
                     (self._text(body, "source_room_id"), exit_name)
                 ] = trap_damage
             return 201, {
+                "connection_id": connection.id,
                 "source_room_id": body["source_room_id"],
                 "exit_name": exit_name,
                 "destination_room_id": body["destination_room_id"],

@@ -63,6 +63,7 @@ export type CombatLandmarkData = {
   name: string;
   description: string;
   source_feature_id: string | null;
+  source_connection_id: string | null;
   feature_type: string | null;
   synthetic: boolean;
   x: number | null;

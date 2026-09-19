@@ -9,6 +9,7 @@ from rpg_bot.combat import (
 )
 from rpg_bot.combat_service import CombatError, CombatService
 from rpg_bot.database import Database
+from rpg_bot.dungeon import ConnectionType
 from rpg_bot.world import EntityKind
 from rpg_bot.world_service import WorldService
 
@@ -83,6 +84,37 @@ class CombatServiceTests(unittest.TestCase):
             },
         )
         self.assertNotIn("Sven", {item.name for item in scene.combatants})
+
+    def test_room_doors_become_linked_combat_landmarks(self) -> None:
+        connection = self.world.connect_rooms(
+            self.hall.id,
+            "east gate",
+            self.other.id,
+            return_exit_name="west gate",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.feature_type == "door"
+        )
+
+        self.assertEqual(door.id, f"door:{connection.id}")
+        self.assertEqual(door.name, "Door: east gate")
+        self.assertEqual(door.source_connection_id, connection.id)
+        self.assertIn("Side Room", door.description or "")
+
+        self.service.end(44)
+        reverse_scene = self.service.start(44, self.other.id)
+        reverse_door = next(
+            landmark
+            for landmark in reverse_scene.landmarks
+            if landmark.feature_type == "door"
+        )
+        self.assertEqual(reverse_door.name, "Door: west gate")
+        self.assertEqual(reverse_door.source_connection_id, connection.id)
 
     def test_feature_snapshot_does_not_change_mid_combat(self) -> None:
         self.service.start(44, self.hall.id)

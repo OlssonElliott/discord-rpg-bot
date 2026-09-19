@@ -52,6 +52,7 @@ class CombatRepository:
                 name TEXT NOT NULL,
                 description TEXT,
                 source_feature_id TEXT,
+                source_connection_id TEXT,
                 feature_type TEXT,
                 synthetic INTEGER NOT NULL DEFAULT 0 CHECK (synthetic IN (0, 1)),
                 x REAL,
@@ -91,6 +92,14 @@ class CombatRepository:
             );
             """
         )
+        landmark_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(combat_landmarks)")
+        }
+        if "source_connection_id" not in landmark_columns:
+            connection.execute(
+                "ALTER TABLE combat_landmarks ADD COLUMN source_connection_id TEXT"
+            )
 
     def start_scene(
         self,
@@ -135,8 +144,8 @@ class CombatRepository:
                 """
                 INSERT INTO combat_landmarks (
                     scene_id, id, name, description, source_feature_id,
-                    feature_type, synthetic, x, y
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_connection_id, feature_type, synthetic, x, y
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -145,6 +154,7 @@ class CombatRepository:
                         landmark.name,
                         landmark.description,
                         landmark.source_feature_id,
+                        landmark.source_connection_id,
                         landmark.feature_type,
                         int(landmark.synthetic),
                         landmark.x,
@@ -345,8 +355,8 @@ class CombatRepository:
         scene_id = int(row["id"])
         landmark_rows = connection.execute(
             """
-            SELECT id, name, description, source_feature_id, feature_type,
-                   synthetic, x, y
+            SELECT id, name, description, source_feature_id, source_connection_id,
+                   feature_type, synthetic, x, y
             FROM combat_landmarks
             WHERE scene_id = ?
             ORDER BY synthetic DESC, name COLLATE NOCASE, id
@@ -379,14 +389,15 @@ class CombatRepository:
             CombatStatus(row["status"]),
             tuple(
                 CombatLandmark(
-                    item["id"],
-                    item["name"],
-                    item["description"],
-                    item["source_feature_id"],
-                    item["feature_type"],
-                    bool(item["synthetic"]),
-                    item["x"],
-                    item["y"],
+                    id=item["id"],
+                    name=item["name"],
+                    description=item["description"],
+                    source_feature_id=item["source_feature_id"],
+                    source_connection_id=item["source_connection_id"],
+                    feature_type=item["feature_type"],
+                    synthetic=bool(item["synthetic"]),
+                    x=item["x"],
+                    y=item["y"],
                 )
                 for item in landmark_rows
             ),
