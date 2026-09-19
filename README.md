@@ -85,13 +85,17 @@ database and `.env` are ignored by Git.
 ## Run the DM location editor
 
 The local dashboard uses the same SQLite database and deterministic world service
-as Discord and is included in `npm run dev`. Create or select an Area, add locations,
-drag them into place, and connect them by dragging from one node handle to another.
-Create reusable item types once in **Item library**; rooms can only receive items
-selected from that shared catalog, so anything taken with `/take` appears in the
-same interactive `/inventory`. Node positions are editor-only metadata; arrows are
-persisted directional gameplay exits. The API binds to localhost and is intended
-for the DM's local machine.
+as Discord and is included in `npm run dev`. The dashboard API loads the repository
+`.env` itself, so **Start combat here** automatically targets the server configured by
+`DISCORD_GUILD_ID`; `--guild-id` remains available as an explicit override when the
+API is launched manually.
+
+Create or select an Area, add locations, drag them into place, and connect them by
+dragging from one node handle to another. Create reusable item types once in
+**Item library**; rooms can only receive items selected from that shared catalog, so
+anything taken with `/take` appears in the same interactive `/inventory`. Node
+positions are editor-only metadata; arrows are persisted directional gameplay exits.
+The API binds to localhost and is intended for the DM's local machine.
 
 ### Player-specific dungeon views
 

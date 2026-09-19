@@ -8,6 +8,8 @@ import re
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from dotenv import load_dotenv
+
 from .dashboard_api import DashboardAPI
 from .database import Database
 from .room_images import MAX_ROOM_IMAGE_BYTES
@@ -100,6 +102,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="Run the local RPG DM dashboard API.")
     parser.add_argument(
         "--database",
