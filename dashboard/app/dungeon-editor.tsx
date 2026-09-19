@@ -1342,6 +1342,12 @@ function RoomFeatureDialog({
   const [description, setDescription] = useState('');
   const [featureType, setFeatureType] = useState('furniture');
   const [templateId, setTemplateId] = useState('');
+  const availableTemplates = [
+    ...DEFAULT_ROOM_FEATURE_TEMPLATES.filter(
+      (preset) => !templates.some((template) => template.id === preset.id),
+    ),
+    ...templates,
+  ];
 
   useEffect(() => {
     if (!open) return;
@@ -1360,7 +1366,7 @@ function RoomFeatureDialog({
             Room Features are persistent descriptive objects in this location.
           </DialogDescription>
         </DialogHeader>
-        {!feature && templates.length > 0 && (
+        {!feature && availableTemplates.length > 0 && (
           <>
             <label className="dialog-label" htmlFor="room-feature-template">From feature library</label>
             <NativeSelect
@@ -1369,7 +1375,7 @@ function RoomFeatureDialog({
               onChange={(event) => {
                 const nextId = event.target.value;
                 setTemplateId(nextId);
-                const template = templates.find((item) => item.id === nextId);
+                const template = availableTemplates.find((item) => item.id === nextId);
                 if (!template) return;
                 setName(template.name);
                 setDescription(template.description);
@@ -1377,7 +1383,7 @@ function RoomFeatureDialog({
               }}
             >
               <NativeSelectOption value="">Create from scratch…</NativeSelectOption>
-              {templates.map((template) => (
+              {availableTemplates.map((template) => (
                 <NativeSelectOption key={template.id} value={template.id}>{template.name}</NativeSelectOption>
               ))}
             </NativeSelect>
@@ -1417,6 +1423,85 @@ function RoomFeatureDialog({
   );
 }
 
+const DEFAULT_ROOM_FEATURE_TEMPLATES: RoomFeatureTemplateData[] = [
+  {
+    id: 'wooden_table',
+    name: 'Wooden Table',
+    feature_type: 'furniture',
+    description: 'A sturdy wooden table with a worn, practical surface.',
+  },
+  {
+    id: 'wooden_chair',
+    name: 'Wooden Chair',
+    feature_type: 'furniture',
+    description: 'A plain wooden chair, scuffed from years of use.',
+  },
+  {
+    id: 'simple_bed',
+    name: 'Simple Bed',
+    feature_type: 'furniture',
+    description: 'A simple bed with a wooden frame and a thin mattress.',
+  },
+  {
+    id: 'wooden_bench',
+    name: 'Wooden Bench',
+    feature_type: 'furniture',
+    description: 'A long wooden bench suitable for halls, taverns, and waiting rooms.',
+  },
+  {
+    id: 'bookshelf',
+    name: 'Bookshelf',
+    feature_type: 'furniture',
+    description: 'A tall shelf built to hold books, ledgers, or small curios.',
+  },
+  {
+    id: 'fireplace',
+    name: 'Fireplace',
+    feature_type: 'structure',
+    description: 'A stone fireplace set into the wall.',
+  },
+  {
+    id: 'stone_pillar',
+    name: 'Stone Pillar',
+    feature_type: 'structure',
+    description: 'A heavy stone pillar supporting the structure above.',
+  },
+  {
+    id: 'window',
+    name: 'Window',
+    feature_type: 'structure',
+    description: 'A simple window looking out beyond the room.',
+  },
+  {
+    id: 'wall_torch',
+    name: 'Wall Torch',
+    feature_type: 'decoration',
+    description: 'A wall-mounted torch holder that can provide light when lit.',
+  },
+  {
+    id: 'rug',
+    name: 'Rug',
+    feature_type: 'decoration',
+    description: 'A worn rug spread across part of the floor.',
+  },
+  {
+    id: 'tapestry',
+    name: 'Tapestry',
+    feature_type: 'decoration',
+    description: 'A hanging tapestry used to decorate an otherwise bare wall.',
+  },
+  {
+    id: 'brazier',
+    name: 'Brazier',
+    feature_type: 'environmental',
+    description: 'A metal brazier that can hold a small fire for heat or light.',
+  },
+];
+
+function isDefaultRoomFeatureTemplate(templateId: string | undefined): boolean {
+  return DEFAULT_ROOM_FEATURE_TEMPLATES.some((template) => template.id === templateId);
+}
+
 function FeatureLibraryDialog({
   open,
   templates,
@@ -1437,6 +1522,15 @@ function FeatureLibraryDialog({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [featureType, setFeatureType] = useState('furniture');
+  const availableTemplates = [
+    ...DEFAULT_ROOM_FEATURE_TEMPLATES.filter(
+      (preset) => !templates.some((template) => template.id === preset.id),
+    ),
+    ...templates,
+  ];
+  const isPersistedEdit = (
+    editingId !== undefined && !isDefaultRoomFeatureTemplate(editingId)
+  );
 
   const editTemplate = (template?: RoomFeatureTemplateData) => {
     setEditingId(template?.id);
@@ -1455,11 +1549,11 @@ function FeatureLibraryDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="catalog-heading">
-          <div className="catalog-count">{templates.length} feature types available</div>
+          <div className="catalog-count">{availableTemplates.length} feature types available</div>
           <button type="button" onClick={() => editTemplate()}>New feature</button>
         </div>
         <div className="catalog-list" aria-label="Existing room feature types">
-          {templates.map((template) => (
+          {availableTemplates.map((template) => (
             <button
               type="button"
               className={editingId === template.id ? 'selected' : ''}
@@ -1490,7 +1584,7 @@ function FeatureLibraryDialog({
         <label className="dialog-label" htmlFor="feature-template-description">Description</label>
         <Textarea id="feature-template-description" value={description} onChange={(event) => setDescription(event.target.value)} />
         <DialogFooter>
-          {editingId && (
+          {isPersistedEdit && (
             <Button
               type="button"
               variant="outline"
@@ -1505,12 +1599,12 @@ function FeatureLibraryDialog({
           <Button
             disabled={!name.trim()}
             onClick={async () => {
-              if (await onSave(editingId, { name, description, feature_type: featureType })) {
+              if (await onSave(isPersistedEdit ? editingId : undefined, { name, description, feature_type: featureType })) {
                 editTemplate();
               }
             }}
           >
-            <Save /> {editingId ? 'Save feature type' : 'Create feature type'}
+            <Save /> {isPersistedEdit ? 'Save feature type' : editingId ? 'Create custom copy' : 'Create feature type'}
           </Button>
         </DialogFooter>
       </DialogContent>
