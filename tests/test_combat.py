@@ -105,6 +105,16 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(door.name, "Door: east gate")
         self.assertEqual(door.source_connection_id, connection.id)
         self.assertIn("Side Room", door.description or "")
+        self.assertEqual((door.x, door.y), (0.82, 0.5))
+        self.assertEqual(len(scene.routes), 1)
+        self.assertEqual(
+            {
+                scene.routes[0].source_landmark_id,
+                scene.routes[0].destination_landmark_id,
+            },
+            {"room:center", door.id},
+        )
+        self.assertEqual(scene.routes[0].distance, LandmarkDistance.CLOSE)
 
         self.service.end(44)
         reverse_scene = self.service.start(44, self.other.id)
@@ -115,6 +125,79 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(reverse_door.name, "Door: west gate")
         self.assertEqual(reverse_door.source_connection_id, connection.id)
+        self.assertEqual((reverse_door.x, reverse_door.y), (0.08, 0.5))
+        self.assertEqual(len(reverse_scene.routes), 1)
+
+    def test_cardinal_doors_start_on_matching_edges(self) -> None:
+        exits = {
+            "north": ("north_room", (0.5, 0.08)),
+            "east": ("east_room", (0.82, 0.5)),
+            "south": ("south_room", (0.5, 0.82)),
+            "west": ("west_room", (0.08, 0.5)),
+        }
+        for exit_name, (room_id, _) in exits.items():
+            room = self.world.create_room(
+                room_id,
+                self.area.id,
+                room_id.replace("_", " ").title(),
+            )
+            self.world.connect_rooms(
+                self.hall.id,
+                f"{exit_name} door",
+                room.id,
+                connection_type=ConnectionType.DOOR,
+            )
+
+        scene = self.service.start(44, self.hall.id)
+        doors = {
+            landmark.name.removeprefix("Door: ").split()[0]: landmark
+            for landmark in scene.landmarks
+            if landmark.feature_type == "door"
+        }
+
+        self.assertEqual(len(doors), 4)
+        self.assertEqual(len(scene.routes), 4)
+        for exit_name, (_, expected_position) in exits.items():
+            door = doors[exit_name]
+            self.assertEqual((door.x, door.y), expected_position)
+            self.assertTrue(
+                any(
+                    {
+                        route.source_landmark_id,
+                        route.destination_landmark_id,
+                    }
+                    == {"room:center", door.id}
+                    for route in scene.routes
+                )
+            )
+
+    def test_same_side_doors_are_offset_instead_of_overlapping(self) -> None:
+        for suffix in ("a", "b"):
+            room = self.world.create_room(
+                f"east_{suffix}",
+                self.area.id,
+                f"East {suffix.upper()}",
+            )
+            self.world.connect_rooms(
+                self.hall.id,
+                f"east door {suffix}",
+                room.id,
+                connection_type=ConnectionType.DOOR,
+            )
+
+        scene = self.service.start(44, self.hall.id)
+        east_doors = [
+            landmark
+            for landmark in scene.landmarks
+            if landmark.feature_type == "door"
+        ]
+
+        self.assertEqual(len(east_doors), 2)
+        self.assertEqual({door.x for door in east_doors}, {0.82})
+        self.assertEqual(
+            sorted(door.y for door in east_doors if door.y is not None),
+            [0.44, 0.56],
+        )
 
     def test_feature_snapshot_does_not_change_mid_combat(self) -> None:
         self.service.start(44, self.hall.id)

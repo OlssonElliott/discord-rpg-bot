@@ -1,6 +1,7 @@
 """Application service for landmark-based combat scene state."""
 
 import math
+import re
 
 from .combat import (
     CombatLandmark,
@@ -60,6 +61,7 @@ class CombatService:
             for feature in self.world.list_room_features(room_id)
         )
 
+        door_specs: list[tuple[object, str, str, str | None]] = []
         for connection in self.world.area_graph(room.area_id).connections:
             if connection.connection_type is not ConnectionType.DOOR:
                 continue
@@ -71,12 +73,39 @@ class CombatService:
                 adjacent_room_id = connection.source_room_id
             else:
                 continue
+            door_specs.append(
+                (
+                    connection,
+                    exit_name,
+                    adjacent_room_id,
+                    self._cardinal_direction(exit_name),
+                )
+            )
 
+        direction_counts: dict[str, int] = {}
+        for _, _, _, direction in door_specs:
+            if direction is not None:
+                direction_counts[direction] = direction_counts.get(direction, 0) + 1
+        direction_indices: dict[str, int] = {}
+        door_landmark_ids: list[str] = []
+
+        for connection, exit_name, adjacent_room_id, direction in door_specs:
             adjacent_room = self.world.get_room(adjacent_room_id)
             connection_key = connection.connection_id or f"{room_id}:{len(landmarks)}"
+            landmark_id = f"door:{connection_key}"
+            x = None
+            y = None
+            if direction is not None:
+                index = direction_indices.get(direction, 0)
+                direction_indices[direction] = index + 1
+                x, y = self._door_position(
+                    direction,
+                    index,
+                    direction_counts[direction],
+                )
             landmarks.append(
                 CombatLandmark(
-                    id=f"door:{connection_key}",
+                    id=landmark_id,
                     name=f"Door: {exit_name}",
                     description=(
                         f"Exit to "
@@ -84,8 +113,11 @@ class CombatService:
                     ),
                     source_connection_id=connection.connection_id,
                     feature_type="door",
+                    x=x,
+                    y=y,
                 )
             )
+            door_landmark_ids.append(landmark_id)
 
         combatants = [
             CombatantState(
@@ -108,14 +140,61 @@ class CombatService:
         )
 
         try:
-            return self.repository.start_scene(
+            scene = self.repository.start_scene(
                 guild_id,
                 room_id,
                 tuple(landmarks),
                 tuple(combatants),
             )
+            for landmark_id in door_landmark_ids:
+                self.repository.set_route(
+                    scene.id,
+                    self.CENTER_LANDMARK_ID,
+                    landmark_id,
+                    LandmarkDistance.CLOSE,
+                )
+            return self._require_current(guild_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
+
+    @staticmethod
+    def _cardinal_direction(exit_name: str) -> str | None:
+        aliases = {
+            "n": "north",
+            "north": "north",
+            "e": "east",
+            "east": "east",
+            "s": "south",
+            "south": "south",
+            "w": "west",
+            "west": "west",
+        }
+        directions = {
+            aliases[token]
+            for token in re.findall(r"[a-z]+", exit_name.casefold())
+            if token in aliases
+        }
+        return next(iter(directions)) if len(directions) == 1 else None
+
+    @staticmethod
+    def _door_position(
+        direction: str,
+        index: int,
+        count: int,
+    ) -> tuple[float, float]:
+        if count <= 1:
+            offset = 0.0
+        else:
+            step = min(0.12, 0.48 / (count - 1))
+            offset = (index - (count - 1) / 2) * step
+
+        if direction == "north":
+            return 0.5 + offset, 0.08
+        if direction == "east":
+            return 0.82, 0.5 + offset
+        if direction == "south":
+            return 0.5 + offset, 0.82
+        return 0.08, 0.5 + offset
 
     def current(self, guild_id: int) -> CombatScene | None:
         return self.repository.get_active_scene(guild_id)
