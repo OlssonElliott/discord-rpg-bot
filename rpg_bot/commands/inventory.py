@@ -32,9 +32,38 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _item_label(item: ItemInstance, catalog: ItemCatalog) -> str:
+    return _item_label_for_quantity(item, item.quantity, catalog)
+
+
+def _item_label_for_quantity(
+    item: ItemInstance,
+    quantity: int,
+    catalog: ItemCatalog,
+) -> str:
     template = catalog.get(item.template_id)
-    quantity = f" ×{item.quantity}" if item.quantity > 1 else ""
-    return f"{template.name}{quantity}"
+    quantity_suffix = f" ×{quantity}" if quantity > 1 else ""
+    return f"{template.name}{quantity_suffix}"
+
+
+def _stacked_inventory_items(
+    items: list[ItemInstance],
+    catalog: ItemCatalog,
+) -> list[tuple[ItemInstance, int]]:
+    stacked: list[tuple[ItemInstance, int]] = []
+    stack_indexes: dict[str, int] = {}
+    for item in items:
+        template = catalog.get(item.template_id)
+        if not template.stackable:
+            stacked.append((item, item.quantity))
+            continue
+        index = stack_indexes.get(item.template_id)
+        if index is None:
+            stack_indexes[item.template_id] = len(stacked)
+            stacked.append((item, item.quantity))
+            continue
+        first_item, quantity = stacked[index]
+        stacked[index] = (first_item, quantity + item.quantity)
+    return stacked
 
 
 def _inventory_lines(
@@ -42,12 +71,13 @@ def _inventory_lines(
     catalog: ItemCatalog,
 ) -> list[str]:
     equipped_ids = set(inventory.equipment.values())
+    items = [
+        item for item in inventory.items if item.instance_id not in equipped_ids
+    ]
     lines: list[str] = []
-    for item in inventory.items:
-        if item.instance_id in equipped_ids:
-            continue
+    for item, quantity in _stacked_inventory_items(items, catalog):
         template = catalog.get(item.template_id)
-        weight = template.weight * item.quantity
+        weight = template.weight * quantity
         capacity_bonus = (
             f" • +{template.capacity or 0} slots when equipped"
             if template.item_type is ItemType.CONTAINER
@@ -55,7 +85,7 @@ def _inventory_lines(
         )
         slot_label = "slot" if template.slot_cost == 1 else "slots"
         lines.append(
-            f"• {_item_label(item, catalog)} • {weight} weight • "
+            f"• {_item_label_for_quantity(item, quantity, catalog)} • {weight} weight • "
             f"{template.slot_cost} {slot_label}{capacity_bonus}"
         )
     return lines
@@ -243,14 +273,19 @@ class InventoryItemSelect(discord.ui.Select):
     def __init__(self, owner_view: InventoryView, inventory: InventoryState) -> None:
         self.owner_view = owner_view
         start = owner_view.page * 25
+        stacked_items = _stacked_inventory_items(
+            inventory.items, owner_view.service.catalog
+        )
         options = [
             discord.SelectOption(
-                label=_item_label(item, owner_view.service.catalog)[:100],
+                label=_item_label_for_quantity(
+                    item, quantity, owner_view.service.catalog
+                )[:100],
                 value=item.instance_id,
                 description=owner_view.service.catalog.get(item.template_id).rarity[:100],
                 default=item.instance_id == owner_view.selected_id,
             )
-            for item in inventory.items[start : start + 25]
+            for item, quantity in stacked_items[start : start + 25]
         ]
         super().__init__(
             placeholder="Select an item",
@@ -314,7 +349,8 @@ class InventoryView(InventoryOwnedView):
         self.page = page
         self.reading_id = reading_id
         self.reading_page = reading_page
-        self.page_count = max(1, (len(inventory.items) + 24) // 25)
+        stacked_items = _stacked_inventory_items(inventory.items, service.catalog)
+        self.page_count = max(1, (len(stacked_items) + 24) // 25)
         self.add_item(InventoryItemSelect(self, inventory))
         if page <= 0:
             self.remove_item(self.previous_page)
@@ -524,12 +560,15 @@ class InventoryView(InventoryOwnedView):
             if any(item.instance_id == self.selected_id for item in inventory.items)
             else None
         )
+        stacked_items = _stacked_inventory_items(
+            inventory.items, self.service.catalog
+        )
         await show_inventory(
             interaction,
             self.service,
             character,
             selected_id=selected,
-            page=min(self.page, max(0, (len(inventory.items) - 1) // 25)),
+            page=min(self.page, max(0, (len(stacked_items) - 1) // 25)),
             edit=True,
             dedicated_cog=self.dedicated_cog,
         )
@@ -706,7 +745,10 @@ async def refresh_open_inventory(user_id: int, character_id: int) -> None:
         if any(item.instance_id == session.reading_id for item in inventory.items)
         else None
     )
-    page_count = max(1, (len(inventory.items) + 24) // 25)
+    stacked_items = _stacked_inventory_items(
+        inventory.items, session.service.catalog
+    )
+    page_count = max(1, (len(stacked_items) + 24) // 25)
     page = min(session.page, page_count - 1)
     view = InventoryView(
         session.service,

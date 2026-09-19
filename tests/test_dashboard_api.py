@@ -74,6 +74,130 @@ class DashboardAPITests(unittest.TestCase):
             [("north", "entrance")],
         )
 
+    def test_room_features_can_be_managed_through_api(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+
+        create_status, created = self.api.handle(
+            "POST",
+            "/api/rooms/hall/features",
+            {
+                "id": "oak_table",
+                "name": "Heavy Oak Table",
+                "feature_type": "furniture",
+                "description": "A broad table covered in old knife marks.",
+            },
+        )
+        list_status, listed = self.api.handle("GET", "/api/rooms/hall/features")
+        get_status, fetched = self.api.handle("GET", "/api/room-features/oak_table")
+        graph_status, graph = self.api.handle("GET", "/api/areas/crypt/graph")
+
+        self.assertEqual(create_status, 201)
+        self.assertEqual(created["feature_type"], "furniture")
+        self.assertEqual(list_status, 200)
+        self.assertEqual([feature["id"] for feature in listed], ["oak_table"])
+        self.assertEqual(get_status, 200)
+        self.assertEqual(fetched["description"], "A broad table covered in old knife marks.")
+        self.assertEqual(graph_status, 200)
+        self.assertEqual(graph["nodes"][0]["room_features"], [created])
+
+        update_status, updated = self.api.handle(
+            "PATCH",
+            "/api/room-features/oak_table",
+            {
+                "name": "Scarred Oak Table",
+                "feature_type": "structure",
+                "description": "The table has been bolted to the floor.",
+            },
+        )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["name"], "Scarred Oak Table")
+        self.assertEqual(updated["feature_type"], "structure")
+
+        delete_status, deleted = self.api.handle(
+            "DELETE", "/api/room-features/oak_table"
+        )
+        missing_status, _ = self.api.handle("GET", "/api/room-features/oak_table")
+        _, graph_after_delete = self.api.handle("GET", "/api/areas/crypt/graph")
+
+        self.assertEqual(delete_status, 200)
+        self.assertEqual(deleted, {"deleted": "oak_table"})
+        self.assertEqual(missing_status, 404)
+        self.assertEqual(graph_after_delete["nodes"][0]["room_features"], [])
+
+    def test_room_feature_templates_are_reusable_and_independent(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("hall", "vault"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+
+        create_status, template = self.api.handle(
+            "POST",
+            "/api/room-feature-templates",
+            {
+                "id": "oak_table",
+                "name": "Heavy Oak Table",
+                "feature_type": "furniture",
+                "description": "A broad table covered in old knife marks.",
+            },
+        )
+        list_status, templates = self.api.handle(
+            "GET", "/api/room-feature-templates"
+        )
+
+        self.assertEqual(create_status, 201)
+        self.assertEqual(list_status, 200)
+        self.assertEqual([item["id"] for item in templates], ["oak_table"])
+
+        placed = []
+        for room_id in ("hall", "vault"):
+            status, feature = self.api.handle(
+                "POST",
+                f"/api/rooms/{room_id}/features",
+                {
+                    "id": f"{room_id}_oak_table",
+                    "name": template["name"],
+                    "feature_type": template["feature_type"],
+                    "description": template["description"],
+                },
+            )
+            self.assertEqual(status, 201)
+            placed.append(feature)
+
+        update_status, updated = self.api.handle(
+            "PATCH",
+            "/api/room-feature-templates/oak_table",
+            {
+                "name": "Polished Oak Table",
+                "feature_type": "decoration",
+                "description": "Restored for a noble hall.",
+            },
+        )
+        _, hall_feature = self.api.handle(
+            "GET", "/api/room-features/hall_oak_table"
+        )
+        delete_status, deleted = self.api.handle(
+            "DELETE", "/api/room-feature-templates/oak_table"
+        )
+        _, vault_feature = self.api.handle(
+            "GET", "/api/room-features/vault_oak_table"
+        )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["name"], "Polished Oak Table")
+        self.assertEqual(hall_feature, placed[0])
+        self.assertEqual(delete_status, 200)
+        self.assertEqual(deleted, {"deleted": "oak_table"})
+        self.assertEqual(vault_feature, placed[1])
+
     def test_room_image_can_be_uploaded_replaced_persisted_and_removed(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
         self.api.handle(
@@ -324,6 +448,7 @@ class DashboardAPITests(unittest.TestCase):
                 "has_trap": True,
                 "trap_state": "armed",
                 "trap_detection_difficulty": 16,
+                "trap_disarm_difficulty": 18,
                 "trap_damage_type": "fire",
                 "trap_damage": 8,
             },
@@ -338,20 +463,22 @@ class DashboardAPITests(unittest.TestCase):
                 "connection_type": "hallway",
                 "has_trap": True,
                 "trap_detection_difficulty": 12,
+                "trap_disarm_difficulty": 14,
                 "trap_damage_type": "poison",
                 "trap_damage": 5,
             },
         )
 
         self.assertEqual(
-            (door["has_trap"], door["trap_state"], door["trap_detection_difficulty"], door["trap_damage_type"], door["trap_damage"]),
-            (True, "armed", 16, "fire", 8),
+            (door["has_trap"], door["trap_state"], door["trap_detection_difficulty"], door["trap_disarm_difficulty"], door["trap_damage_type"], door["trap_damage"]),
+            (True, "armed", 16, 18, "fire", 8),
         )
         self.assertEqual(hallway["trap_damage_type"], "poison")
         _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
         traps = {item["exit_name"]: item for item in graph["connections"]}
         self.assertEqual(traps["north"]["trap_damage"], 8)
         self.assertEqual(traps["east"]["trap_detection_difficulty"], 12)
+        self.assertEqual(traps["east"]["trap_disarm_difficulty"], 14)
 
         _, updated = self.api.handle(
             "PATCH",
@@ -363,6 +490,7 @@ class DashboardAPITests(unittest.TestCase):
                 "has_trap": True,
                 "trap_state": "disarmed",
                 "trap_detection_difficulty": 16,
+                "trap_disarm_difficulty": 20,
                 "trap_damage_type": "fire",
                 "trap_damage": 8,
                 "bidirectional": True,
@@ -370,8 +498,10 @@ class DashboardAPITests(unittest.TestCase):
             },
         )
         self.assertEqual(updated["trap_state"], "disarmed")
+        self.assertEqual(updated["trap_disarm_difficulty"], 20)
         _, graph = self.api.handle("GET", "/api/areas/crypt/graph")
         self.assertEqual(graph["connections"][0]["trap_state"], "disarmed")
+        self.assertEqual(graph["connections"][0]["trap_disarm_difficulty"], 20)
 
     def test_trap_configuration_is_validated(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
@@ -396,6 +526,49 @@ class DashboardAPITests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("difficulty", error["error"])
+
+        status, error = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "south",
+                "has_trap": True,
+                "trap_detection_difficulty": 10,
+                "trap_disarm_difficulty": 31,
+                "trap_damage_type": "fire",
+                "trap_damage": 2,
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("disarm difficulty", error["error"])
+
+    def test_trap_damage_type_accepts_legacy_capitalization(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
+        for room_id in ("entrance", "hall"):
+            self.api.handle(
+                "POST",
+                "/api/areas/crypt/rooms",
+                {"id": room_id, "name": room_id.title(), "x": 0, "y": 0},
+            )
+
+        status, connection = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "entrance",
+                "destination_room_id": "hall",
+                "exit_name": "north",
+                "has_trap": True,
+                "trap_damage_type": " Physical ",
+                "trap_detection_difficulty": 10,
+                "trap_damage": 1,
+            },
+        )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(connection["trap_damage_type"], "physical")
 
     def test_connection_can_be_created_explicitly_one_way(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})

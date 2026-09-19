@@ -76,6 +76,91 @@ type DoorState = 'closed' | 'open';
 type TrapDamageType = 'physical' | 'fire' | 'cold' | 'lightning' | 'poison' | 'acid';
 type TrapState = 'armed' | 'disarmed' | 'triggered';
 
+type ContainerTypeValue =
+  | 'wooden_chest'
+  | 'reinforced_chest'
+  | 'barrel'
+  | 'crate'
+  | 'shelf'
+  | 'bookshelf'
+  | 'corpse'
+  | 'skeleton'
+  | 'backpack'
+  | 'hidden_compartment'
+  | 'loose_floorboard'
+  | 'other';
+
+type ContainerTemplateData = {
+  id: string;
+  name: string;
+  type: ContainerTypeValue;
+  description: string;
+  default_has_lock: boolean;
+  default_is_locked: boolean;
+  default_is_broken: boolean;
+  default_unlock_difficulty: number | null;
+  default_hidden: boolean;
+  default_discovery_difficulty: number | null;
+};
+
+type RoomFeatureTemplateData = {
+  id: string;
+  name: string;
+  description: string;
+  feature_type: string;
+};
+
+type ContainerContentItem = {
+  id: string;
+  name: string;
+  description: string | null;
+  quantity: number;
+};
+
+type PlacedContainer = {
+  id: string;
+  room_id: string;
+  template_id: string;
+  name: string;
+  type: ContainerTypeValue;
+  description: string;
+  has_lock: boolean;
+  is_locked: boolean;
+  is_broken: boolean;
+  unlock_difficulty: number | null;
+  hidden: boolean;
+  discovery_difficulty: number | null;
+  is_open: boolean;
+  searched: boolean;
+  item_count: number;
+  contents: ContainerContentItem[];
+};
+
+type ContainerTemplateDraft = {
+  name: string;
+  type: ContainerTypeValue;
+  description: string;
+  lockState: DoorLockState;
+  unlockDifficulty: number;
+  hidden: boolean;
+  discoveryDifficulty: number;
+};
+
+const CONTAINER_TYPES: { value: ContainerTypeValue; label: string }[] = [
+  { value: 'wooden_chest', label: 'Wooden Chest' },
+  { value: 'reinforced_chest', label: 'Reinforced Chest' },
+  { value: 'barrel', label: 'Barrel' },
+  { value: 'crate', label: 'Crate' },
+  { value: 'shelf', label: 'Shelf' },
+  { value: 'bookshelf', label: 'Bookshelf' },
+  { value: 'corpse', label: 'Corpse' },
+  { value: 'skeleton', label: 'Skeleton' },
+  { value: 'backpack', label: 'Backpack' },
+  { value: 'hidden_compartment', label: 'Hidden Compartment' },
+  { value: 'loose_floorboard', label: 'Loose Floorboard' },
+  { value: 'other', label: 'Other' },
+];
+
 const TRAP_DAMAGE_TYPES: { value: TrapDamageType; label: string }[] = [
   { value: 'physical', label: 'Physical' },
   { value: 'fire', label: 'Fire' },
@@ -84,6 +169,12 @@ const TRAP_DAMAGE_TYPES: { value: TrapDamageType; label: string }[] = [
   { value: 'poison', label: 'Poison' },
   { value: 'acid', label: 'Acid' },
 ];
+
+function normalizedTrapDamageType(value: string | null): TrapDamageType {
+  return TRAP_DAMAGE_TYPES.some((item) => item.value === value)
+    ? value as TrapDamageType
+    : 'physical';
+}
 
 function RoomNode({ data, selected }: NodeProps<Node<RoomNodeData>>) {
   return (
@@ -192,6 +283,19 @@ export function DungeonEditor() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [contentKind, setContentKind] = useState<ContentKind | null>(null);
   const [itemLibraryOpen, setItemLibraryOpen] = useState(false);
+  const [featureLibraryOpen, setFeatureLibraryOpen] = useState(false);
+  const [roomFeatureTemplates, setRoomFeatureTemplates] = useState<RoomFeatureTemplateData[]>([]);
+  const [containerTemplates, setContainerTemplates] = useState<ContainerTemplateData[]>([]);
+  const [containerPlacementOpen, setContainerPlacementOpen] = useState(false);
+  const [editingContainerId, setEditingContainerId] = useState<string | null>(null);
+  const [roomFeatureOpen, setRoomFeatureOpen] = useState(false);
+  const [editingRoomFeature, setEditingRoomFeature] = useState<{
+    id: string;
+    room_id: string;
+    name: string;
+    description: string;
+    feature_type: string;
+  } | null>(null);
 
   const selectedRoom = useMemo(
     () => graph?.nodes.find((room) => room.id === selectedRoomId) ?? null,
@@ -200,6 +304,11 @@ export function DungeonEditor() {
   const selectedConnection = useMemo(
     () => graph?.connections.find((item) => edgeId(item) === selectedEdgeId) ?? null,
     [graph, selectedEdgeId],
+  );
+  const selectedContainer = useMemo(
+    () => (selectedRoom?.containers as PlacedContainer[] | undefined)
+      ?.find((item) => item.id === editingContainerId) ?? null,
+    [editingContainerId, selectedRoom],
   );
 
   const loadAreas = useCallback(async (preferredArea?: string) => {
@@ -253,13 +362,31 @@ export function DungeonEditor() {
     }
   }, []);
 
+  const loadContainerTemplates = useCallback(async () => {
+    try {
+      setContainerTemplates(await api<ContainerTemplateData[]>('/container-templates'));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load containers.');
+    }
+  }, []);
+
+  const loadRoomFeatureTemplates = useCallback(async () => {
+    try {
+      setRoomFeatureTemplates(await api<RoomFeatureTemplateData[]>('/room-feature-templates'));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load room features.');
+    }
+  }, []);
+
   useEffect(() => {
     queueMicrotask(() => {
       void loadAreas();
       void loadCharacters();
       void loadCatalogItems();
+      void loadContainerTemplates();
+      void loadRoomFeatureTemplates();
     });
-  }, [loadAreas, loadCatalogItems, loadCharacters]);
+  }, [loadAreas, loadCatalogItems, loadCharacters, loadContainerTemplates, loadRoomFeatureTemplates]);
   useEffect(() => {
     if (areaId) queueMicrotask(() => void loadGraph(areaId));
   }, [areaId, loadGraph]);
@@ -309,7 +436,14 @@ export function DungeonEditor() {
   const mutate = useCallback(async (action: () => Promise<unknown>, message: string) => {
     try {
       await action();
-      await Promise.all([loadGraph(areaId), loadAreas(areaId), loadCharacters(), loadCatalogItems()]);
+      await Promise.all([
+        loadGraph(areaId),
+        loadAreas(areaId),
+        loadCharacters(),
+        loadCatalogItems(),
+        loadContainerTemplates(),
+        loadRoomFeatureTemplates(),
+      ]);
       setNotice(message);
       setError('');
       window.setTimeout(() => setNotice(''), 1800);
@@ -318,7 +452,7 @@ export function DungeonEditor() {
       setError(requestError instanceof Error ? requestError.message : 'The change was rejected.');
       return false;
     }
-  }, [areaId, loadAreas, loadCatalogItems, loadCharacters, loadGraph]);
+  }, [areaId, loadAreas, loadCatalogItems, loadCharacters, loadContainerTemplates, loadGraph, loadRoomFeatureTemplates]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -379,6 +513,7 @@ export function DungeonEditor() {
           has_trap: { type: 'boolean', default: false },
           trap_state: { type: 'string', enum: ['armed', 'disarmed', 'triggered'], default: 'armed' },
           trap_detection_difficulty: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
+          trap_disarm_difficulty: { type: 'integer', minimum: 1, maximum: 30, default: 10 },
           trap_damage_type: { type: 'string', enum: ['physical', 'fire', 'cold', 'lightning', 'poison', 'acid'], default: 'physical' },
           trap_damage: { type: 'integer', minimum: 1, default: 1 },
         },
@@ -413,6 +548,7 @@ export function DungeonEditor() {
           has_trap: hasTrap,
           trap_state: hasTrap && typeof values.trap_state === 'string' ? values.trap_state : hasTrap ? 'armed' : null,
           trap_detection_difficulty: hasTrap && typeof values.trap_detection_difficulty === 'number' ? values.trap_detection_difficulty : hasTrap ? 10 : null,
+          trap_disarm_difficulty: hasTrap && typeof values.trap_disarm_difficulty === 'number' ? values.trap_disarm_difficulty : hasTrap ? 10 : null,
           trap_damage_type: hasTrap && typeof values.trap_damage_type === 'string' ? values.trap_damage_type : hasTrap ? 'physical' : null,
           trap_damage: hasTrap && typeof values.trap_damage === 'number' ? values.trap_damage : hasTrap ? 1 : null,
           bidirectional: typeof values.bidirectional === 'boolean' ? values.bidirectional : true,
@@ -504,6 +640,9 @@ export function DungeonEditor() {
         <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
           <Box /> Item library
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setFeatureLibraryOpen(true)}>
+          <Sparkles /> Feature library
+        </Button>
         <div className="header-status"><span /> {notice || 'Saved'}</div>
         <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
           <Plus /> Add location
@@ -566,9 +705,28 @@ export function DungeonEditor() {
                 () => api(`/rooms/${selectedRoom.id}/image`, { method: 'DELETE' }),
                 'Room image removed',
               )}
-              onAddContent={setContentKind}
+              onAddContent={(kind) => {
+                if (kind === 'container') setContainerPlacementOpen(true);
+                else setContentKind(kind);
+              }}
+              onEditContainer={setEditingContainerId}
+              onAddRoomFeature={() => {
+                setEditingRoomFeature(null);
+                setRoomFeatureOpen(true);
+              }}
+              onEditRoomFeature={(feature) => {
+                setEditingRoomFeature(feature);
+                setRoomFeatureOpen(true);
+              }}
               onRemoveContent={(kind, id) => mutate(
-                () => api(`/rooms/${selectedRoom.id}/${kind === 'item' ? 'items' : 'entities'}/${id}`, { method: 'DELETE' }),
+                () => api(
+                  kind === 'item'
+                    ? `/rooms/${selectedRoom.id}/items/${id}`
+                    : kind === 'container'
+                      ? `/containers/${id}`
+                      : `/rooms/${selectedRoom.id}/entities/${id}`,
+                  { method: 'DELETE' },
+                ),
                 `${kind === 'item' ? 'Item' : kind === 'container' ? 'Container' : 'Enemy'} removed`,
               )}
               onPlaceCharacter={(characterId) => mutate(
@@ -583,10 +741,10 @@ export function DungeonEditor() {
             />
           ) : selectedConnection ? (
             <ConnectionInspector
-              key={`${edgeId(selectedConnection)}:${selectedConnection.connection_type}:${selectedConnection.is_open}:${selectedConnection.has_lock}:${selectedConnection.is_locked}:${selectedConnection.is_broken}:${selectedConnection.unlock_difficulty ?? ''}:${selectedConnection.has_trap}:${selectedConnection.trap_state ?? ''}:${selectedConnection.trap_detection_difficulty ?? ''}:${selectedConnection.trap_damage_type ?? ''}:${selectedConnection.trap_damage ?? ''}:${selectedConnection.bidirectional}:${selectedConnection.return_exit_name || ''}`}
+              key={`${edgeId(selectedConnection)}:${selectedConnection.connection_type}:${selectedConnection.is_open}:${selectedConnection.has_lock}:${selectedConnection.is_locked}:${selectedConnection.is_broken}:${selectedConnection.unlock_difficulty ?? ''}:${selectedConnection.has_trap}:${selectedConnection.trap_state ?? ''}:${selectedConnection.trap_detection_difficulty ?? ''}:${selectedConnection.trap_disarm_difficulty ?? ''}:${selectedConnection.trap_damage_type ?? ''}:${selectedConnection.trap_damage ?? ''}:${selectedConnection.bidirectional}:${selectedConnection.return_exit_name || ''}`}
               connection={selectedConnection}
               rooms={graph?.nodes ?? []}
-              onSave={(connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => mutate(
+              onSave={(connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDisarmDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => mutate(
                 () => api('/connections', {
                   method: 'PATCH',
                   body: JSON.stringify({
@@ -601,6 +759,7 @@ export function DungeonEditor() {
                     has_trap: hasTrap,
                     trap_state: hasTrap ? trapState : null,
                     trap_detection_difficulty: hasTrap ? trapDetectionDifficulty : null,
+                    trap_disarm_difficulty: hasTrap ? trapDisarmDifficulty : null,
                     trap_damage_type: hasTrap ? trapDamageType : null,
                     trap_damage: hasTrap ? trapDamage : null,
                     bidirectional,
@@ -639,10 +798,10 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
-      <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => {
+      <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDisarmDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
-          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, connection_type: connectionType, is_open: connectionType === 'door' && doorState === 'open', has_lock: connectionType === 'door' && lockState !== 'none', is_locked: connectionType === 'door' && lockState === 'locked', is_broken: connectionType === 'door' && lockState === 'broken', unlock_difficulty: connectionType === 'door' && lockState === 'locked' ? unlockDifficulty : null, has_trap: hasTrap, trap_state: hasTrap ? trapState : null, trap_detection_difficulty: hasTrap ? trapDetectionDifficulty : null, trap_damage_type: hasTrap ? trapDamageType : null, trap_damage: hasTrap ? trapDamage : null, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
+          () => api('/connections', { method: 'POST', body: JSON.stringify({ source_room_id: connection.source, destination_room_id: connection.target, exit_name: exitName, connection_type: connectionType, is_open: connectionType === 'door' && doorState === 'open', has_lock: connectionType === 'door' && lockState !== 'none', is_locked: connectionType === 'door' && lockState === 'locked', is_broken: connectionType === 'door' && lockState === 'broken', unlock_difficulty: connectionType === 'door' && lockState === 'locked' ? unlockDifficulty : null, has_trap: hasTrap, trap_state: hasTrap ? trapState : null, trap_detection_difficulty: hasTrap ? trapDetectionDifficulty : null, trap_disarm_difficulty: hasTrap ? trapDisarmDifficulty : null, trap_damage_type: hasTrap ? trapDamageType : null, trap_damage: hasTrap ? trapDamage : null, bidirectional, return_exit_name: bidirectional ? returnExitName : null }) }),
           'Connection created',
         );
         if (ok) setConnection(null);
@@ -659,6 +818,143 @@ export function DungeonEditor() {
         );
         if (ok) setContentKind(null);
       }} />
+      <RoomFeatureDialog
+        open={roomFeatureOpen}
+        feature={editingRoomFeature}
+        templates={roomFeatureTemplates}
+        onOpenChange={(open) => {
+          setRoomFeatureOpen(open);
+          if (!open) setEditingRoomFeature(null);
+        }}
+        onSave={async (record) => {
+          if (!selectedRoom) return false;
+          const editing = editingRoomFeature;
+          const ok = await mutate(
+            () => api(
+              editing
+                ? `/room-features/${editing.id}`
+                : `/rooms/${selectedRoom.id}/features`,
+              {
+                method: editing ? 'PATCH' : 'POST',
+                body: JSON.stringify(
+                  editing
+                    ? record
+                    : {
+                      ...record,
+                      id: identifier(`${selectedRoom.id} ${record.name}`),
+                    },
+                ),
+              },
+            ),
+            `${record.name} ${editing ? 'updated' : 'added'}`,
+          );
+          if (ok) {
+            setRoomFeatureOpen(false);
+            setEditingRoomFeature(null);
+          }
+          return ok;
+        }}
+        onDelete={editingRoomFeature ? async () => {
+          const ok = await mutate(
+            () => api(`/room-features/${editingRoomFeature.id}`, { method: 'DELETE' }),
+            `${editingRoomFeature.name} removed`,
+          );
+          if (ok) {
+            setRoomFeatureOpen(false);
+            setEditingRoomFeature(null);
+          }
+          return ok;
+        } : undefined}
+      />
+      <ContainerPlacementDialog
+        open={containerPlacementOpen}
+        templates={containerTemplates}
+        onOpenChange={setContainerPlacementOpen}
+        onPlace={async (templateId) => {
+          if (!selectedRoom) return false;
+          const template = containerTemplates.find((item) => item.id === templateId);
+          const ok = await mutate(
+            () => api(`/rooms/${selectedRoom.id}/containers`, {
+              method: 'POST',
+              body: JSON.stringify({ template_id: templateId }),
+            }),
+            `${template?.name || 'Container'} added`,
+          );
+          if (ok) setContainerPlacementOpen(false);
+          return ok;
+        }}
+        onCreateAndPlace={async (draft) => {
+          if (!selectedRoom) return false;
+          const ok = await mutate(async () => {
+            const created = await api<ContainerTemplateData>('/container-templates', {
+              method: 'POST',
+              body: JSON.stringify({
+                id: identifier(draft.name),
+                name: draft.name,
+                type: draft.type,
+                description: draft.description,
+                default_has_lock: draft.lockState !== 'none',
+                default_is_locked: draft.lockState === 'locked',
+                default_is_broken: draft.lockState === 'broken',
+                default_unlock_difficulty: draft.lockState === 'locked' ? draft.unlockDifficulty : null,
+                default_hidden: draft.hidden,
+                default_discovery_difficulty: draft.hidden ? draft.discoveryDifficulty : null,
+              }),
+            });
+            await api(`/rooms/${selectedRoom.id}/containers`, {
+              method: 'POST',
+              body: JSON.stringify({ template_id: created.id }),
+            });
+          }, `${draft.name} created and added`);
+          if (ok) setContainerPlacementOpen(false);
+          return ok;
+        }}
+      />
+      <ContainerEditorDialog
+        key={selectedContainer?.id ?? 'container-editor'}
+        container={selectedContainer}
+        catalogItems={catalogItems}
+        onOpenChange={(open) => { if (!open) setEditingContainerId(null); }}
+        onSave={async (record) => {
+          if (!selectedContainer) return false;
+          return mutate(
+            () => api(`/containers/${selectedContainer.id}`, {
+              method: 'PATCH',
+              body: JSON.stringify(record),
+            }),
+            `${record.name} updated`,
+          );
+        }}
+        onAddItem={async (itemId, quantity) => {
+          if (!selectedContainer) return false;
+          return mutate(
+            () => api(`/containers/${selectedContainer.id}/items`, {
+              method: 'POST',
+              body: JSON.stringify({ item_id: itemId, quantity }),
+            }),
+            'Container contents updated',
+          );
+        }}
+        onSetQuantity={async (itemId, quantity) => {
+          if (!selectedContainer) return false;
+          return mutate(
+            () => api(`/containers/${selectedContainer.id}/items/${itemId}`, {
+              method: 'PUT',
+              body: JSON.stringify({ quantity }),
+            }),
+            'Container contents updated',
+          );
+        }}
+        onRemoveItem={async (itemId) => {
+          if (!selectedContainer) return false;
+          return mutate(
+            () => api(`/containers/${selectedContainer.id}/items/${itemId}`, {
+              method: 'DELETE',
+            }),
+            'Item removed from container',
+          );
+        }}
+      />
       <ItemLibraryDialog
         open={itemLibraryOpen}
         items={catalogItems}
@@ -673,6 +969,29 @@ export function DungeonEditor() {
           );
           if (ok) setItemLibraryOpen(false);
         }}
+      />
+      <FeatureLibraryDialog
+        open={featureLibraryOpen}
+        templates={roomFeatureTemplates}
+        onOpenChange={setFeatureLibraryOpen}
+        onSave={(editingId, record) => mutate(
+          () => api(
+            editingId
+              ? `/room-feature-templates/${editingId}`
+              : '/room-feature-templates',
+            {
+              method: editingId ? 'PATCH' : 'POST',
+              body: JSON.stringify(
+                editingId ? record : { ...record, id: identifier(record.name) },
+              ),
+            },
+          ),
+          `${record.name} ${editingId ? 'updated' : 'created'}`,
+        )}
+        onDelete={(template) => mutate(
+          () => api(`/room-feature-templates/${template.id}`, { method: 'DELETE' }),
+          `${template.name} removed`,
+        )}
       />
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
@@ -692,7 +1011,7 @@ export function DungeonEditor() {
   );
 }
 
-function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onRemoveContent, onPlaceCharacter, onDelete, onSelectConnection }: {
+function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onPlaceCharacter, onDelete, onSelectConnection }: {
   room: RoomData;
   connections: ConnectionData[];
   rooms: RoomData[];
@@ -701,6 +1020,15 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   onUploadImage: (file: File) => Promise<boolean>;
   onRemoveImage: () => Promise<boolean>;
   onAddContent: (kind: ContentKind) => void;
+  onEditContainer: (id: string) => void;
+  onAddRoomFeature: () => void;
+  onEditRoomFeature: (feature: {
+    id: string;
+    room_id: string;
+    name: string;
+    description: string;
+    feature_type: string;
+  }) => void;
   onRemoveContent: (kind: ContentKind, id: string) => Promise<boolean>;
   onPlaceCharacter: (characterId: number) => Promise<boolean>;
   onDelete: () => void;
@@ -715,6 +1043,15 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   const attached = connections.filter((connection) => connection.source_room_id === room.id);
   const roomName = (id: string) => rooms.find((item) => item.id === id)?.name || id;
   const selectedCharacter = characters.find((character) => String(character.id) === characterId);
+  const roomFeatures = ((room as RoomData & {
+    room_features?: Array<{
+      id: string;
+      room_id: string;
+      name: string;
+      description: string;
+      feature_type: string;
+    }>;
+  }).room_features ?? []);
   return (
     <>
       <div className="inspector__topline"><span>Selected location</span><Badge variant="outline">{room.counts.players} players</Badge></div>
@@ -854,20 +1191,42 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
         {room.players.map((item) => <p key={item.id}><Users size={15} />{item.name}</p>)}
         {room.enemies.map((item) => <p key={item.id}><Skull size={15} />{item.name}<button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('enemy', item.id)}><Trash2 size={14} /></button></p>)}
         {room.loose_items.map((item) => <p key={item.id}><Sparkles size={15} />{item.name}<strong>×{item.quantity}</strong><button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('item', item.id)}><Trash2 size={14} /></button></p>)}
-        {room.containers.map((item) => <p key={item.id}><Box size={15} />{item.name}<button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('container', item.id)}><Trash2 size={14} /></button></p>)}
-        {!room.players.length && !room.enemies.length && !room.loose_items.length && !room.containers.length && <p className="muted-row">This location is empty.</p>}
+        {(room.containers as PlacedContainer[]).map((item) => (
+          <p key={item.id}>
+            <Button type="button" variant="ghost" size="sm" onClick={() => onEditContainer(item.id)}>
+              <Box size={15} />{item.name}
+            </Button>
+            {item.is_locked && <strong>Locked</strong>}
+            {item.is_broken && <strong>Broken lock</strong>}
+            {item.hidden && <strong>Hidden · DC {item.discovery_difficulty ?? '?'}</strong>}
+            <strong>{item.item_count} items</strong>
+            <button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('container', item.id)}><Trash2 size={14} /></button>
+          </p>
+        ))}
+        <h4>Room Features</h4>
+        {roomFeatures.map((feature) => (
+          <p key={feature.id}>
+            <Button type="button" variant="ghost" size="sm" onClick={() => onEditRoomFeature(feature)}>
+              <Sparkles size={15} />{feature.name}
+            </Button>
+            <Badge variant="outline">{feature.feature_type}</Badge>
+          </p>
+        ))}
+        {!roomFeatures.length && <p className="muted-row">No room features.</p>}
+        {!room.players.length && !room.enemies.length && !room.loose_items.length && !room.containers.length && !roomFeatures.length && <p className="muted-row">This location is empty.</p>}
       </div>
       <div className="inspector__actions">
         <Button variant="outline" onClick={() => onAddContent('enemy')}>Add enemy</Button>
         <Button variant="outline" onClick={() => onAddContent('item')}>Add item</Button>
         <Button variant="outline" onClick={() => onAddContent('container')}>Add container</Button>
+        <Button variant="outline" onClick={onAddRoomFeature}>Add feature</Button>
       </div>
       <Button className="delete-location" variant="ghost" onClick={onDelete}><Trash2 /> Delete location</Button>
     </>
   );
 }
 
-function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onSave: (connectionType: MapConnectionType, doorState: DoorState, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnExitName: string) => Promise<boolean>; onRemove: () => void }) {
+function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connection: ConnectionData; rooms: RoomData[]; onSave: (connectionType: MapConnectionType, doorState: DoorState, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDisarmDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnExitName: string) => Promise<boolean>; onRemove: () => void }) {
   const roomName = (id: string) => rooms.find((room) => room.id === id)?.name || id;
   const [bidirectional, setBidirectional] = useState(connection.bidirectional);
   const [returnExitName, setReturnExitName] = useState(connection.return_exit_name || connection.exit_name);
@@ -878,7 +1237,8 @@ function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connecti
   const [hasTrap, setHasTrap] = useState(connection.has_trap);
   const [trapState, setTrapState] = useState<TrapState>(connection.trap_state ?? 'armed');
   const [trapDetectionDifficulty, setTrapDetectionDifficulty] = useState(connection.trap_detection_difficulty ?? 10);
-  const [trapDamageType, setTrapDamageType] = useState<TrapDamageType>((connection.trap_damage_type as TrapDamageType | null) ?? 'physical');
+  const [trapDisarmDifficulty, setTrapDisarmDifficulty] = useState(connection.trap_disarm_difficulty ?? 10);
+  const [trapDamageType, setTrapDamageType] = useState<TrapDamageType>(normalizedTrapDamageType(connection.trap_damage_type));
   const [trapDamage, setTrapDamage] = useState(connection.trap_damage ?? 1);
   return (
     <>
@@ -906,7 +1266,7 @@ function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connecti
         {lockState === 'locked' && <><label className="dialog-label" htmlFor="connection-unlock-difficulty">Unlock difficulty (1–30)</label><Input id="connection-unlock-difficulty" type="number" min={1} max={30} step={1} value={unlockDifficulty} onChange={(event) => setUnlockDifficulty(Number(event.target.value))} /></>}
       </>}
       <label className="dialog-label" htmlFor="connection-trap-state">Trap</label>
-      <NativeSelect id="connection-trap-state" value={hasTrap ? 'trapped' : 'none'} onChange={(event) => setHasTrap(event.target.value === 'trapped')}>
+      <NativeSelect id="connection-trap-state" value={hasTrap ? 'trapped' : 'none'} onChange={(event) => { const trapped = event.target.value === 'trapped'; setHasTrap(trapped); if (trapped) setTrapState('armed'); }}>
         <NativeSelectOption value="none">No trap</NativeSelectOption>
         <NativeSelectOption value="trapped">Trapped</NativeSelectOption>
       </NativeSelect>
@@ -919,6 +1279,8 @@ function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connecti
         </NativeSelect>
         <label className="dialog-label" htmlFor="connection-trap-difficulty">Insight detection difficulty (1–30)</label>
         <Input id="connection-trap-difficulty" type="number" min={1} max={30} step={1} value={trapDetectionDifficulty} onChange={(event) => setTrapDetectionDifficulty(Number(event.target.value))} />
+        <label className="dialog-label" htmlFor="connection-trap-disarm-difficulty">Disarm difficulty (1–30)</label>
+        <Input id="connection-trap-disarm-difficulty" type="number" min={1} max={30} step={1} value={trapDisarmDifficulty} onChange={(event) => setTrapDisarmDifficulty(Number(event.target.value))} />
         <label className="dialog-label" htmlFor="connection-trap-damage-type">Damage type</label>
         <NativeSelect id="connection-trap-damage-type" value={trapDamageType} onChange={(event) => setTrapDamageType(event.target.value as TrapDamageType)}>
           {TRAP_DAMAGE_TYPES.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}
@@ -933,7 +1295,7 @@ function ConnectionInspector({ connection, rooms, onSave, onRemove }: { connecti
       </NativeSelect>
       {bidirectional && <><label className="dialog-label" htmlFor="return-exit-name">Return exit name</label><Input id="return-exit-name" value={returnExitName} onChange={(event) => setReturnExitName(event.target.value)} /></>}
       <p className="inspector-note">Movement rules update immediately when this passage is saved.</p>
-      <Button disabled={(bidirectional && !returnExitName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onSave(connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName)}><Save /> Save connection</Button>
+      <Button disabled={(bidirectional && !returnExitName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDisarmDifficulty) || trapDisarmDifficulty < 1 || trapDisarmDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onSave(connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDisarmDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName)}><Save /> Save connection</Button>
       <Button variant="destructive" onClick={onRemove}><Trash2 /> Remove connection</Button>
     </>
   );
@@ -949,6 +1311,211 @@ function RoomDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenCha
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   return <EditorDialog open={open} onOpenChange={onOpenChange} title="Add location" description="Coordinates are assigned automatically; drag the node afterward." name={name} setName={setName} details={description} setDetails={setDescription} action="Add location" onSubmit={() => onCreate(name, description)} />;
+}
+
+function RoomFeatureDialog({
+  open,
+  feature,
+  templates,
+  onOpenChange,
+  onSave,
+  onDelete,
+}: {
+  open: boolean;
+  feature: {
+    id: string;
+    room_id: string;
+    name: string;
+    description: string;
+    feature_type: string;
+  } | null;
+  templates: RoomFeatureTemplateData[];
+  onOpenChange: (open: boolean) => void;
+  onSave: (record: {
+    name: string;
+    description: string;
+    feature_type: string;
+  }) => Promise<boolean>;
+  onDelete?: () => Promise<boolean>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [featureType, setFeatureType] = useState('furniture');
+  const [templateId, setTemplateId] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setTemplateId('');
+    setName(feature?.name ?? '');
+    setDescription(feature?.description ?? '');
+    setFeatureType(feature?.feature_type ?? 'furniture');
+  }, [feature, open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{feature ? `Edit ${feature.name}` : 'Add Room Feature'}</DialogTitle>
+          <DialogDescription>
+            Room Features are persistent descriptive objects in this location.
+          </DialogDescription>
+        </DialogHeader>
+        {!feature && templates.length > 0 && (
+          <>
+            <label className="dialog-label" htmlFor="room-feature-template">From feature library</label>
+            <NativeSelect
+              id="room-feature-template"
+              value={templateId}
+              onChange={(event) => {
+                const nextId = event.target.value;
+                setTemplateId(nextId);
+                const template = templates.find((item) => item.id === nextId);
+                if (!template) return;
+                setName(template.name);
+                setDescription(template.description);
+                setFeatureType(template.feature_type);
+              }}
+            >
+              <NativeSelectOption value="">Create from scratch…</NativeSelectOption>
+              {templates.map((template) => (
+                <NativeSelectOption key={template.id} value={template.id}>{template.name}</NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </>
+        )}
+        <label className="dialog-label" htmlFor="room-feature-name">Name</label>
+        <Input id="room-feature-name" value={name} onChange={(event) => setName(event.target.value)} />
+        <label className="dialog-label" htmlFor="room-feature-type">Type</label>
+        <NativeSelect id="room-feature-type" value={featureType} onChange={(event) => setFeatureType(event.target.value)}>
+          <NativeSelectOption value="furniture">furniture</NativeSelectOption>
+          <NativeSelectOption value="decoration">decoration</NativeSelectOption>
+          <NativeSelectOption value="structure">structure</NativeSelectOption>
+          <NativeSelectOption value="environmental">environmental</NativeSelectOption>
+          <NativeSelectOption value="other">other</NativeSelectOption>
+        </NativeSelect>
+        <label className="dialog-label" htmlFor="room-feature-description">Description</label>
+        <Textarea id="room-feature-description" value={description} onChange={(event) => setDescription(event.target.value)} />
+        <DialogFooter>
+          {feature && onDelete && (
+            <Button type="button" variant="outline" onClick={() => void onDelete()}>
+              <Trash2 /> Delete
+            </Button>
+          )}
+          <Button
+            disabled={!name.trim()}
+            onClick={() => void onSave({
+              name,
+              description,
+              feature_type: featureType,
+            })}
+          >
+            <Save /> {feature ? 'Save Room Feature' : 'Add Room Feature'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FeatureLibraryDialog({
+  open,
+  templates,
+  onOpenChange,
+  onSave,
+  onDelete,
+}: {
+  open: boolean;
+  templates: RoomFeatureTemplateData[];
+  onOpenChange: (open: boolean) => void;
+  onSave: (
+    editingId: string | undefined,
+    record: { name: string; description: string; feature_type: string },
+  ) => Promise<boolean>;
+  onDelete: (template: RoomFeatureTemplateData) => Promise<boolean>;
+}) {
+  const [editingId, setEditingId] = useState<string | undefined>();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [featureType, setFeatureType] = useState('furniture');
+
+  const editTemplate = (template?: RoomFeatureTemplateData) => {
+    setEditingId(template?.id);
+    setName(template?.name ?? '');
+    setDescription(template?.description ?? '');
+    setFeatureType(template?.feature_type ?? 'furniture');
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Feature library</DialogTitle>
+          <DialogDescription>
+            Create reusable room features once, then place independent copies in any room.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="catalog-heading">
+          <div className="catalog-count">{templates.length} feature types available</div>
+          <button type="button" onClick={() => editTemplate()}>New feature</button>
+        </div>
+        <div className="catalog-list" aria-label="Existing room feature types">
+          {templates.map((template) => (
+            <button
+              type="button"
+              className={editingId === template.id ? 'selected' : ''}
+              key={template.id}
+              onClick={() => editTemplate(template)}
+            >
+              <span>{template.name}</span>
+              <Badge variant="outline">{template.feature_type}</Badge>
+            </button>
+          ))}
+        </div>
+        <div className="catalog-grid">
+          <label className="dialog-label" htmlFor="feature-template-name">
+            Name
+            <Input id="feature-template-name" value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label className="dialog-label" htmlFor="feature-template-type">
+            Type
+            <NativeSelect id="feature-template-type" value={featureType} onChange={(event) => setFeatureType(event.target.value)}>
+              <NativeSelectOption value="furniture">furniture</NativeSelectOption>
+              <NativeSelectOption value="decoration">decoration</NativeSelectOption>
+              <NativeSelectOption value="structure">structure</NativeSelectOption>
+              <NativeSelectOption value="environmental">environmental</NativeSelectOption>
+              <NativeSelectOption value="other">other</NativeSelectOption>
+            </NativeSelect>
+          </label>
+        </div>
+        <label className="dialog-label" htmlFor="feature-template-description">Description</label>
+        <Textarea id="feature-template-description" value={description} onChange={(event) => setDescription(event.target.value)} />
+        <DialogFooter>
+          {editingId && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                const template = templates.find((item) => item.id === editingId);
+                if (template && await onDelete(template)) editTemplate();
+              }}
+            >
+              <Trash2 /> Delete
+            </Button>
+          )}
+          <Button
+            disabled={!name.trim()}
+            onClick={async () => {
+              if (await onSave(editingId, { name, description, feature_type: featureType })) {
+                editTemplate();
+              }
+            }}
+          >
+            <Save /> {editingId ? 'Save feature type' : 'Create feature type'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function EditorDialog({ open, onOpenChange, title, description, name, setName, details, setDetails, action, onSubmit }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; description: string; name: string; setName: (value: string) => void; details: string; setDetails: (value: string) => void; action: string; onSubmit: () => Promise<void> }) {
@@ -967,7 +1534,7 @@ function EditorDialog({ open, onOpenChange, title, description, name, setName, d
   );
 }
 
-function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, connectionType: MapConnectionType, doorState: DoorState, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnName: string) => Promise<void> }) {
+function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: Connection | null; onOpenChange: (open: boolean) => void; onCreate: (name: string, connectionType: MapConnectionType, doorState: DoorState, lockState: DoorLockState, unlockDifficulty: number, hasTrap: boolean, trapState: TrapState, trapDetectionDifficulty: number, trapDisarmDifficulty: number, trapDamageType: TrapDamageType, trapDamage: number, bidirectional: boolean, returnName: string) => Promise<void> }) {
   const [name, setName] = useState(() => exitNameForHandle(connection?.sourceHandle));
   const [bidirectional, setBidirectional] = useState(true);
   const [connectionType, setConnectionType] = useState<MapConnectionType>('hallway');
@@ -977,6 +1544,7 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
   const [hasTrap, setHasTrap] = useState(false);
   const [trapState, setTrapState] = useState<TrapState>('armed');
   const [trapDetectionDifficulty, setTrapDetectionDifficulty] = useState(10);
+  const [trapDisarmDifficulty, setTrapDisarmDifficulty] = useState(10);
   const [trapDamageType, setTrapDamageType] = useState<TrapDamageType>('physical');
   const [trapDamage, setTrapDamage] = useState(1);
   const [returnName, setReturnName] = useState(() => exitNameForHandle(connection?.targetHandle));
@@ -1007,7 +1575,7 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
           {lockState === 'locked' && <><label className="dialog-label" htmlFor="new-connection-unlock-difficulty">Unlock difficulty (1–30)</label><Input id="new-connection-unlock-difficulty" type="number" min={1} max={30} step={1} value={unlockDifficulty} onChange={(event) => setUnlockDifficulty(Number(event.target.value))} /></>}
         </>}
         <label className="dialog-label" htmlFor="new-connection-trap-state">Trap</label>
-        <NativeSelect id="new-connection-trap-state" value={hasTrap ? 'trapped' : 'none'} onChange={(event) => setHasTrap(event.target.value === 'trapped')}>
+        <NativeSelect id="new-connection-trap-state" value={hasTrap ? 'trapped' : 'none'} onChange={(event) => { const trapped = event.target.value === 'trapped'; setHasTrap(trapped); if (trapped) setTrapState('armed'); }}>
           <NativeSelectOption value="none">No trap</NativeSelectOption>
           <NativeSelectOption value="trapped">Trapped</NativeSelectOption>
         </NativeSelect>
@@ -1020,6 +1588,8 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
           </NativeSelect>
           <label className="dialog-label" htmlFor="new-connection-trap-difficulty">Insight detection difficulty (1–30)</label>
           <Input id="new-connection-trap-difficulty" type="number" min={1} max={30} step={1} value={trapDetectionDifficulty} onChange={(event) => setTrapDetectionDifficulty(Number(event.target.value))} />
+          <label className="dialog-label" htmlFor="new-connection-trap-disarm-difficulty">Disarm difficulty (1–30)</label>
+          <Input id="new-connection-trap-disarm-difficulty" type="number" min={1} max={30} step={1} value={trapDisarmDifficulty} onChange={(event) => setTrapDisarmDifficulty(Number(event.target.value))} />
           <label className="dialog-label" htmlFor="new-connection-trap-damage-type">Damage type</label>
           <NativeSelect id="new-connection-trap-damage-type" value={trapDamageType} onChange={(event) => setTrapDamageType(event.target.value as TrapDamageType)}>
             {TRAP_DAMAGE_TYPES.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}
@@ -1033,7 +1603,321 @@ function ConnectionDialog({ connection, onOpenChange, onCreate }: { connection: 
           <NativeSelectOption value="one-way">One-way passage</NativeSelectOption>
         </NativeSelect>
         {bidirectional && <><label className="dialog-label" htmlFor="new-return-exit-name">Return exit name</label><Input id="new-return-exit-name" value={returnName} onChange={(event) => setReturnName(event.target.value)} /></>}
-        <DialogFooter><Button disabled={!name.trim() || (bidirectional && !returnName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onCreate(name, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDamageType, trapDamage, bidirectional, returnName)}>Create connection</Button></DialogFooter>
+        <DialogFooter><Button disabled={!name.trim() || (bidirectional && !returnName.trim()) || (connectionType === 'door' && lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30)) || (hasTrap && ((!Number.isInteger(trapDetectionDifficulty) || trapDetectionDifficulty < 1 || trapDetectionDifficulty > 30) || (!Number.isInteger(trapDisarmDifficulty) || trapDisarmDifficulty < 1 || trapDisarmDifficulty > 30) || (!Number.isInteger(trapDamage) || trapDamage < 1)))} onClick={() => void onCreate(name, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDisarmDifficulty, trapDamageType, trapDamage, bidirectional, returnName)}>Create connection</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ContainerPlacementDialog({
+  open,
+  templates,
+  onOpenChange,
+  onPlace,
+  onCreateAndPlace,
+}: {
+  open: boolean;
+  templates: ContainerTemplateData[];
+  onOpenChange: (open: boolean) => void;
+  onPlace: (templateId: string) => Promise<boolean>;
+  onCreateAndPlace: (draft: ContainerTemplateDraft) => Promise<boolean>;
+}) {
+  const [templateId, setTemplateId] = useState('');
+  const [search, setSearch] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [containerType, setContainerType] = useState<ContainerTypeValue>('wooden_chest');
+  const [description, setDescription] = useState('');
+  const [lockState, setLockState] = useState<DoorLockState>('none');
+  const [unlockDifficulty, setUnlockDifficulty] = useState(10);
+  const [hidden, setHidden] = useState(false);
+  const [discoveryDifficulty, setDiscoveryDifficulty] = useState(10);
+  const filtered = templates.filter((template) => {
+    const query = search.trim().toLocaleLowerCase();
+    return !query
+      || template.name.toLocaleLowerCase().includes(query)
+      || template.type.toLocaleLowerCase().includes(query);
+  });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add container</DialogTitle>
+          <DialogDescription>
+            Place a reusable container definition, or create a new definition and place it here.
+          </DialogDescription>
+        </DialogHeader>
+        {!creating ? (
+          <>
+            <label className="dialog-label" htmlFor="container-search">Search library</label>
+            <Input id="container-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Chest, corpse, shelf…" />
+            <label className="dialog-label" htmlFor="container-template">Container</label>
+            <NativeSelect id="container-template" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+              <NativeSelectOption value="">Choose a container…</NativeSelectOption>
+              {filtered.map((template) => (
+                <NativeSelectOption key={template.id} value={template.id}>
+                  {template.name} · {CONTAINER_TYPES.find((item) => item.value === template.type)?.label ?? template.type}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <Button type="button" variant="outline" onClick={() => setCreating(true)}>
+              <Plus /> New container definition
+            </Button>
+            <DialogFooter>
+              <Button
+                disabled={!templateId}
+                onClick={async () => {
+                  if (await onPlace(templateId)) onOpenChange(false);
+                }}
+              >
+                Add container
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <label className="dialog-label" htmlFor="new-container-name">Name</label>
+            <Input id="new-container-name" value={name} onChange={(event) => setName(event.target.value)} />
+            <label className="dialog-label" htmlFor="new-container-type">Type</label>
+            <NativeSelect id="new-container-type" value={containerType} onChange={(event) => setContainerType(event.target.value as ContainerTypeValue)}>
+              {CONTAINER_TYPES.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}
+            </NativeSelect>
+            <label className="dialog-label" htmlFor="new-container-description">Description</label>
+            <Textarea id="new-container-description" value={description} onChange={(event) => setDescription(event.target.value)} />
+            <label className="dialog-label" htmlFor="new-container-lock">Default lock</label>
+            <NativeSelect id="new-container-lock" value={lockState} onChange={(event) => setLockState(event.target.value as DoorLockState)}>
+              <NativeSelectOption value="none">No lock</NativeSelectOption>
+              <NativeSelectOption value="unlocked">Unlocked</NativeSelectOption>
+              <NativeSelectOption value="locked">Locked</NativeSelectOption>
+              <NativeSelectOption value="broken">Broken</NativeSelectOption>
+            </NativeSelect>
+            {lockState === 'locked' && (
+              <>
+                <label className="dialog-label" htmlFor="new-container-unlock-difficulty">Unlock difficulty (1–30)</label>
+                <Input id="new-container-unlock-difficulty" type="number" min={1} max={30} value={unlockDifficulty} onChange={(event) => setUnlockDifficulty(Number(event.target.value))} />
+              </>
+            )}
+            <label className="dialog-label" htmlFor="new-container-hidden">Default visibility</label>
+            <NativeSelect id="new-container-hidden" value={hidden ? 'hidden' : 'visible'} onChange={(event) => setHidden(event.target.value === 'hidden')}>
+              <NativeSelectOption value="visible">Visible</NativeSelectOption>
+              <NativeSelectOption value="hidden">Hidden</NativeSelectOption>
+            </NativeSelect>
+            {hidden && (
+              <>
+                <label className="dialog-label" htmlFor="new-container-discovery-difficulty">Discovery DC (1–30)</label>
+                <Input id="new-container-discovery-difficulty" type="number" min={1} max={30} value={discoveryDifficulty} onChange={(event) => setDiscoveryDifficulty(Number(event.target.value))} />
+              </>
+            )}
+            <Button type="button" variant="outline" onClick={() => setCreating(false)}>Back to library</Button>
+            <DialogFooter>
+              <Button
+                disabled={
+                  !name.trim()
+                  || (lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30))
+                  || (hidden && (!Number.isInteger(discoveryDifficulty) || discoveryDifficulty < 1 || discoveryDifficulty > 30))
+                }
+                onClick={async () => {
+                  if (await onCreateAndPlace({
+                    name,
+                    type: containerType,
+                    description,
+                    lockState,
+                    unlockDifficulty,
+                    hidden,
+                    discoveryDifficulty,
+                  })) onOpenChange(false);
+                }}
+              >
+                Create and place
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ContainerEditorDialog({
+  container,
+  catalogItems,
+  onOpenChange,
+  onSave,
+  onAddItem,
+  onSetQuantity,
+  onRemoveItem,
+}: {
+  container: PlacedContainer | null;
+  catalogItems: CatalogItem[];
+  onOpenChange: (open: boolean) => void;
+  onSave: (record: {
+    name: string;
+    description: string;
+    has_lock: boolean;
+    is_locked: boolean;
+    is_broken: boolean;
+    unlock_difficulty: number | null;
+    hidden: boolean;
+    discovery_difficulty: number | null;
+    is_open: boolean;
+    searched: boolean;
+  }) => Promise<boolean>;
+  onAddItem: (itemId: string, quantity: number) => Promise<boolean>;
+  onSetQuantity: (itemId: string, quantity: number) => Promise<boolean>;
+  onRemoveItem: (itemId: string) => Promise<boolean>;
+}) {
+  const [name, setName] = useState(container?.name ?? '');
+  const [description, setDescription] = useState(container?.description ?? '');
+  const [lockState, setLockState] = useState<DoorLockState>(
+    container?.has_lock
+      ? container.is_broken
+        ? 'broken'
+        : container.is_locked
+          ? 'locked'
+          : 'unlocked'
+      : 'none',
+  );
+  const [unlockDifficulty, setUnlockDifficulty] = useState(container?.unlock_difficulty ?? 10);
+  const [hidden, setHidden] = useState(container?.hidden ?? false);
+  const [discoveryDifficulty, setDiscoveryDifficulty] = useState(container?.discovery_difficulty ?? 10);
+  const [isOpen, setIsOpen] = useState(container?.is_open ?? false);
+  const [searched, setSearched] = useState(container?.searched ?? false);
+  const [itemId, setItemId] = useState('');
+  const [quantity, setQuantity] = useState(1);
+  const [quantities, setQuantities] = useState<Record<string, number>>({});
+
+  return (
+    <Dialog open={Boolean(container)} onOpenChange={onOpenChange}>
+      <DialogContent>
+        {container && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Edit {container.name}</DialogTitle>
+              <DialogDescription>
+                {CONTAINER_TYPES.find((item) => item.value === container.type)?.label ?? container.type}
+                {' · '}
+                template {container.template_id}
+              </DialogDescription>
+            </DialogHeader>
+            <label className="dialog-label" htmlFor="container-editor-name">Name</label>
+            <Input id="container-editor-name" value={name} onChange={(event) => setName(event.target.value)} />
+            <label className="dialog-label" htmlFor="container-editor-description">Description</label>
+            <Textarea id="container-editor-description" value={description} onChange={(event) => setDescription(event.target.value)} />
+
+            <h3>Contents</h3>
+            {container.contents.map((item) => (
+              <div key={item.id}>
+                <strong>{item.name}</strong>
+                <Input
+                  aria-label={`${item.name} quantity`}
+                  type="number"
+                  min={1}
+                  value={quantities[item.id] ?? item.quantity}
+                  onChange={(event) => setQuantities((current) => ({
+                    ...current,
+                    [item.id]: Number(event.target.value),
+                  }))}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={(quantities[item.id] ?? item.quantity) < 1}
+                  onClick={() => void onSetQuantity(item.id, quantities[item.id] ?? item.quantity)}
+                >
+                  Save quantity
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => void onRemoveItem(item.id)}>
+                  <Trash2 /> Remove
+                </Button>
+              </div>
+            ))}
+            {!container.contents.length && <p className="muted-row">Container is empty.</p>}
+            <label className="dialog-label" htmlFor="container-editor-item">Add item</label>
+            <NativeSelect id="container-editor-item" value={itemId} onChange={(event) => setItemId(event.target.value)}>
+              <NativeSelectOption value="">Choose an item…</NativeSelectOption>
+              {catalogItems.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.name} · {item.item_type}</NativeSelectOption>)}
+            </NativeSelect>
+            <label className="dialog-label" htmlFor="container-editor-item-quantity">Quantity</label>
+            <Input id="container-editor-item-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!itemId || quantity < 1}
+              onClick={async () => {
+                if (await onAddItem(itemId, quantity)) {
+                  setItemId('');
+                  setQuantity(1);
+                }
+              }}
+            >
+              <Plus /> Add item
+            </Button>
+
+            <h3>Lock</h3>
+            <NativeSelect
+              value={lockState}
+              onChange={(event) => {
+                const next = event.target.value as DoorLockState;
+                setLockState(next);
+                if (next === 'locked') setIsOpen(false);
+              }}
+            >
+              <NativeSelectOption value="none">No lock</NativeSelectOption>
+              <NativeSelectOption value="unlocked">Unlocked</NativeSelectOption>
+              <NativeSelectOption value="locked">Locked</NativeSelectOption>
+              <NativeSelectOption value="broken">Broken</NativeSelectOption>
+            </NativeSelect>
+            {lockState === 'locked' && (
+              <Input type="number" min={1} max={30} value={unlockDifficulty} onChange={(event) => setUnlockDifficulty(Number(event.target.value))} />
+            )}
+
+            <h3>Hidden / discovery</h3>
+            <NativeSelect value={hidden ? 'hidden' : 'visible'} onChange={(event) => setHidden(event.target.value === 'hidden')}>
+              <NativeSelectOption value="visible">Visible</NativeSelectOption>
+              <NativeSelectOption value="hidden">Hidden</NativeSelectOption>
+            </NativeSelect>
+            {hidden && (
+              <Input type="number" min={1} max={30} value={discoveryDifficulty} onChange={(event) => setDiscoveryDifficulty(Number(event.target.value))} />
+            )}
+            <label>
+              <input type="checkbox" checked={isOpen} disabled={lockState === 'locked'} onChange={(event) => setIsOpen(event.target.checked)} />
+              Opened
+            </label>
+            <label>
+              <input type="checkbox" checked={searched} onChange={(event) => setSearched(event.target.checked)} />
+              Searched
+            </label>
+
+            <DialogFooter>
+              <Button
+                disabled={
+                  !name.trim()
+                  || (lockState === 'locked' && (!Number.isInteger(unlockDifficulty) || unlockDifficulty < 1 || unlockDifficulty > 30))
+                  || (hidden && (!Number.isInteger(discoveryDifficulty) || discoveryDifficulty < 1 || discoveryDifficulty > 30))
+                }
+                onClick={async () => {
+                  const saved = await onSave({
+                    name,
+                    description,
+                    has_lock: lockState !== 'none',
+                    is_locked: lockState === 'locked',
+                    is_broken: lockState === 'broken',
+                    unlock_difficulty: lockState === 'locked' ? unlockDifficulty : null,
+                    hidden,
+                    discovery_difficulty: hidden ? discoveryDifficulty : null,
+                    is_open: isOpen && lockState !== 'locked',
+                    searched,
+                  });
+                  if (saved) onOpenChange(false);
+                }}
+              >
+                <Save /> Save container
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -1095,9 +1979,17 @@ function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open: boolea
   const [grip, setGrip] = useState('one_handed');
   const [canEquip, setCanEquip] = useState(false);
   const [readableContent, setReadableContent] = useState('');
+  const [stackable, setStackable] = useState(false);
+  const [itemTypeFilter, setItemTypeFilter] = useState<CatalogItem['item_type'] | 'all'>('all');
 
   const editingItem = items.find((item) => item.id === editingId);
+  const filteredItems = itemTypeFilter === 'all' ? items : items.filter((item) => item.item_type === itemTypeFilter);
+  useEffect(() => {
+    setStackable(editingItem?.stackable ?? false);
+  }, [editingItem]);
+
   const record: ItemDraft = { name, item_type: itemType, description, rarity, value, weight, slot_cost: slotCost };
+  Object.assign(record, { stackable });
   if (itemType === 'weapon') Object.assign(record, { grip, durability: editingItem?.durability ?? 40, damage: power, damage_type: damageType });
   if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: editingItem?.dodge_penalty ?? 0, strength_requirement: editingItem?.strength_requirement ?? 0 });
   if (itemType === 'container') Object.assign(record, { capacity: power, can_equip: canEquip });
@@ -1131,14 +2023,28 @@ function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open: boolea
       <DialogContent>
         <DialogHeader><DialogTitle>Item library</DialogTitle><DialogDescription>Create and edit item types here. Rooms and containers can only use entries from this shared library.</DialogDescription></DialogHeader>
         <div className="catalog-heading"><div className="catalog-count">{items.length} item types available</div><button type="button" onClick={() => editItem()}>New item</button></div>
+        <label className="dialog-label" htmlFor="item-library-type-filter">Filter by type
+          <NativeSelect id="item-library-type-filter" value={itemTypeFilter} onChange={(event) => setItemTypeFilter(event.target.value as CatalogItem['item_type'] | 'all')}>
+            <NativeSelectOption value="all">All types</NativeSelectOption>
+            <NativeSelectOption value="misc">Misc</NativeSelectOption>
+            <NativeSelectOption value="tool">Tool</NativeSelectOption>
+            <NativeSelectOption value="weapon">Weapon</NativeSelectOption>
+            <NativeSelectOption value="armor">Armor</NativeSelectOption>
+            <NativeSelectOption value="clothing">Clothing</NativeSelectOption>
+            <NativeSelectOption value="container">Container</NativeSelectOption>
+            <NativeSelectOption value="consumable">Consumable</NativeSelectOption>
+            <NativeSelectOption value="readable">Readable</NativeSelectOption>
+          </NativeSelect>
+        </label>
         <div className="catalog-list" aria-label="Existing item types">
-          {items.map((item) => (
+          {filteredItems.map((item) => (
             <button type="button" className={editingId === item.id ? 'selected' : ''} key={item.id} onClick={() => editItem(item)}><span>{item.name}</span><Badge variant="outline">{item.item_type}</Badge></button>
           ))}
         </div>
         <div className="catalog-grid">
           <label className="dialog-label" htmlFor="item-name">Name<Input id="item-name" value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} disabled={Boolean(editingId)} onChange={(event) => { const nextType = event.target.value as CatalogItem['item_type']; setItemType(nextType); if (nextType === 'readable' && weight === 0) setSlotCost(0); }}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="tool">Tool</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption><NativeSelectOption value="readable">Readable</NativeSelectOption></NativeSelect></label>
+          <label className="dialog-label" htmlFor="item-type">Type<NativeSelect id="item-type" value={itemType} disabled={Boolean(editingId)} onChange={(event) => { const nextType = event.target.value as CatalogItem['item_type']; setItemType(nextType); setStackable(nextType === 'consumable' || nextType === 'tool'); if (nextType === 'readable' && weight === 0) setSlotCost(0); }}><NativeSelectOption value="misc">Misc</NativeSelectOption><NativeSelectOption value="tool">Tool</NativeSelectOption><NativeSelectOption value="weapon">Weapon</NativeSelectOption><NativeSelectOption value="armor">Armor</NativeSelectOption><NativeSelectOption value="clothing">Clothing</NativeSelectOption><NativeSelectOption value="container">Container</NativeSelectOption><NativeSelectOption value="consumable">Consumable</NativeSelectOption><NativeSelectOption value="readable">Readable</NativeSelectOption></NativeSelect></label>
+          <label className="dialog-label" htmlFor="item-stackable">Stackable<input id="item-stackable" type="checkbox" checked={stackable} onChange={(event) => setStackable(event.target.checked)} /></label>
           <label className="dialog-label" htmlFor="item-rarity">Rarity<Input id="item-rarity" value={rarity} onChange={(event) => setRarity(event.target.value)} /></label>
           <label className="dialog-label" htmlFor="item-value">Value<Input id="item-value" type="number" min={0} value={value} onChange={(event) => setValue(Number(event.target.value))} /></label>
           <label className="dialog-label" htmlFor="item-weight">Weight<Input id="item-weight" type="number" min={0} value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>

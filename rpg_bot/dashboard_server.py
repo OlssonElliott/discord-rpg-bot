@@ -79,6 +79,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._handle_api()
 
+    def do_PUT(self) -> None:
+        self._handle_api()
+
     def do_PATCH(self) -> None:
         self._handle_api()
 
@@ -91,7 +94,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Allow-Headers", "Content-Type, X-File-Name"
         )
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         self.end_headers()
 
 

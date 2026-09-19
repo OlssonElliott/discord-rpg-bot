@@ -136,6 +136,8 @@ Player commands:
 - `/diceedgecolor [color]` — view or set a personal dice edge color.
 - `/dicenumbercolor [color]` — view or set a personal dice number color.
 - `/status` — shows the calling user's character, HP, and stance.
+- `/give` — privately offer an inventory item or coins to another character in
+  the same room.
 
 DM-role commands:
 
@@ -143,8 +145,6 @@ DM-role commands:
 - `/heal user amount`
 - `/stance user stance`
 - `/sethp user hp`
-- `/giveitem user item [quantity]` — give an item or consumable stack to the
-  user's active character.
 
 Each Discord user ID can have multiple characters and one active character at a time.
 Damage stops at 0 HP, healing stops at maximum HP, and manual HP must be between

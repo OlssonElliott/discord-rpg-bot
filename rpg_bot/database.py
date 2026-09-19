@@ -149,10 +149,16 @@ class Database:
             ).fetchone()
             if row is None:
                 return False
-            connection.execute(
-                "UPDATE character_items SET durability = 0 WHERE instance_id = ?",
-                (row["instance_id"],),
-            )
+            if normalized == "trap_disarm_kit":
+                connection.execute(
+                    "DELETE FROM character_items WHERE instance_id = ?",
+                    (row["instance_id"],),
+                )
+            else:
+                connection.execute(
+                    "UPDATE character_items SET durability = 0 WHERE instance_id = ?",
+                    (row["instance_id"],),
+                )
         return True
 
     def initialize(self) -> None:
@@ -292,6 +298,37 @@ class Database:
                     FOREIGN KEY (parent_container_id) REFERENCES character_items(instance_id)
                 )
                 """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS give_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_user_id INTEGER NOT NULL,
+                    recipient_user_id INTEGER NOT NULL,
+                    sender_character_id INTEGER,
+                    recipient_character_id INTEGER,
+                    item_instance_id TEXT,
+                    quantity INTEGER NOT NULL DEFAULT 0,
+                    copper INTEGER NOT NULL DEFAULT 0,
+                    silver INTEGER NOT NULL DEFAULT 0,
+                    gold INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    sender_channel_id INTEGER,
+                    sender_message_id INTEGER,
+                    recipient_channel_id INTEGER,
+                    recipient_message_id INTEGER
+                )
+                """
+            )
+            give_request_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(give_requests)")
+            }
+            for column in ("sender_channel_id", "sender_message_id"):
+                if column not in give_request_columns:
+                    connection.execute(f"ALTER TABLE give_requests ADD COLUMN {column} INTEGER")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS pending_give_requests_by_sender "
+                "ON give_requests(sender_user_id, status, id DESC)"
             )
             self._initialize_character_equipment(connection)
             # The old model allowed nested item trees. Inventory is now flat and
@@ -580,6 +617,81 @@ class Database:
                 description TEXT,
                 FOREIGN KEY (room_id) REFERENCES rooms(id)
             );
+            CREATE TABLE IF NOT EXISTS container_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                container_type TEXT NOT NULL,
+                description TEXT,
+                default_has_lock INTEGER NOT NULL DEFAULT 0 CHECK (
+                    default_has_lock IN (0, 1)
+                ),
+                default_is_locked INTEGER NOT NULL DEFAULT 0 CHECK (
+                    default_is_locked IN (0, 1)
+                ),
+                default_is_broken INTEGER NOT NULL DEFAULT 0 CHECK (
+                    default_is_broken IN (0, 1)
+                ),
+                default_unlock_difficulty INTEGER CHECK (
+                    default_unlock_difficulty BETWEEN 1 AND 30
+                ),
+                default_hidden INTEGER NOT NULL DEFAULT 0 CHECK (
+                    default_hidden IN (0, 1)
+                ),
+                default_discovery_difficulty INTEGER CHECK (
+                    default_discovery_difficulty BETWEEN 1 AND 30
+                )
+            );
+            CREATE TABLE IF NOT EXISTS world_containers (
+                entity_id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                has_lock INTEGER NOT NULL DEFAULT 0 CHECK (has_lock IN (0, 1)),
+                is_locked INTEGER NOT NULL DEFAULT 0 CHECK (is_locked IN (0, 1)),
+                is_broken INTEGER NOT NULL DEFAULT 0 CHECK (is_broken IN (0, 1)),
+                unlock_difficulty INTEGER CHECK (
+                    unlock_difficulty BETWEEN 1 AND 30
+                ),
+                hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0, 1)),
+                discovery_difficulty INTEGER CHECK (
+                    discovery_difficulty BETWEEN 1 AND 30
+                ),
+                is_open INTEGER NOT NULL DEFAULT 0 CHECK (is_open IN (0, 1)),
+                searched INTEGER NOT NULL DEFAULT 0 CHECK (searched IN (0, 1)),
+                FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES container_templates(id)
+            );
+            CREATE TABLE IF NOT EXISTS character_known_containers (
+                character_id INTEGER NOT NULL,
+                container_id TEXT NOT NULL,
+                PRIMARY KEY (character_id, container_id),
+                FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE,
+                FOREIGN KEY (container_id) REFERENCES world_entities(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS containers_by_template
+                ON world_containers(template_id);
+            INSERT OR IGNORE INTO container_templates (
+                id, name, container_type, default_has_lock, default_is_locked,
+                default_is_broken, default_unlock_difficulty, default_hidden,
+                default_discovery_difficulty
+            ) VALUES
+                ('wooden_chest', 'Wooden Chest', 'wooden_chest', 0, 0, 0, NULL, 0, NULL),
+                ('reinforced_chest', 'Reinforced Chest', 'reinforced_chest', 1, 1, 0, 14, 0, NULL),
+                ('barrel', 'Barrel', 'barrel', 0, 0, 0, NULL, 0, NULL),
+                ('crate', 'Crate', 'crate', 0, 0, 0, NULL, 0, NULL),
+                ('shelf', 'Shelf', 'shelf', 0, 0, 0, NULL, 0, NULL),
+                ('bookshelf', 'Bookshelf', 'bookshelf', 0, 0, 0, NULL, 0, NULL),
+                ('corpse', 'Corpse', 'corpse', 0, 0, 0, NULL, 0, NULL),
+                ('skeleton', 'Skeleton', 'skeleton', 0, 0, 0, NULL, 0, NULL),
+                ('backpack', 'Backpack', 'backpack', 0, 0, 0, NULL, 0, NULL),
+                ('hidden_compartment', 'Hidden Compartment', 'hidden_compartment', 0, 0, 0, NULL, 1, 14),
+                ('loose_floorboard', 'Loose Floorboard', 'loose_floorboard', 0, 0, 0, NULL, 1, 14),
+                ('other', 'Other', 'other', 0, 0, 0, NULL, 0, NULL);
+            INSERT OR IGNORE INTO world_containers (
+                entity_id, template_id, has_lock, is_locked, is_broken,
+                unlock_difficulty, hidden, discovery_difficulty, is_open, searched
+            )
+            SELECT id, 'other', 0, 0, 0, NULL, 0, NULL, 0, 0
+            FROM world_entities
+            WHERE kind = 'container';
             CREATE TABLE IF NOT EXISTS items (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -798,6 +910,818 @@ class Database:
                         exit_row["name"],
                     ),
                 )
+
+
+    def list_container_templates(self):
+        from .containers import ContainerTemplate, ContainerType
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, container_type, description,
+                       default_has_lock, default_is_locked, default_is_broken,
+                       default_unlock_difficulty, default_hidden,
+                       default_discovery_difficulty
+                FROM container_templates
+                ORDER BY name COLLATE NOCASE, id
+                """
+            ).fetchall()
+        return tuple(
+            ContainerTemplate(
+                row["id"],
+                row["name"],
+                ContainerType(row["container_type"]),
+                row["description"],
+                bool(row["default_has_lock"]),
+                bool(row["default_is_locked"]),
+                bool(row["default_is_broken"]),
+                row["default_unlock_difficulty"],
+                bool(row["default_hidden"]),
+                row["default_discovery_difficulty"],
+            )
+            for row in rows
+        )
+
+    def get_container_template(self, template_id: str):
+        from .containers import ContainerTemplate, ContainerType
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, name, container_type, description,
+                       default_has_lock, default_is_locked, default_is_broken,
+                       default_unlock_difficulty, default_hidden,
+                       default_discovery_difficulty
+                FROM container_templates WHERE id = ?
+                """,
+                (template_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ContainerTemplate(
+            row["id"],
+            row["name"],
+            ContainerType(row["container_type"]),
+            row["description"],
+            bool(row["default_has_lock"]),
+            bool(row["default_is_locked"]),
+            bool(row["default_is_broken"]),
+            row["default_unlock_difficulty"],
+            bool(row["default_hidden"]),
+            row["default_discovery_difficulty"],
+        )
+
+    def create_container_template(self, template):
+        template_id = self._clean_identifier(template.template_id, "Container template ID")
+        name = self._clean_name(template.name, "Container name")
+        from .locks import validate_lock
+
+        unlock_difficulty = validate_lock(
+            template.default_has_lock,
+            template.default_is_locked,
+            template.default_is_broken,
+            template.default_unlock_difficulty,
+            subject="container",
+        )
+        discovery_difficulty = self._validate_container_discovery(
+            template.default_hidden,
+            template.default_discovery_difficulty,
+        )
+        with self._connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO container_templates (
+                        id, name, container_type, description,
+                        default_has_lock, default_is_locked, default_is_broken,
+                        default_unlock_difficulty, default_hidden,
+                        default_discovery_difficulty
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        template_id,
+                        name,
+                        template.container_type.value,
+                        template.description,
+                        int(template.default_has_lock),
+                        int(template.default_is_locked),
+                        int(template.default_is_broken),
+                        unlock_difficulty,
+                        int(template.default_hidden),
+                        discovery_difficulty,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Container template '{template_id}' already exists."
+                ) from error
+        created = self.get_container_template(template_id)
+        assert created is not None
+        return created
+
+    def update_container_template(self, template_id: str, template):
+        clean_id = self._clean_identifier(template_id, "Container template ID")
+        name = self._clean_name(template.name, "Container name")
+        from .locks import validate_lock
+
+        unlock_difficulty = validate_lock(
+            template.default_has_lock,
+            template.default_is_locked,
+            template.default_is_broken,
+            template.default_unlock_difficulty,
+            subject="container",
+        )
+        discovery_difficulty = self._validate_container_discovery(
+            template.default_hidden,
+            template.default_discovery_difficulty,
+        )
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE container_templates
+                SET name = ?, container_type = ?, description = ?,
+                    default_has_lock = ?, default_is_locked = ?,
+                    default_is_broken = ?, default_unlock_difficulty = ?,
+                    default_hidden = ?, default_discovery_difficulty = ?
+                WHERE id = ?
+                """,
+                (
+                    name,
+                    template.container_type.value,
+                    template.description,
+                    int(template.default_has_lock),
+                    int(template.default_is_locked),
+                    int(template.default_is_broken),
+                    unlock_difficulty,
+                    int(template.default_hidden),
+                    discovery_difficulty,
+                    clean_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Container template '{clean_id}' does not exist."
+                )
+        updated = self.get_container_template(clean_id)
+        assert updated is not None
+        return updated
+
+    def create_container_instance(
+        self,
+        room_id: str,
+        template_id: str,
+        *,
+        instance_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        has_lock: bool | None = None,
+        is_locked: bool | None = None,
+        is_broken: bool | None = None,
+        unlock_difficulty: int | None = None,
+        hidden: bool | None = None,
+        discovery_difficulty: int | None = None,
+        is_open: bool = False,
+        searched: bool = False,
+    ):
+        template = self.get_container_template(template_id)
+        if template is None:
+            raise NotFoundError(
+                f"Container template '{template_id}' does not exist."
+            )
+        clean_id = self._clean_identifier(
+            instance_id or f"{template.template_id}_{uuid4().hex[:12]}",
+            "Container ID",
+        )
+        clean_name = self._clean_name(name or template.name, "Container name")
+        resolved_has_lock = (
+            template.default_has_lock if has_lock is None else has_lock
+        )
+        resolved_is_locked = (
+            template.default_is_locked if is_locked is None else is_locked
+        )
+        resolved_is_broken = (
+            template.default_is_broken if is_broken is None else is_broken
+        )
+        resolved_unlock_difficulty = (
+            template.default_unlock_difficulty
+            if unlock_difficulty is None and is_locked is None
+            else unlock_difficulty
+        )
+        from .locks import validate_lock
+
+        resolved_unlock_difficulty = validate_lock(
+            resolved_has_lock,
+            resolved_is_locked,
+            resolved_is_broken,
+            resolved_unlock_difficulty,
+            subject="container",
+        )
+        if is_open and resolved_is_locked:
+            raise ValueError("A locked container cannot be open.")
+        resolved_hidden = template.default_hidden if hidden is None else hidden
+        resolved_discovery_difficulty = (
+            template.default_discovery_difficulty
+            if discovery_difficulty is None and hidden is None
+            else discovery_difficulty
+        )
+        resolved_discovery_difficulty = self._validate_container_discovery(
+            resolved_hidden,
+            resolved_discovery_difficulty,
+        )
+        resolved_description = (
+            template.description if description is None else description
+        )
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO world_entities (
+                        id, room_id, kind, name, description
+                    ) VALUES (?, ?, 'container', ?, ?)
+                    """,
+                    (clean_id, room_id, clean_name, resolved_description),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO world_containers (
+                        entity_id, template_id, has_lock, is_locked, is_broken,
+                        unlock_difficulty, hidden, discovery_difficulty,
+                        is_open, searched
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clean_id,
+                        template.template_id,
+                        int(resolved_has_lock),
+                        int(resolved_is_locked),
+                        int(resolved_is_broken),
+                        resolved_unlock_difficulty,
+                        int(resolved_hidden),
+                        resolved_discovery_difficulty,
+                        int(is_open),
+                        int(searched),
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(f"Container '{clean_id}' already exists.") from error
+        created = self.get_container_instance(clean_id)
+        assert created is not None
+        return created
+
+    def get_container_instance(self, container_id: str):
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT entity.id, entity.room_id,
+                       COALESCE(container.template_id, 'other') AS template_id,
+                       entity.name,
+                       COALESCE(template.container_type, 'other') AS container_type,
+                       entity.description,
+                       COALESCE(container.has_lock, 0) AS has_lock,
+                       COALESCE(container.is_locked, 0) AS is_locked,
+                       COALESCE(container.is_broken, 0) AS is_broken,
+                       container.unlock_difficulty,
+                       COALESCE(container.hidden, 0) AS hidden,
+                       container.discovery_difficulty,
+                       COALESCE(container.is_open, 0) AS is_open,
+                       COALESCE(container.searched, 0) AS searched
+                FROM world_entities AS entity
+                LEFT JOIN world_containers AS container
+                  ON container.entity_id = entity.id
+                LEFT JOIN container_templates AS template
+                  ON template.id = container.template_id
+                WHERE entity.id = ? AND entity.kind = 'container'
+                """,
+                (container_id,),
+            ).fetchone()
+        return self._container_instance_from_row(row) if row is not None else None
+
+    def list_room_container_instances(self, room_id: str):
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            rows = connection.execute(
+                """
+                SELECT entity.id, entity.room_id,
+                       COALESCE(container.template_id, 'other') AS template_id,
+                       entity.name,
+                       COALESCE(template.container_type, 'other') AS container_type,
+                       entity.description,
+                       COALESCE(container.has_lock, 0) AS has_lock,
+                       COALESCE(container.is_locked, 0) AS is_locked,
+                       COALESCE(container.is_broken, 0) AS is_broken,
+                       container.unlock_difficulty,
+                       COALESCE(container.hidden, 0) AS hidden,
+                       container.discovery_difficulty,
+                       COALESCE(container.is_open, 0) AS is_open,
+                       COALESCE(container.searched, 0) AS searched
+                FROM world_entities AS entity
+                LEFT JOIN world_containers AS container
+                  ON container.entity_id = entity.id
+                LEFT JOIN container_templates AS template
+                  ON template.id = container.template_id
+                WHERE entity.room_id = ? AND entity.kind = 'container'
+                ORDER BY entity.name COLLATE NOCASE, entity.id
+                """,
+                (room_id,),
+            ).fetchall()
+        return tuple(self._container_instance_from_row(row) for row in rows)
+
+    @staticmethod
+    def _ensure_room_features_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS room_features (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                feature_type TEXT NOT NULL,
+                FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS room_features_by_room
+            ON room_features(room_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS room_feature_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                feature_type TEXT NOT NULL
+            )
+            """
+        )
+
+    def create_room_feature(
+        self,
+        feature_id: str,
+        room_id: str,
+        name: str,
+        feature_type,
+        description: str | None = None,
+    ):
+        from .room_features import RoomFeature
+
+        clean_id = self._clean_identifier(feature_id, "Room feature ID")
+        clean_name = self._clean_name(name, "Room feature name")
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            self._require_room(connection, room_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO room_features (
+                        id, room_id, name, description, feature_type
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clean_id,
+                        room_id,
+                        clean_name,
+                        description,
+                        feature_type.value,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Room feature '{clean_id}' already exists."
+                ) from error
+        return RoomFeature(
+            clean_id,
+            room_id,
+            clean_name,
+            feature_type,
+            description,
+        )
+
+    def get_room_feature(self, feature_id: str):
+        from .room_features import RoomFeature, RoomFeatureType
+
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            row = connection.execute(
+                """
+                SELECT id, room_id, name, description, feature_type
+                FROM room_features
+                WHERE id = ?
+                """,
+                (feature_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RoomFeature(
+            row["id"],
+            row["room_id"],
+            row["name"],
+            RoomFeatureType(row["feature_type"]),
+            row["description"],
+        )
+
+    def list_room_features(self, room_id: str):
+        from .room_features import RoomFeature, RoomFeatureType
+
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            self._require_room(connection, room_id)
+            rows = connection.execute(
+                """
+                SELECT id, room_id, name, description, feature_type
+                FROM room_features
+                WHERE room_id = ?
+                ORDER BY name COLLATE NOCASE, id
+                """,
+                (room_id,),
+            ).fetchall()
+        return tuple(
+            RoomFeature(
+                row["id"],
+                row["room_id"],
+                row["name"],
+                RoomFeatureType(row["feature_type"]),
+                row["description"],
+            )
+            for row in rows
+        )
+
+    def update_room_feature(self, feature):
+        clean_name = self._clean_name(feature.name, "Room feature name")
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE room_features
+                SET name = ?, description = ?, feature_type = ?
+                WHERE id = ?
+                """,
+                (
+                    clean_name,
+                    feature.description,
+                    feature.feature_type.value,
+                    feature.id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Room feature '{feature.id}' does not exist."
+                )
+        updated = self.get_room_feature(feature.id)
+        assert updated is not None
+        return updated
+
+    def remove_room_feature(self, feature_id: str) -> None:
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            cursor = connection.execute(
+                "DELETE FROM room_features WHERE id = ?",
+                (feature_id,),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Room feature '{feature_id}' does not exist."
+                )
+
+    def create_room_feature_template(
+        self,
+        template_id: str,
+        name: str,
+        feature_type,
+        description: str | None = None,
+    ):
+        from .room_features import RoomFeatureTemplate
+
+        clean_id = self._clean_identifier(template_id, "Room feature template ID")
+        clean_name = self._clean_name(name, "Room feature template name")
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO room_feature_templates (
+                        id, name, description, feature_type
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (clean_id, clean_name, description, feature_type.value),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Room feature template '{clean_id}' already exists."
+                ) from error
+        return RoomFeatureTemplate(
+            clean_id,
+            clean_name,
+            feature_type,
+            description,
+        )
+
+    def get_room_feature_template(self, template_id: str):
+        from .room_features import RoomFeatureTemplate, RoomFeatureType
+
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            row = connection.execute(
+                """
+                SELECT id, name, description, feature_type
+                FROM room_feature_templates
+                WHERE id = ?
+                """,
+                (template_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RoomFeatureTemplate(
+            row["id"],
+            row["name"],
+            RoomFeatureType(row["feature_type"]),
+            row["description"],
+        )
+
+    def list_room_feature_templates(self):
+        from .room_features import RoomFeatureTemplate, RoomFeatureType
+
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT id, name, description, feature_type
+                FROM room_feature_templates
+                ORDER BY name COLLATE NOCASE, id
+                """
+            ).fetchall()
+        return tuple(
+            RoomFeatureTemplate(
+                row["id"],
+                row["name"],
+                RoomFeatureType(row["feature_type"]),
+                row["description"],
+            )
+            for row in rows
+        )
+
+    def update_room_feature_template(self, template):
+        clean_name = self._clean_name(
+            template.name, "Room feature template name"
+        )
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE room_feature_templates
+                SET name = ?, description = ?, feature_type = ?
+                WHERE id = ?
+                """,
+                (
+                    clean_name,
+                    template.description,
+                    template.feature_type.value,
+                    template.id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Room feature template '{template.id}' does not exist."
+                )
+        updated = self.get_room_feature_template(template.id)
+        assert updated is not None
+        return updated
+
+    def remove_room_feature_template(self, template_id: str) -> None:
+        with self._connect() as connection:
+            self._ensure_room_features_schema(connection)
+            cursor = connection.execute(
+                "DELETE FROM room_feature_templates WHERE id = ?",
+                (template_id,),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Room feature template '{template_id}' does not exist."
+                )
+
+    def update_container_instance(self, container):
+        clean_name = self._clean_name(container.name, "Container name")
+        from .locks import validate_lock
+
+        unlock_difficulty = validate_lock(
+            container.has_lock,
+            container.is_locked,
+            container.is_broken,
+            container.unlock_difficulty,
+            subject="container",
+        )
+        if container.is_open and container.is_locked:
+            raise ValueError("A locked container cannot be open.")
+        discovery_difficulty = self._validate_container_discovery(
+            container.hidden,
+            container.discovery_difficulty,
+        )
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT 1 FROM world_entities
+                WHERE id = ? AND kind = 'container'
+                """,
+                (container.id,),
+            ).fetchone()
+            if existing is None:
+                raise NotFoundError(
+                    f"Container '{container.id}' does not exist."
+                )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO world_containers (
+                    entity_id, template_id, has_lock, is_locked, is_broken,
+                    unlock_difficulty, hidden, discovery_difficulty,
+                    is_open, searched
+                ) VALUES (?, ?, 0, 0, 0, NULL, 0, NULL, 0, 0)
+                """,
+                (container.id, container.template_id),
+            )
+            connection.execute(
+                """
+                UPDATE world_entities
+                SET name = ?, description = ?
+                WHERE id = ?
+                """,
+                (clean_name, container.description, container.id),
+            )
+            connection.execute(
+                """
+                UPDATE world_containers
+                SET template_id = ?, has_lock = ?, is_locked = ?,
+                    is_broken = ?, unlock_difficulty = ?, hidden = ?,
+                    discovery_difficulty = ?, is_open = ?, searched = ?
+                WHERE entity_id = ?
+                """,
+                (
+                    container.template_id,
+                    int(container.has_lock),
+                    int(container.is_locked),
+                    int(container.is_broken),
+                    unlock_difficulty,
+                    int(container.hidden),
+                    discovery_difficulty,
+                    int(container.is_open),
+                    int(container.searched),
+                    container.id,
+                ),
+            )
+        updated = self.get_container_instance(container.id)
+        assert updated is not None
+        return updated
+
+    def remove_container_instance(self, container_id: str) -> None:
+        with self._connect() as connection:
+            exists = connection.execute(
+                """
+                SELECT 1 FROM world_entities
+                WHERE id = ? AND kind = 'container'
+                """,
+                (container_id,),
+            ).fetchone()
+            if exists is None:
+                raise NotFoundError(f"Container '{container_id}' does not exist.")
+            connection.execute(
+                "DELETE FROM character_known_containers WHERE container_id = ?",
+                (container_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM inventory_stacks
+                WHERE holder_kind = 'entity' AND holder_id = ?
+                """,
+                (container_id,),
+            )
+            connection.execute(
+                "DELETE FROM world_containers WHERE entity_id = ?",
+                (container_id,),
+            )
+            connection.execute(
+                "DELETE FROM world_entities WHERE id = ?",
+                (container_id,),
+            )
+
+    def set_world_item_quantity(
+        self,
+        holder: InventoryHolder,
+        item_id: str,
+        quantity: int,
+    ) -> ItemStack:
+        if quantity <= 0:
+            raise InvalidTransferError("Quantity must be greater than zero.")
+        with self._connect() as connection:
+            self._validate_holder(connection, holder)
+            item = self._require_item(connection, item_id)
+            if not item.stackable and quantity != 1:
+                raise InvalidTransferError(f"{item.name} is not stackable.")
+            cursor = connection.execute(
+                """
+                UPDATE inventory_stacks SET quantity = ?
+                WHERE holder_kind = ? AND holder_id = ? AND item_id = ?
+                """,
+                (quantity, holder.kind.value, holder.id, item.id),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Item '{item_id}' does not exist in that inventory."
+                )
+        return ItemStack(item, quantity)
+
+    def character_knows_container(
+        self,
+        character_id: int,
+        container_id: str,
+    ) -> bool:
+        container = self.get_container_instance(container_id)
+        if container is None:
+            raise NotFoundError(f"Container '{container_id}' does not exist.")
+        if not container.hidden:
+            return True
+        with self._connect() as connection:
+            return connection.execute(
+                """
+                SELECT 1 FROM character_known_containers
+                WHERE character_id = ? AND container_id = ?
+                """,
+                (character_id, container_id),
+            ).fetchone() is not None
+
+    def mark_container_discovered(
+        self,
+        character_id: int,
+        container_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            character = connection.execute(
+                """
+                SELECT 1 FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            if character is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            container = connection.execute(
+                """
+                SELECT 1 FROM world_entities
+                WHERE id = ? AND kind = 'container'
+                """,
+                (container_id,),
+            ).fetchone()
+            if container is None:
+                raise NotFoundError(
+                    f"Container '{container_id}' does not exist."
+                )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO character_known_containers (
+                    character_id, container_id
+                ) VALUES (?, ?)
+                """,
+                (character_id, container_id),
+            )
+
+    @staticmethod
+    def _validate_container_discovery(
+        hidden: bool,
+        discovery_difficulty: int | None,
+    ) -> int | None:
+        if not hidden:
+            return None
+        if (
+            isinstance(discovery_difficulty, bool)
+            or not isinstance(discovery_difficulty, int)
+            or not 1 <= discovery_difficulty <= 30
+        ):
+            raise ValueError(
+                "Discovery difficulty must be an integer from 1 to 30."
+            )
+        return discovery_difficulty
+
+    @staticmethod
+    def _container_instance_from_row(row):
+        from .containers import ContainerInstance, ContainerType
+
+        return ContainerInstance(
+            row["id"],
+            row["room_id"],
+            row["template_id"],
+            row["name"],
+            ContainerType(row["container_type"]),
+            row["description"],
+            bool(row["has_lock"]),
+            bool(row["is_locked"]),
+            bool(row["is_broken"]),
+            row["unlock_difficulty"],
+            bool(row["hidden"]),
+            row["discovery_difficulty"],
+            bool(row["is_open"]),
+            bool(row["searched"]),
+        )
 
     def create_character(
         self,
@@ -1357,24 +2281,40 @@ class Database:
             raise ValueError("Item quantity must be greater than zero.")
         with self._connect() as connection:
             if stackable:
-                row = connection.execute(
+                rows = connection.execute(
                     """
-                    SELECT instance_id FROM character_items
+                    SELECT instance_id, quantity FROM character_items
                     WHERE character_id = ? AND template_id = ?
                       AND parent_container_id IS ?
-                    ORDER BY rowid LIMIT 1
+                    ORDER BY rowid
                     """,
                     (character_id, template_id, parent_container_id),
-                ).fetchone()
-                if row is not None:
+                ).fetchall()
+                if rows:
+                    primary = rows[0]
+                    combined_quantity = quantity + sum(
+                        row["quantity"] for row in rows
+                    )
                     connection.execute(
                         """
-                        UPDATE character_items SET quantity = quantity + ?
+                        UPDATE character_items SET quantity = ?
                         WHERE instance_id = ?
                         """,
-                        (quantity, row["instance_id"]),
+                        (combined_quantity, primary["instance_id"]),
                     )
-                    return row["instance_id"]
+                    duplicate_ids = [
+                        row["instance_id"] for row in rows[1:]
+                    ]
+                    if duplicate_ids:
+                        placeholders = ", ".join("?" for _ in duplicate_ids)
+                        connection.execute(
+                            f"""
+                            DELETE FROM character_items
+                            WHERE instance_id IN ({placeholders})
+                            """,
+                            duplicate_ids,
+                        )
+                    return primary["instance_id"]
             instance_id = uuid4().hex
             connection.execute(
                 """
@@ -2132,23 +3072,15 @@ class Database:
     ) -> int | None:
         if has_lock and connection_type is not ConnectionType.DOOR:
             raise ValueError("Only door connections can have a lock.")
-        if not has_lock:
-            if is_locked or is_broken:
-                raise ValueError("A door without a lock cannot be locked or broken.")
-            return None
-        if is_locked and is_broken:
-            raise ValueError("A broken lock cannot also be locked.")
-        if is_broken:
-            return None
-        if not is_locked:
-            return None
-        if (
-            isinstance(unlock_difficulty, bool)
-            or not isinstance(unlock_difficulty, int)
-            or not 1 <= unlock_difficulty <= 30
-        ):
-            raise ValueError("Unlock difficulty must be an integer from 1 to 30.")
-        return unlock_difficulty
+        from .locks import validate_lock
+
+        return validate_lock(
+            has_lock,
+            is_locked,
+            is_broken,
+            unlock_difficulty,
+            subject="door",
+        )
 
     @staticmethod
     def _validate_connection_open(
@@ -2333,6 +3265,7 @@ class Database:
                 """
                 UPDATE room_connections
                 SET has_trap = ?, trap_state = ?, trap_detection_difficulty = ?,
+                    trap_disarm_difficulty = CASE WHEN ? THEN trap_disarm_difficulty ELSE NULL END,
                     trap_damage_type = ?, trap_damage = ?
                 WHERE id = ?
                 """,
@@ -2340,6 +3273,7 @@ class Database:
                     int(has_trap),
                     state.value if state is not None else None,
                     difficulty,
+                    int(has_trap),
                     damage_type.value if damage_type is not None else None,
                     damage,
                     row["id"],
@@ -2538,7 +3472,7 @@ class Database:
                        links.has_lock, links.is_locked, links.unlock_difficulty,
                        links.is_broken, links.is_open,
                        links.has_trap, links.trap_state,
-                       links.trap_detection_difficulty,
+                       links.trap_detection_difficulty, links.trap_disarm_difficulty,
                        links.trap_damage_type, links.trap_damage
                 FROM room_connections AS links
                 JOIN rooms AS source ON source.id = links.from_room_id
@@ -2569,6 +3503,7 @@ class Database:
                         else None
                     ),
                     row["trap_detection_difficulty"],
+                    row["trap_disarm_difficulty"],
                     (
                         TrapDamageType(row["trap_damage_type"])
                         if row["trap_damage_type"] is not None
@@ -3405,17 +4340,17 @@ class Database:
             if not stackable and quantity != 1:
                 raise InvalidTransferError(f"{item.name} is not stackable.")
 
-            existing = None
+            existing_rows = []
             if stackable:
-                existing = connection.execute(
+                existing_rows = connection.execute(
                     """
-                    SELECT instance_id FROM character_items
+                    SELECT instance_id, quantity FROM character_items
                     WHERE character_id = ? AND template_id = ?
                       AND parent_container_id IS NULL
-                    ORDER BY rowid LIMIT 1
+                    ORDER BY rowid
                     """,
                     (character_id, template_id),
-                ).fetchone()
+                ).fetchall()
 
             remaining = source_quantity - quantity
             if remaining:
@@ -3435,14 +4370,30 @@ class Database:
                     (source.kind.value, source.id, item.id),
                 )
 
-            if existing is not None:
+            if existing_rows:
+                primary = existing_rows[0]
+                combined_quantity = quantity + sum(
+                    row["quantity"] for row in existing_rows
+                )
                 connection.execute(
                     """
-                    UPDATE character_items SET quantity = quantity + ?
+                    UPDATE character_items SET quantity = ?
                     WHERE instance_id = ?
                     """,
-                    (quantity, existing["instance_id"]),
+                    (combined_quantity, primary["instance_id"]),
                 )
+                duplicate_ids = [
+                    row["instance_id"] for row in existing_rows[1:]
+                ]
+                if duplicate_ids:
+                    placeholders = ", ".join("?" for _ in duplicate_ids)
+                    connection.execute(
+                        f"""
+                        DELETE FROM character_items
+                        WHERE instance_id IN ({placeholders})
+                        """,
+                        duplicate_ids,
+                    )
             else:
                 connection.execute(
                     """

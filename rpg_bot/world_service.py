@@ -261,7 +261,18 @@ class WorldService:
         return self.database.get_room(room_id)
 
     def get_character_room(self, character_id: int) -> Room | None:
-        return self.database.get_character_room(character_id)
+        from dataclasses import replace
+
+        room = self.database.get_character_room(character_id)
+        if room is None:
+            return None
+        visible_entities = tuple(
+            entity
+            for entity in room.entities
+            if entity.kind is not EntityKind.CONTAINER
+            or self.database.character_knows_container(character_id, entity.id)
+        )
+        return replace(room, entities=visible_entities)
 
     def get_character_location(self, character_id: int) -> CharacterLocation | None:
         return self.database.get_character_location(character_id)
@@ -326,6 +337,316 @@ class WorldService:
         self._sync_catalog_item(template)
         return self.database.add_item(holder, template.template_id, quantity)
 
+
+    def list_container_templates(self):
+        return self.database.list_container_templates()
+
+    def get_container_template(self, template_id: str):
+        return self.database.get_container_template(template_id)
+
+    def create_container_template(
+        self,
+        template_id: str,
+        name: str,
+        container_type: str,
+        description: str | None = None,
+        *,
+        default_has_lock: bool = False,
+        default_is_locked: bool = False,
+        default_is_broken: bool = False,
+        default_unlock_difficulty: int | None = None,
+        default_hidden: bool = False,
+        default_discovery_difficulty: int | None = None,
+    ):
+        from .containers import ContainerTemplate, ContainerType
+
+        try:
+            parsed_type = ContainerType(container_type)
+        except ValueError as error:
+            raise ValueError(f"Unknown container type '{container_type}'.") from error
+        return self.database.create_container_template(
+            ContainerTemplate(
+                template_id,
+                name,
+                parsed_type,
+                description,
+                default_has_lock,
+                default_is_locked,
+                default_is_broken,
+                default_unlock_difficulty,
+                default_hidden,
+                default_discovery_difficulty,
+            )
+        )
+
+    def update_container_template(
+        self,
+        template_id: str,
+        name: str,
+        container_type: str,
+        description: str | None = None,
+        *,
+        default_has_lock: bool = False,
+        default_is_locked: bool = False,
+        default_is_broken: bool = False,
+        default_unlock_difficulty: int | None = None,
+        default_hidden: bool = False,
+        default_discovery_difficulty: int | None = None,
+    ):
+        from .containers import ContainerTemplate, ContainerType
+
+        try:
+            parsed_type = ContainerType(container_type)
+        except ValueError as error:
+            raise ValueError(f"Unknown container type '{container_type}'.") from error
+        return self.database.update_container_template(
+            template_id,
+            ContainerTemplate(
+                template_id,
+                name,
+                parsed_type,
+                description,
+                default_has_lock,
+                default_is_locked,
+                default_is_broken,
+                default_unlock_difficulty,
+                default_hidden,
+                default_discovery_difficulty,
+            ),
+        )
+
+    def place_container(
+        self,
+        room_id: str,
+        template_id: str,
+        *,
+        instance_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        has_lock: bool | None = None,
+        is_locked: bool | None = None,
+        is_broken: bool | None = None,
+        unlock_difficulty: int | None = None,
+        hidden: bool | None = None,
+        discovery_difficulty: int | None = None,
+        is_open: bool = False,
+        searched: bool = False,
+    ):
+        return self.database.create_container_instance(
+            room_id,
+            template_id,
+            instance_id=instance_id,
+            name=name,
+            description=description,
+            has_lock=has_lock,
+            is_locked=is_locked,
+            is_broken=is_broken,
+            unlock_difficulty=unlock_difficulty,
+            hidden=hidden,
+            discovery_difficulty=discovery_difficulty,
+            is_open=is_open,
+            searched=searched,
+        )
+
+    def get_container(self, container_id: str):
+        return self.database.get_container_instance(container_id)
+
+    def list_room_containers(self, room_id: str):
+        return self.database.list_room_container_instances(room_id)
+
+    def update_container(
+        self,
+        container_id: str,
+        *,
+        name: str,
+        description: str | None,
+        has_lock: bool,
+        is_locked: bool,
+        is_broken: bool,
+        unlock_difficulty: int | None,
+        hidden: bool,
+        discovery_difficulty: int | None,
+        is_open: bool,
+        searched: bool,
+    ):
+        from .containers import ContainerInstance
+
+        current = self.database.get_container_instance(container_id)
+        if current is None:
+            from .world import NotFoundError
+
+            raise NotFoundError(f"Container '{container_id}' does not exist.")
+        return self.database.update_container_instance(
+            ContainerInstance(
+                current.id,
+                current.room_id,
+                current.template_id,
+                name,
+                current.container_type,
+                description,
+                has_lock,
+                is_locked,
+                is_broken,
+                unlock_difficulty,
+                hidden,
+                discovery_difficulty,
+                is_open,
+                searched,
+            )
+        )
+
+    def remove_container(self, container_id: str) -> None:
+        self.database.remove_container_instance(container_id)
+
+    def set_item_quantity(
+        self,
+        holder: InventoryHolder,
+        item_id: str,
+        quantity: int,
+    ) -> ItemStack:
+        return self.database.set_world_item_quantity(holder, item_id, quantity)
+
+    def character_knows_container(
+        self,
+        character_id: int,
+        container_id: str,
+    ) -> bool:
+        return self.database.character_knows_container(character_id, container_id)
+
+    def mark_container_discovered(
+        self,
+        character_id: int,
+        container_id: str,
+    ) -> None:
+        self.database.mark_container_discovered(character_id, container_id)
+
+    def create_room_feature(
+        self,
+        room_id: str,
+        feature_id: str,
+        name: str,
+        feature_type: str,
+        description: str | None = None,
+    ):
+        from .room_features import RoomFeatureType
+
+        try:
+            parsed_type = RoomFeatureType(feature_type)
+        except ValueError as error:
+            raise ValueError(
+                f"Unknown room feature type '{feature_type}'."
+            ) from error
+        return self.database.create_room_feature(
+            feature_id,
+            room_id,
+            name,
+            parsed_type,
+            description,
+        )
+
+    def get_room_feature(self, feature_id: str):
+        return self.database.get_room_feature(feature_id)
+
+    def list_room_features(self, room_id: str):
+        return self.database.list_room_features(room_id)
+
+    def update_room_feature(
+        self,
+        feature_id: str,
+        *,
+        name: str,
+        description: str | None,
+        feature_type: str,
+    ):
+        from .room_features import RoomFeature, RoomFeatureType
+        from .world import NotFoundError
+
+        current = self.database.get_room_feature(feature_id)
+        if current is None:
+            raise NotFoundError(
+                f"Room feature '{feature_id}' does not exist."
+            )
+        try:
+            parsed_type = RoomFeatureType(feature_type)
+        except ValueError as error:
+            raise ValueError(
+                f"Unknown room feature type '{feature_type}'."
+            ) from error
+        return self.database.update_room_feature(
+            RoomFeature(
+                current.id,
+                current.room_id,
+                name,
+                parsed_type,
+                description,
+            )
+        )
+
+    def remove_room_feature(self, feature_id: str) -> None:
+        self.database.remove_room_feature(feature_id)
+
+    def create_room_feature_template(
+        self,
+        template_id: str,
+        name: str,
+        feature_type: str,
+        description: str | None = None,
+    ):
+        from .room_features import RoomFeatureType
+
+        try:
+            parsed_type = RoomFeatureType(feature_type)
+        except ValueError as error:
+            raise ValueError(
+                f"Unknown room feature type '{feature_type}'."
+            ) from error
+        return self.database.create_room_feature_template(
+            template_id,
+            name,
+            parsed_type,
+            description,
+        )
+
+    def get_room_feature_template(self, template_id: str):
+        return self.database.get_room_feature_template(template_id)
+
+    def list_room_feature_templates(self):
+        return self.database.list_room_feature_templates()
+
+    def update_room_feature_template(
+        self,
+        template_id: str,
+        *,
+        name: str,
+        description: str | None,
+        feature_type: str,
+    ):
+        from .room_features import RoomFeatureTemplate, RoomFeatureType
+        from .world import NotFoundError
+
+        current = self.database.get_room_feature_template(template_id)
+        if current is None:
+            raise NotFoundError(
+                f"Room feature template '{template_id}' does not exist."
+            )
+        try:
+            parsed_type = RoomFeatureType(feature_type)
+        except ValueError as error:
+            raise ValueError(
+                f"Unknown room feature type '{feature_type}'."
+            ) from error
+        return self.database.update_room_feature_template(
+            RoomFeatureTemplate(
+                current.id,
+                name,
+                parsed_type,
+                description,
+            )
+        )
+
+    def remove_room_feature_template(self, template_id: str) -> None:
+        self.database.remove_room_feature_template(template_id)
+
     def migrate_legacy_character_items(self) -> int:
         """Move recognizable old world stacks into the interactive inventory."""
         migrated = 0
@@ -376,7 +697,23 @@ class WorldService:
         self.database.remove_item(holder, item_id)
 
     def inventory(self, holder: InventoryHolder) -> tuple[ItemStack, ...]:
-        return self.database.get_inventory(holder)
+        stacks = self.database.get_inventory(holder)
+        displayed: list[ItemStack] = []
+        for stack in stacks:
+            template = self._template_for_world_item(stack.item)
+            stackable = (
+                template.stackable
+                if template is not None
+                else stack.item.stackable
+            )
+            if stackable:
+                displayed.append(stack)
+            else:
+                displayed.extend(
+                    ItemStack(stack.item, 1)
+                    for _ in range(stack.quantity)
+                )
+        return tuple(displayed)
 
     def transfer_item(
         self,
@@ -415,10 +752,31 @@ class WorldService:
     def drop_item(
         self, character_id: int, item: str, quantity: int = 1
     ) -> ItemStack:
+        if quantity < 1:
+            raise InvalidTransferError("Quantity must be at least 1.")
         room = self.database.get_character_room(character_id)
         if room is None:
             raise InvalidTransferError("The character is not currently in a room.")
         inventory = self.database.get_character_inventory(character_id)
+        matching_items = [
+            inventory_item
+            for inventory_item in inventory.items
+            if inventory_item.template_id == item
+        ]
+        if matching_items:
+            template = self.catalog.get(item)
+            if not template.stackable and quantity > 1:
+                if len(matching_items) < quantity:
+                    raise InvalidTransferError(
+                        f"Only {len(matching_items)} × {template.name} is available."
+                    )
+                moved = None
+                for inventory_item in matching_items[:quantity]:
+                    moved = self.drop_item(
+                        character_id, inventory_item.instance_id, 1
+                    )
+                assert moved is not None
+                return ItemStack(moved.item, quantity)
         try:
             selected = self._resolve_character_item(inventory, item)
         except InvalidTransferError:
@@ -430,7 +788,9 @@ class WorldService:
             )
         template = self.catalog.get(selected.template_id)
         world_item = Item(
-            template.template_id,
+            template.template_id
+            if template.stackable
+            else f"{template.template_id}__{selected.instance_id}",
             template.name,
             template.description,
             template.stackable,
@@ -466,6 +826,19 @@ class WorldService:
                 f"More than one container is named '{container}'; use its ID."
             )
         selected = exact[0] if exact else matches[0]
+        container_state = self.database.get_container_instance(selected.id)
+        if container_state is not None:
+            if (
+                container_state.hidden
+                and not self.database.character_knows_container(
+                    character_id, selected.id
+                )
+            ):
+                raise InvalidTransferError(
+                    f"There is no container named '{container}' here."
+                )
+            if container_state.is_locked:
+                raise InvalidTransferError("That container is locked.")
         source = InventoryHolder.entity(selected.id)
         template = self._catalog_template(source, item)
         if template is None:

@@ -192,6 +192,8 @@ class WorldCommands(commands.Cog):
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
         """Suggest loose items in the active character's current room."""
+        # Room inventory formatting is handled here; non-stackable entries are
+        # already expanded to quantity-one ItemStacks by WorldService.inventory.
         try:
             room = self.world.get_character_room(
                 self._active_character_id(interaction.user.id)
@@ -202,16 +204,82 @@ class WorldCommands(commands.Cog):
             return []
 
         query = current.casefold().strip()
-        return [
-            app_commands.Choice(
-                name=f"{stack.item.name} ({stack.quantity} here)"[:100],
-                value=stack.item.id,
+        choices: list[app_commands.Choice[str]] = []
+        for stack in self.world.inventory(InventoryHolder.room(room.id)):
+            if (
+                query
+                and query not in stack.item.name.casefold()
+                and query not in stack.item.id.casefold()
+            ):
+                continue
+            template = self.world._template_for_world_item(stack.item)
+            stackable = (
+                template.stackable if template is not None else stack.item.stackable
             )
-            for stack in room.loose_items
-            if not query
-            or query in stack.item.name.casefold()
-            or query in stack.item.id.casefold()
-        ][:25]
+            label = (
+                f"{stack.item.name} x{stack.quantity}"
+                if stackable
+                else stack.item.name
+            )
+            choices.append(app_commands.Choice(name=label[:100], value=stack.item.id))
+            if len(choices) == 25:
+                break
+        return choices
+
+    async def inventory_item_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Suggest droppable, unequipped items from the active inventory with stack counts."""
+        try:
+            character_id = self._active_character_id(interaction.user.id)
+        except CharacterNotFoundError:
+            return []
+
+        inventory = self.database.get_character_inventory(character_id)
+        equipped = set(inventory.equipment.values())
+        query = current.casefold().strip()
+        stacked = []
+        stack_indexes: dict[str, int] = {}
+        for item in inventory.items:
+            if item.instance_id in equipped:
+                continue
+            template = self.world.catalog.get(item.template_id)
+            key = item.template_id if template.stackable else item.instance_id
+            index = stack_indexes.get(key)
+            if index is None:
+                stack_indexes[key] = len(stacked)
+                stacked.append((item, item.quantity, 1))
+            else:
+                first_item, quantity, instance_count = stacked[index]
+                stacked[index] = (
+                    first_item, quantity + item.quantity, instance_count + 1
+                )
+
+        choices: list[app_commands.Choice[str]] = []
+        for item, quantity, instance_count in stacked:
+            template = self.world.catalog.get(item.template_id)
+            if (
+                query
+                and query not in template.name.casefold()
+                and query not in template.template_id.casefold()
+            ):
+                continue
+            quantity_suffix = (
+                f" x{quantity}" if template.stackable and quantity > 1 else ""
+            )
+            choices.append(
+                app_commands.Choice(
+                    name=f"{template.name}{quantity_suffix}"[:100],
+                    value=(
+                        template.template_id
+                        if template.stackable and instance_count > 1
+                        else item.instance_id
+                    ),
+                )
+            )
+            if len(choices) == 25:
+                break
+        return choices
 
     async def move_destination_autocomplete(
         self, interaction: discord.Interaction, current: str
@@ -338,7 +406,7 @@ class WorldCommands(commands.Cog):
     async def disarm_exit_autocomplete(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        """Suggest detected armed traps on connections from the current room."""
+        """Suggest armed traps on passages visible from the current room."""
         try:
             character_id = self._active_character_id(interaction.user.id)
             room = self.world.get_character_room(character_id)
@@ -355,9 +423,6 @@ class WorldCommands(commands.Cog):
             if (
                 not connection.has_trap
                 or connection.trap_state is not TrapState.ARMED
-                or not self.database.character_knows_trap(
-                    character_id, connection.id
-                )
             ):
                 continue
             if query and query not in exit_name.casefold():
@@ -693,9 +758,9 @@ class WorldCommands(commands.Cog):
 
     @app_commands.command(
         name="disarm",
-        description="Attempt to disarm a detected trap.",
+        description="Attempt to disarm an armed trap on a visible exit.",
     )
-    @app_commands.describe(trap_exit="Detected trapped exit")
+    @app_commands.describe(trap_exit="Visible trapped exit")
     @app_commands.rename(trap_exit="exit")
     @app_commands.autocomplete(trap_exit=disarm_exit_autocomplete)
     async def disarm(
@@ -728,11 +793,8 @@ class WorldCommands(commands.Cog):
                 not has_trap
                 or trap_state is not TrapState.ARMED
                 or not visible_connection.has_trap
-                or not self.database.character_knows_trap(
-                    character.character_id, connection_id
-                )
             ):
-                raise WorldError("There is no detected armed trap there to disarm.")
+                raise WorldError("There is no armed trap there to disarm.")
 
             if not self.database.character_has_usable_item(
                 character.character_id, "trap_disarm_kit"
@@ -775,6 +837,8 @@ class WorldCommands(commands.Cog):
         await self._send_character_action(
             interaction, character, description, confirmation
         )
+        if not succeeded:
+            await refresh_inventory_views(interaction, character)
         if succeeded and await self._refresh_existing_map(character.character_id):
             self.database.clear_player_map_refresh(character.character_id)
 
@@ -880,16 +944,90 @@ class WorldCommands(commands.Cog):
         return True
 
     @app_commands.command(name="take", description="Take a loose item from the room.")
-    @app_commands.describe(item="Item name or ID", quantity="Number to take")
+    @app_commands.describe(
+        item="Item name or ID",
+        quantity="Number to take; leave empty to choose from a stack",
+    )
     @app_commands.autocomplete(item=loose_item_autocomplete)
     async def take(
-        self, interaction: discord.Interaction, item: str, quantity: int = 1
+        self, interaction: discord.Interaction, item: str, quantity: int | None = None
     ) -> None:
         try:
             character = self._active_character(interaction.user.id)
             assert character.character_id is not None
+            room = self.world.get_character_room(character.character_id)
+            matching_stacks = [] if room is None else [
+                stack
+                for stack in room.loose_items
+                if stack.item.id == item
+                or stack.item.name.casefold() == item.casefold()
+            ]
+            if (
+                quantity is None
+                and len(matching_stacks) == 1
+                and matching_stacks[0].quantity > 1
+            ):
+                available = matching_stacks[0].quantity
+
+                class TakeQuantityModal(discord.ui.Modal, title="Take item"):
+                    quantity_input = discord.ui.TextInput(
+                        label="Quantity",
+                        default="1",
+                        required=True,
+                        max_length=6,
+                    )
+
+                    async def on_submit(
+                        modal_self, modal_interaction: discord.Interaction
+                    ) -> None:
+                        try:
+                            requested_quantity = int(
+                                str(modal_self.quantity_input.value).strip()
+                            )
+                        except ValueError:
+                            await modal_interaction.response.send_message(
+                                "Enter a whole number of at least 1.", ephemeral=True
+                            )
+                            return
+                        if requested_quantity < 1:
+                            await modal_interaction.response.send_message(
+                                "Enter a whole number of at least 1.", ephemeral=True
+                            )
+                            return
+                        if requested_quantity > available:
+                            await modal_interaction.response.send_message(
+                                f"Only {available} of that item is available.",
+                                ephemeral=True,
+                            )
+                            return
+                        try:
+                            moved = self.world.take_loose_item(
+                                character.character_id, item, requested_quantity
+                            )
+                        except (CharacterNotFoundError, WorldError) as error:
+                            await self._error(modal_interaction, error)
+                            return
+                        description = f"Took **{_stack_text(moved)}**."
+                        await self._send_character_action(
+                            modal_interaction, character, description, description
+                        )
+                        await refresh_inventory_views(modal_interaction, character)
+
+                await interaction.response.send_modal(TakeQuantityModal())
+                return
+
+            requested_quantity = 1 if quantity is None else quantity
+            if requested_quantity < 1:
+                raise WorldError("Quantity must be at least 1.")
+            if (
+                len(matching_stacks) == 1
+                and requested_quantity > matching_stacks[0].quantity
+            ):
+                raise WorldError(
+                    f"Only {matching_stacks[0].quantity} of that item is available."
+                )
             moved = self.world.take_loose_item(
-                character.character_id, item, quantity
+                character.character_id, item, requested_quantity
             )
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
@@ -903,20 +1041,138 @@ class WorldCommands(commands.Cog):
     @app_commands.command(
         name="drop", description="Drop an inventory item in the room."
     )
-    @app_commands.describe(item="Item name or ID", quantity="Number to drop")
+    @app_commands.describe(
+        item="Item name or ID",
+        quantity="Number to drop; leave empty to choose from a stack",
+    )
+    @app_commands.autocomplete(item=inventory_item_autocomplete)
     async def drop(
-        self, interaction: discord.Interaction, item: str, quantity: int = 1
+        self, interaction: discord.Interaction, item: str, quantity: int | None = None
     ) -> None:
         try:
             character = self._active_character(interaction.user.id)
             assert character.character_id is not None
-            moved = self.world.drop_item(
-                character.character_id, item, quantity
+            inventory = self.database.get_character_inventory(character.character_id)
+            equipped = set(inventory.equipment.values())
+            selected = next(
+                (
+                    inventory_item
+                    for inventory_item in inventory.items
+                    if inventory_item.instance_id == item
+                ),
+                None,
             )
+            template_id = selected.template_id if selected is not None else item
+            stack_items = [
+                inventory_item
+                for inventory_item in inventory.items
+                if inventory_item.template_id == template_id
+                and inventory_item.instance_id not in equipped
+                and self.world.catalog.get(inventory_item.template_id).stackable
+            ]
+            if stack_items:
+                available = sum(
+                    inventory_item.quantity for inventory_item in stack_items
+                )
+                item_name = self.world.catalog.get(template_id).name
+
+                def drop_stack(requested_quantity: int) -> str:
+                    if requested_quantity < 1:
+                        raise WorldError("Quantity must be at least 1.")
+                    if requested_quantity > available:
+                        raise WorldError(
+                            f"Only {available} of that item is available."
+                        )
+                    remaining = requested_quantity
+                    for inventory_item in stack_items:
+                        if remaining <= 0:
+                            break
+                        moved_quantity = min(remaining, inventory_item.quantity)
+                        self.world.drop_item(
+                            character.character_id,
+                            inventory_item.instance_id,
+                            moved_quantity,
+                        )
+                        remaining -= moved_quantity
+                    return f"Dropped **{requested_quantity} × {item_name}**."
+
+                if quantity is None and available > 1:
+
+                    class DropQuantityModal(discord.ui.Modal, title="Drop item"):
+                        quantity_input = discord.ui.TextInput(
+                            label="Quantity",
+                            default="1",
+                            required=True,
+                            max_length=6,
+                        )
+
+                        async def on_submit(
+                            modal_self, modal_interaction: discord.Interaction
+                        ) -> None:
+                            try:
+                                requested_quantity = int(
+                                    str(modal_self.quantity_input.value).strip()
+                                )
+                            except ValueError:
+                                await modal_interaction.response.send_message(
+                                    "Enter a whole number of at least 1.",
+                                    ephemeral=True,
+                                )
+                                return
+                            try:
+                                description = drop_stack(requested_quantity)
+                            except (CharacterNotFoundError, WorldError) as error:
+                                await self._error(modal_interaction, error)
+                                return
+                            await self._send_character_action(
+                                modal_interaction,
+                                character,
+                                description,
+                                description,
+                            )
+                            await refresh_inventory_views(
+                                modal_interaction, character
+                            )
+
+                    await interaction.response.send_modal(DropQuantityModal())
+                    return
+
+                description = drop_stack(1 if quantity is None else quantity)
+            else:
+                requested_quantity = 1 if quantity is None else quantity
+                if requested_quantity > 1:
+                    template = self.world.catalog.get(template_id)
+                    if not template.stackable:
+                        matching_items = [
+                            inventory_item
+                            for inventory_item in inventory.items
+                            if inventory_item.template_id == template_id
+                            and inventory_item.instance_id not in equipped
+                        ]
+                        if requested_quantity > len(matching_items):
+                            raise WorldError(
+                                f"Only {len(matching_items)} × {template.name} is available."
+                            )
+                        for inventory_item in matching_items[:requested_quantity]:
+                            self.world.drop_item(
+                                character.character_id,
+                                inventory_item.instance_id,
+                                1,
+                            )
+                        description = (
+                            f"Dropped **{requested_quantity} × {template.name}**."
+                        )
+                        await self._send_character_action(
+                            interaction, character, description, description
+                        )
+                        return
+                moved = self.world.drop_item(
+                    character.character_id, item, requested_quantity
+                )
+                description = f"Dropped **{_stack_text(moved)}**."
         except (CharacterNotFoundError, WorldError) as error:
             await self._error(interaction, error)
             return
-        description = f"Dropped **{_stack_text(moved)}**."
         await self._send_character_action(
             interaction, character, description, description
         )

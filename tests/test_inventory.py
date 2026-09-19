@@ -316,8 +316,8 @@ class ItemCatalogTests(unittest.TestCase):
 
         self.assertIs(lockpicks.item_type, ItemType.TOOL)
         self.assertIs(disarm_kit.item_type, ItemType.TOOL)
-        self.assertFalse(lockpicks.stackable)
-        self.assertFalse(disarm_kit.stackable)
+        self.assertTrue(lockpicks.stackable)
+        self.assertTrue(disarm_kit.stackable)
 
     def test_readable_content_persists_and_can_be_edited(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

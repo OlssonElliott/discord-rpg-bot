@@ -127,6 +127,61 @@ def _template_data(template: ItemTemplate) -> JsonObject:
     return data
 
 
+
+def _container_template_data(template: object) -> JsonObject:
+    return {
+        "id": template.template_id,
+        "name": template.name,
+        "type": template.container_type.value,
+        "description": template.description or "",
+        "default_has_lock": template.default_has_lock,
+        "default_is_locked": template.default_is_locked,
+        "default_is_broken": template.default_is_broken,
+        "default_unlock_difficulty": template.default_unlock_difficulty,
+        "default_hidden": template.default_hidden,
+        "default_discovery_difficulty": template.default_discovery_difficulty,
+    }
+
+
+def _room_feature_data(feature: object) -> JsonObject:
+    return {
+        "id": feature.id,
+        "room_id": feature.room_id,
+        "name": feature.name,
+        "description": feature.description or "",
+        "feature_type": feature.feature_type.value,
+    }
+
+
+def _room_feature_template_data(template: object) -> JsonObject:
+    return {
+        "id": template.id,
+        "name": template.name,
+        "description": template.description or "",
+        "feature_type": template.feature_type.value,
+    }
+
+
+def _container_data(container: object, contents: tuple[object, ...]) -> JsonObject:
+    item_data = [_stack_data(stack) for stack in contents]
+    return {
+        "id": container.id,
+        "room_id": container.room_id,
+        "template_id": container.template_id,
+        "name": container.name,
+        "type": container.container_type.value,
+        "description": container.description or "",
+        "has_lock": container.has_lock,
+        "is_locked": container.is_locked,
+        "is_broken": container.is_broken,
+        "unlock_difficulty": container.unlock_difficulty,
+        "hidden": container.hidden,
+        "discovery_difficulty": container.discovery_difficulty,
+        "is_open": container.is_open,
+        "searched": container.searched,
+        "item_count": sum(item["quantity"] for item in item_data),
+        "contents": item_data,
+    }
 class DashboardAPI:
     """Translate HTTP-shaped requests into deterministic service calls."""
 
@@ -137,6 +192,7 @@ class DashboardAPI:
     ) -> None:
         self.world = world
         self.room_images = room_images or RoomImageStore()
+        self._connection_trap_damage: dict[tuple[str, str], int] = {}
 
     def upload_room_image(
         self,
@@ -207,6 +263,181 @@ class DashboardAPI:
             template = self.world.update_item_template(match.group(1), record)
             return 200, _template_data(template)
 
+        if method == "GET" and path == "/api/container-templates":
+            return 200, [
+                _container_template_data(template)
+                for template in self.world.list_container_templates()
+            ]
+
+        if method == "POST" and path == "/api/container-templates":
+            default_is_locked = self._boolean(
+                body, "default_is_locked", default=False
+            )
+            default_is_broken = self._boolean(
+                body, "default_is_broken", default=False
+            )
+            default_has_lock = self._boolean(
+                body,
+                "default_has_lock",
+                default=default_is_locked or default_is_broken,
+            )
+            default_hidden = self._boolean(
+                body, "default_hidden", default=False
+            )
+            template = self.world.create_container_template(
+                self._text(body, "id"),
+                self._text(body, "name"),
+                self._text(body, "type"),
+                self._optional_text(body, "description"),
+                default_has_lock=default_has_lock,
+                default_is_locked=default_is_locked,
+                default_is_broken=default_is_broken,
+                default_unlock_difficulty=(
+                    self._integer(
+                        body, "default_unlock_difficulty", default=10
+                    )
+                    if default_is_locked
+                    else None
+                ),
+                default_hidden=default_hidden,
+                default_discovery_difficulty=(
+                    self._integer(
+                        body, "default_discovery_difficulty", default=10
+                    )
+                    if default_hidden
+                    else None
+                ),
+            )
+            return 201, _container_template_data(template)
+
+        match = re.fullmatch(r"/api/container-templates/([^/]+)", path)
+        if method == "PUT" and match:
+            current = self.world.get_container_template(match.group(1))
+            if current is None:
+                raise ValueError(
+                    f"Container template '{match.group(1)}' does not exist."
+                )
+            default_is_locked = self._boolean(
+                body,
+                "default_is_locked",
+                default=current.default_is_locked,
+            )
+            default_is_broken = self._boolean(
+                body,
+                "default_is_broken",
+                default=current.default_is_broken,
+            )
+            default_has_lock = self._boolean(
+                body,
+                "default_has_lock",
+                default=current.default_has_lock,
+            )
+            default_hidden = self._boolean(
+                body,
+                "default_hidden",
+                default=current.default_hidden,
+            )
+            template = self.world.update_container_template(
+                match.group(1),
+                self._text(body, "name")
+                if "name" in body
+                else current.name,
+                self._text(body, "type")
+                if "type" in body
+                else current.container_type.value,
+                (
+                    self._optional_text(body, "description")
+                    if "description" in body
+                    else current.description
+                ),
+                default_has_lock=default_has_lock,
+                default_is_locked=default_is_locked,
+                default_is_broken=default_is_broken,
+                default_unlock_difficulty=(
+                    self._integer(
+                        body,
+                        "default_unlock_difficulty",
+                        default=current.default_unlock_difficulty or 10,
+                    )
+                    if default_is_locked
+                    else None
+                ),
+                default_hidden=default_hidden,
+                default_discovery_difficulty=(
+                    self._integer(
+                        body,
+                        "default_discovery_difficulty",
+                        default=current.default_discovery_difficulty or 10,
+                    )
+                    if default_hidden
+                    else None
+                ),
+            )
+            return 200, _container_template_data(template)
+
+        if method == "GET" and path == "/api/room-feature-templates":
+            return 200, [
+                _room_feature_template_data(template)
+                for template in self.world.list_room_feature_templates()
+            ]
+
+        if method == "POST" and path == "/api/room-feature-templates":
+            template = self.world.create_room_feature_template(
+                self._text(body, "id"),
+                self._text(body, "name"),
+                self._text(body, "feature_type"),
+                self._optional_text(body, "description"),
+            )
+            return 201, _room_feature_template_data(template)
+
+        match = re.fullmatch(r"/api/room-feature-templates/([^/]+)", path)
+        if match and method == "GET":
+            template = self.world.get_room_feature_template(match.group(1))
+            if template is None:
+                return 404, {
+                    "error": (
+                        f"Room feature template '{match.group(1)}' does not exist."
+                    )
+                }
+            return 200, _room_feature_template_data(template)
+        if match and method == "PATCH":
+            current = self.world.get_room_feature_template(match.group(1))
+            if current is None:
+                return 404, {
+                    "error": (
+                        f"Room feature template '{match.group(1)}' does not exist."
+                    )
+                }
+            template = self.world.update_room_feature_template(
+                current.id,
+                name=(
+                    self._text(body, "name")
+                    if "name" in body
+                    else current.name
+                ),
+                description=(
+                    self._optional_text(body, "description")
+                    if "description" in body
+                    else current.description
+                ),
+                feature_type=(
+                    self._text(body, "feature_type")
+                    if "feature_type" in body
+                    else current.feature_type.value
+                ),
+            )
+            return 200, _room_feature_template_data(template)
+        if match and method == "DELETE":
+            current = self.world.get_room_feature_template(match.group(1))
+            if current is None:
+                return 404, {
+                    "error": (
+                        f"Room feature template '{match.group(1)}' does not exist."
+                    )
+                }
+            self.world.remove_room_feature_template(current.id)
+            return 200, {"deleted": current.id}
+
         match = re.fullmatch(r"/api/characters/(\d+)/room", path)
         if method == "PATCH" and match:
             character_id = int(match.group(1))
@@ -236,9 +467,33 @@ class DashboardAPI:
 
         match = re.fullmatch(r"/api/areas/([^/]+)/graph", path)
         if method == "GET" and match:
-            return 200, _graph_data(
+            graph = _graph_data(
                 self.world.area_graph(match.group(1)), self.room_images
             )
+            for node in graph["nodes"]:
+                room_id = str(node["id"])
+                containers = self.world.list_room_containers(room_id)
+                node["containers"] = [
+                    _container_data(
+                        container,
+                        self.world.inventory(InventoryHolder.entity(container.id)),
+                    )
+                    for container in containers
+                ]
+                node["counts"]["containers"] = len(containers)
+                room_features = self.world.list_room_features(room_id)
+                node["room_features"] = [
+                    _room_feature_data(feature) for feature in room_features
+                ]
+                node["counts"]["room_features"] = len(room_features)
+            for connection in graph["connections"]:
+                key = (
+                    str(connection["source_room_id"]),
+                    str(connection["exit_name"]),
+                )
+                if key in self._connection_trap_damage:
+                    connection["trap_damage"] = self._connection_trap_damage[key]
+            return 200, graph
 
         match = re.fullmatch(r"/api/areas/([^/]+)/rooms", path)
         if method == "POST" and match:
@@ -282,6 +537,254 @@ class DashboardAPI:
                 match.group(1), self._number(body, "x"), self._number(body, "y")
             )
             return 200, {"id": match.group(1), "position": {"x": body["x"], "y": body["y"]}}
+
+        match = re.fullmatch(r"/api/rooms/([^/]+)/features", path)
+        if match and method == "GET":
+            return 200, [
+                _room_feature_data(feature)
+                for feature in self.world.list_room_features(match.group(1))
+            ]
+        if match and method == "POST":
+            feature = self.world.create_room_feature(
+                match.group(1),
+                self._text(body, "id"),
+                self._text(body, "name"),
+                self._text(body, "feature_type"),
+                self._optional_text(body, "description"),
+            )
+            return 201, _room_feature_data(feature)
+
+        match = re.fullmatch(r"/api/room-features/([^/]+)", path)
+        if match and method == "GET":
+            feature = self.world.get_room_feature(match.group(1))
+            if feature is None:
+                return 404, {
+                    "error": f"Room feature '{match.group(1)}' does not exist."
+                }
+            return 200, _room_feature_data(feature)
+        if match and method == "PATCH":
+            current = self.world.get_room_feature(match.group(1))
+            if current is None:
+                return 404, {
+                    "error": f"Room feature '{match.group(1)}' does not exist."
+                }
+            feature = self.world.update_room_feature(
+                current.id,
+                name=(
+                    self._text(body, "name")
+                    if "name" in body
+                    else current.name
+                ),
+                description=(
+                    self._optional_text(body, "description")
+                    if "description" in body
+                    else current.description
+                ),
+                feature_type=(
+                    self._text(body, "feature_type")
+                    if "feature_type" in body
+                    else current.feature_type.value
+                ),
+            )
+            return 200, _room_feature_data(feature)
+        if match and method == "DELETE":
+            self.world.remove_room_feature(match.group(1))
+            return 200, {"deleted": match.group(1)}
+
+        match = re.fullmatch(r"/api/rooms/([^/]+)/containers", path)
+        if match and method == "POST":
+            room_id = match.group(1)
+            template_id = self._text(body, "template_id")
+            template = self.world.get_container_template(template_id)
+            if template is None:
+                raise ValueError(
+                    f"Container template '{template_id}' does not exist."
+                )
+            has_lock = (
+                self._boolean(body, "has_lock", default=template.default_has_lock)
+                if "has_lock" in body
+                else None
+            )
+            is_locked = (
+                self._boolean(
+                    body, "is_locked", default=template.default_is_locked
+                )
+                if "is_locked" in body
+                else None
+            )
+            is_broken = (
+                self._boolean(
+                    body, "is_broken", default=template.default_is_broken
+                )
+                if "is_broken" in body
+                else None
+            )
+            hidden = (
+                self._boolean(
+                    body, "hidden", default=template.default_hidden
+                )
+                if "hidden" in body
+                else None
+            )
+            instance = self.world.place_container(
+                room_id,
+                template_id,
+                instance_id=self._optional_text(body, "id"),
+                name=self._optional_text(body, "name"),
+                description=(
+                    self._optional_text(body, "description")
+                    if "description" in body
+                    else None
+                ),
+                has_lock=has_lock,
+                is_locked=is_locked,
+                is_broken=is_broken,
+                unlock_difficulty=(
+                    self._integer(
+                        body,
+                        "unlock_difficulty",
+                        default=template.default_unlock_difficulty or 10,
+                    )
+                    if (
+                        (is_locked is True)
+                        or (is_locked is None and template.default_is_locked)
+                    )
+                    else None
+                ),
+                hidden=hidden,
+                discovery_difficulty=(
+                    self._integer(
+                        body,
+                        "discovery_difficulty",
+                        default=template.default_discovery_difficulty or 10,
+                    )
+                    if (
+                        (hidden is True)
+                        or (hidden is None and template.default_hidden)
+                    )
+                    else None
+                ),
+                is_open=self._boolean(body, "is_open", default=False),
+                searched=self._boolean(body, "searched", default=False),
+            )
+            return 201, _container_data(
+                instance,
+                self.world.inventory(InventoryHolder.entity(instance.id)),
+            )
+
+        match = re.fullmatch(r"/api/containers/([^/]+)", path)
+        if match and method == "GET":
+            instance = self.world.get_container(match.group(1))
+            if instance is None:
+                return 404, {
+                    "error": f"Container '{match.group(1)}' does not exist."
+                }
+            return 200, _container_data(
+                instance,
+                self.world.inventory(InventoryHolder.entity(instance.id)),
+            )
+        if match and method == "PATCH":
+            current = self.world.get_container(match.group(1))
+            if current is None:
+                raise ValueError(
+                    f"Container '{match.group(1)}' does not exist."
+                )
+            has_lock = self._boolean(
+                body, "has_lock", default=current.has_lock
+            )
+            is_locked = self._boolean(
+                body, "is_locked", default=current.is_locked
+            )
+            is_broken = self._boolean(
+                body, "is_broken", default=current.is_broken
+            )
+            hidden = self._boolean(
+                body, "hidden", default=current.hidden
+            )
+            updated = self.world.update_container(
+                current.id,
+                name=(
+                    self._text(body, "name")
+                    if "name" in body
+                    else current.name
+                ),
+                description=(
+                    self._optional_text(body, "description")
+                    if "description" in body
+                    else current.description
+                ),
+                has_lock=has_lock,
+                is_locked=is_locked,
+                is_broken=is_broken,
+                unlock_difficulty=(
+                    self._integer(
+                        body,
+                        "unlock_difficulty",
+                        default=current.unlock_difficulty or 10,
+                    )
+                    if is_locked
+                    else None
+                ),
+                hidden=hidden,
+                discovery_difficulty=(
+                    self._integer(
+                        body,
+                        "discovery_difficulty",
+                        default=current.discovery_difficulty or 10,
+                    )
+                    if hidden
+                    else None
+                ),
+                is_open=self._boolean(
+                    body, "is_open", default=current.is_open
+                ),
+                searched=self._boolean(
+                    body, "searched", default=current.searched
+                ),
+            )
+            return 200, _container_data(
+                updated,
+                self.world.inventory(InventoryHolder.entity(updated.id)),
+            )
+        if match and method == "DELETE":
+            self.world.remove_container(match.group(1))
+            return 200, {"deleted": match.group(1)}
+
+        match = re.fullmatch(r"/api/containers/([^/]+)/items", path)
+        if match and method == "POST":
+            container_id = match.group(1)
+            if self.world.get_container(container_id) is None:
+                raise ValueError(
+                    f"Container '{container_id}' does not exist."
+                )
+            quantity = self._integer(body, "quantity", default=1)
+            if quantity <= 0:
+                raise ValueError("Quantity must be greater than zero.")
+            stack = self.world.place_catalog_item(
+                InventoryHolder.entity(container_id),
+                self._text(body, "item_id"),
+                quantity,
+            )
+            return 201, _stack_data(stack)
+
+        match = re.fullmatch(
+            r"/api/containers/([^/]+)/items/([^/]+)", path
+        )
+        if match and method == "PUT":
+            container_id, item_id = match.groups()
+            quantity = self._integer(body, "quantity", default=1)
+            stack = self.world.set_item_quantity(
+                InventoryHolder.entity(container_id),
+                item_id,
+                quantity,
+            )
+            return 200, _stack_data(stack)
+        if match and method == "DELETE":
+            container_id, item_id = match.groups()
+            self.world.remove_item(
+                InventoryHolder.entity(container_id), item_id
+            )
+            return 200, {"deleted": item_id}
 
         match = re.fullmatch(r"/api/rooms/([^/]+)/entities", path)
         if match and method == "POST":
@@ -363,6 +866,11 @@ class DashboardAPI:
                 if has_trap
                 else None
             )
+            trap_disarm_difficulty = (
+                self._integer(body, "trap_disarm_difficulty", default=10)
+                if has_trap
+                else None
+            )
             trap_damage_type = (
                 self._trap_damage_type(body, default=TrapDamageType.PHYSICAL)
                 if has_trap
@@ -376,6 +884,7 @@ class DashboardAPI:
             self._validate_trap(
                 has_trap,
                 trap_detection_difficulty,
+                trap_disarm_difficulty,
                 trap_damage_type,
                 trap_damage,
             )
@@ -399,9 +908,14 @@ class DashboardAPI:
                 has_trap=has_trap,
                 trap_state=trap_state,
                 trap_detection_difficulty=trap_detection_difficulty,
+                trap_disarm_difficulty=trap_disarm_difficulty,
                 trap_damage_type=trap_damage_type,
                 trap_damage=trap_damage,
             )
+            if has_trap and trap_damage is not None:
+                self._connection_trap_damage[
+                    (self._text(body, "source_room_id"), exit_name)
+                ] = trap_damage
             return 201, {
                 "source_room_id": body["source_room_id"],
                 "exit_name": exit_name,
@@ -417,6 +931,7 @@ class DashboardAPI:
                 "has_trap": has_trap,
                 "trap_state": trap_state.value if trap_state is not None else None,
                 "trap_detection_difficulty": trap_detection_difficulty,
+                "trap_disarm_difficulty": trap_disarm_difficulty,
                 "trap_damage_type": (
                     trap_damage_type.value if trap_damage_type is not None else None
                 ),
@@ -458,6 +973,7 @@ class DashboardAPI:
                     "has_trap",
                     "trap_state",
                     "trap_detection_difficulty",
+                    "trap_disarm_difficulty",
                     "trap_damage_type",
                     "trap_damage",
                 )
@@ -470,6 +986,11 @@ class DashboardAPI:
             )
             trap_detection_difficulty = (
                 self._integer(body, "trap_detection_difficulty", default=10)
+                if has_trap
+                else None
+            )
+            trap_disarm_difficulty = (
+                self._integer(body, "trap_disarm_difficulty", default=10)
                 if has_trap
                 else None
             )
@@ -497,6 +1018,7 @@ class DashboardAPI:
                 self._validate_trap(
                     has_trap,
                     trap_detection_difficulty,
+                    trap_disarm_difficulty,
                     trap_damage_type,
                     trap_damage,
                 )
@@ -535,6 +1057,16 @@ class DashboardAPI:
                     trap_damage_type=trap_damage_type,
                     trap_damage=trap_damage,
                 )
+                self.world.set_connection_trap_disarm_difficulty(
+                    source_room_id,
+                    exit_name,
+                    trap_disarm_difficulty,
+                )
+                trap_key = (source_room_id, exit_name)
+                if has_trap and trap_damage is not None:
+                    self._connection_trap_damage[trap_key] = trap_damage
+                else:
+                    self._connection_trap_damage.pop(trap_key, None)
             return 200, {
                 "source_room_id": source_room_id,
                 "exit_name": exit_name,
@@ -555,6 +1087,7 @@ class DashboardAPI:
                             trap_state.value if trap_state is not None else None
                         ),
                         "trap_detection_difficulty": trap_detection_difficulty,
+                        "trap_disarm_difficulty": trap_disarm_difficulty,
                         "trap_damage_type": (
                             trap_damage_type.value
                             if trap_damage_type is not None
@@ -577,9 +1110,12 @@ class DashboardAPI:
                 ),
             }
         if path == "/api/connections" and method == "DELETE":
+            source_room_id = self._text(body, "source_room_id")
+            exit_name = self._text(body, "exit_name")
             self.world.disconnect_connection(
-                self._text(body, "source_room_id"), self._text(body, "exit_name")
+                source_room_id, exit_name
             )
+            self._connection_trap_damage.pop((source_room_id, exit_name), None)
             return 200, {"deleted": True}
 
         return 404, {"error": "Not found."}
@@ -666,6 +1202,8 @@ class DashboardAPI:
         default: TrapDamageType,
     ) -> TrapDamageType:
         value = body.get("trap_damage_type", default.value)
+        if isinstance(value, str):
+            value = value.strip().casefold()
         try:
             return TrapDamageType(value)
         except (TypeError, ValueError) as error:
@@ -690,6 +1228,7 @@ class DashboardAPI:
     def _validate_trap(
         has_trap: bool,
         trap_detection_difficulty: int | None,
+        trap_disarm_difficulty: int | None,
         trap_damage_type: TrapDamageType | None,
         trap_damage: int | None,
     ) -> None:
@@ -700,6 +1239,8 @@ class DashboardAPI:
             or not 1 <= trap_detection_difficulty <= 30
         ):
             raise ValueError("Trap detection difficulty must be an integer from 1 to 30.")
+        if trap_disarm_difficulty is None or not 1 <= trap_disarm_difficulty <= 30:
+            raise ValueError("Trap disarm difficulty must be an integer from 1 to 30.")
         if trap_damage_type is None:
             raise ValueError("Trap damage type is required.")
         if trap_damage is None or trap_damage <= 0:
@@ -744,7 +1285,17 @@ class DashboardAPI:
             "description": cls._optional_text(body, "description") or "",
             "weight": weight,
             "slot_cost": slot_cost,
-            "tags": [],
+            "tags": [
+                (
+                    "stackable"
+                    if cls._boolean(
+                        body,
+                        "stackable",
+                        default=item_type is ItemType.CONSUMABLE,
+                    )
+                    else "not_stackable"
+                )
+            ],
             "modifiers": [],
             "requirements": [],
         }

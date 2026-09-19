@@ -11,6 +11,7 @@ from rpg_bot.commands.inventory import (
 from rpg_bot.commands.world import WorldCommands
 from rpg_bot.database import Database
 from rpg_bot.dungeon import ConnectionType, TrapDamageType, TrapState
+from rpg_bot.inventory import EquipmentSlot
 from rpg_bot.portraits import CharacterPortraitStore
 from rpg_bot.world import InventoryHolder
 
@@ -73,7 +74,7 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [(choice.name, choice.value) for choice in choices],
-            [("Copper Coin (3 here)", "copper"), ("Rusty Key (1 here)", "rusty_key")],
+            [("Copper Coin x3", "copper"), ("Rusty Key", "rusty_key")],
         )
 
     async def test_take_autocomplete_filters_by_name_or_id(self) -> None:
@@ -89,6 +90,20 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(choices, [])
+
+    async def test_drop_autocomplete_lists_only_unequipped_inventory_items(self) -> None:
+        self.give_tool("health_potion")
+        self.give_tool("iron_dagger")
+        self.database.equip_inventory_item(
+            self.character_id, "iron_dagger-instance", EquipmentSlot.MAIN_HAND
+        )
+
+        choices = await self.cog.inventory_item_autocomplete(self.interaction, "")
+
+        self.assertEqual(
+            [(choice.name, choice.value) for choice in choices],
+            [("Health Potion", "health_potion-instance")],
+        )
 
     async def test_move_autocomplete_lists_reachable_room_and_exit_name(self) -> None:
         hall = self.cog.world.create_room("hall", "chapel", "Collapsed Hall")
@@ -499,14 +514,14 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Disarm failed:", confirmation)
         self.assertIn("Your Trap Disarm Kit broke.", confirmation)
         with self.database._connect() as connection:
-            durability = connection.execute(
+            broken_kit = connection.execute(
                 """
                 SELECT durability FROM character_items
                 WHERE character_id = ? AND template_id = 'trap_disarm_kit'
                 """,
                 (self.character_id,),
-            ).fetchone()["durability"]
-        self.assertEqual(durability, 0)
+            ).fetchone()
+        self.assertIsNone(broken_kit)
 
     async def test_disarm_requires_usable_disarm_kit(self) -> None:
         hall = self.cog.world.create_room("hall", "chapel", "Hall")
@@ -522,7 +537,6 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             trap_damage_type=TrapDamageType.PHYSICAL,
             trap_damage=3,
         )
-        self.database.mark_trap_detected(self.character_id, trapped.id)
         interaction, _ = self.command_interaction()
 
         await self.cog.disarm.callback(
@@ -532,6 +546,24 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.send_message.assert_awaited_once_with(
             "You need a usable Trap Disarm Kit to disarm that trap.", ephemeral=True
         )
+
+    async def test_disarm_autocomplete_lists_visible_armed_traps(self) -> None:
+        hall = self.cog.world.create_room("hall", "chapel", "Hall")
+        self.cog.world.connect_rooms(
+            "entrance",
+            "north",
+            hall.id,
+            connection_type=ConnectionType.HALLWAY,
+            has_trap=True,
+            trap_state=TrapState.ARMED,
+            trap_detection_difficulty=10,
+            trap_damage_type=TrapDamageType.PHYSICAL,
+            trap_damage=3,
+        )
+
+        choices = await self.cog.disarm_exit_autocomplete(self.interaction, "")
+
+        self.assertEqual([(choice.name, choice.value) for choice in choices], [("North", "north")])
 
     async def test_door_commands_flavor_already_open_or_closed_state(self) -> None:
         hall = self.cog.world.create_room("hall", "chapel", "Hall")
@@ -609,22 +641,26 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         character_cog.refresh_dedicated_sheet_for.assert_awaited_once()
 
     async def test_drop_posts_character_action_in_game(self) -> None:
-        self.cog.world.take_loose_item(self.character_id, "copper", 1)
+        room = self.cog.world.get_character_room(self.character_id)
+        self.cog.world.place_catalog_item(
+            InventoryHolder.room(room.id), "health_potion", 1
+        )
+        self.cog.world.take_loose_item(self.character_id, "health_potion", 1)
         interaction, _ = self.command_interaction()
         interaction.client = SimpleNamespace(get_cog=lambda _name: None)
 
         await self.cog.drop.callback(
-            self.cog.drop.binding, interaction, "copper", 1
+            self.cog.drop.binding, interaction, "health_potion", 1
         )
 
         public_embed = interaction.guild.text_channels[0].send.await_args.kwargs[
             "embed"
         ]
         self.assertEqual(public_embed.author.name, "Olof")
-        self.assertEqual(public_embed.description, "Dropped **1 × Copper Coin**.")
+        self.assertEqual(public_embed.description, "Dropped **1 × Health Potion**.")
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         interaction.followup.send.assert_awaited_once_with(
-            "Dropped **1 × Copper Coin**. Posted in #game.", ephemeral=True
+            "Dropped **1 × Health Potion**. Posted in #game.", ephemeral=True
         )
 
     async def test_pending_dashboard_refresh_is_applied_to_discord_map(self) -> None:

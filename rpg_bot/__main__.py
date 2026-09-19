@@ -37,6 +37,7 @@ class RPGBot(commands.Bot):
         await self.load_extension("rpg_bot.commands.player")
         await self.load_extension("rpg_bot.commands.dm")
         await self.load_extension("rpg_bot.commands.character")
+        await self.load_extension("rpg_bot.commands.give")
         await self.load_extension("rpg_bot.commands.inventory")
         await self.load_extension("rpg_bot.commands.world")
 

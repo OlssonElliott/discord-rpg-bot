@@ -420,48 +420,6 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.catalog.get("great_axe").weight, 4)
         self.assertEqual(self.catalog.get("health_potion").affected_stat, "hp")
 
-    async def test_dm_can_give_a_stack_of_consumables(self) -> None:
-        cog = DMCommands(self.database)
-        interaction = interaction_for(99)
-        member = SimpleNamespace(id=7)
-
-        await cog.give_item.callback(
-            cog.give_item.binding,
-            interaction,
-            member,
-            "health_potion",
-            3,
-        )
-
-        inventory = self.database.get_character_inventory(self.character.character_id)
-        potion = next(
-            item for item in inventory.items if item.template_id == "health_potion"
-        )
-        self.assertEqual(potion.quantity, 3)
-        self.assertIn("Health Potion ×3", interaction.response.send_message.await_args.args[0])
-        self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
-
-    async def test_dm_can_give_persisted_coins(self) -> None:
-        cog = DMCommands(self.database)
-        interaction = interaction_for(99)
-        member = SimpleNamespace(id=7)
-
-        await cog.give_coins.callback(
-            cog.give_coins.binding,
-            interaction,
-            member,
-            60,
-            4,
-            2,
-        )
-
-        inventory = self.database.get_character_inventory(self.character.character_id)
-        self.assertEqual(
-            (inventory.copper, inventory.silver, inventory.gold), (60, 4, 2)
-        )
-        self.assertEqual(inventory.coin_weight(), 1)
-        self.assertIn("2 gold", interaction.response.send_message.await_args.args[0])
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -87,6 +87,10 @@ class ItemTemplate:
 
     @property
     def stackable(self) -> bool:
+        if "not_stackable" in self.tags:
+            return False
+        if "stackable" in self.tags:
+            return True
         return self.item_type is ItemType.CONSUMABLE
 
 

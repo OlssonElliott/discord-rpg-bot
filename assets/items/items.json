@@ -563,8 +563,7 @@
     "weight": 0,
     "slot_cost": 1,
     "tags": [
-      "tool",
-      "lockpicking"
+      "stackable"
     ],
     "modifiers": [],
     "requirements": []
@@ -579,8 +578,7 @@
     "weight": 1,
     "slot_cost": 1,
     "tags": [
-      "tool",
-      "trap_disarming"
+      "stackable"
     ],
     "modifiers": [],
     "requirements": []

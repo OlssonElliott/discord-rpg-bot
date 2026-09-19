@@ -211,6 +211,31 @@ class WorldServiceTests(unittest.TestCase):
             [("rusty_sword", 1)],
         )
 
+    def test_drops_multiple_non_stackable_items_as_separate_room_items(self) -> None:
+        self.world.place_character(self.character_id, self.entrance.id)
+        self.world.create_item("rusty_sword", "Rusty Sword", stackable=False)
+        room_holder = InventoryHolder.room(self.entrance.id)
+        self.world.place_item(room_holder, "rusty_sword")
+
+        self.world.take_loose_item(self.character_id, "Rusty Sword")
+        first = self.database.get_character_inventory(self.character_id)
+        sword = next(
+            item for item in first.items if item.template_id == "rusty_sword"
+        )
+        self.database.add_inventory_item(
+            self.character_id,
+            "rusty_sword",
+            stackable=False,
+        )
+
+        self.world.drop_item(self.character_id, sword.instance_id)
+        self.world.drop_item(self.character_id, "rusty_sword")
+
+        dropped = self.world.inventory(room_holder)
+        self.assertEqual([stack.quantity for stack in dropped], [1, 1])
+        self.assertEqual([stack.item.name for stack in dropped], ["Rusty Sword", "Rusty Sword"])
+        self.assertNotEqual(dropped[0].item.id, dropped[1].item.id)
+
     def test_uncatalogued_item_cannot_enter_character_inventory(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)
         self.world.create_item("old_key", "Unregistered Key", stackable=False)
@@ -300,6 +325,93 @@ class WorldServiceTests(unittest.TestCase):
         self.assertTrue(
             any(item.template_id == "iron_dagger" for item in inventory.items)
         )
+
+    def test_room_features_can_be_created_listed_and_linked_to_room(self) -> None:
+        table = self.world.create_room_feature(
+            self.hall.id,
+            "oak_table",
+            "Heavy Oak Table",
+            "furniture",
+            "A broad table covered in old knife marks.",
+        )
+        fireplace = self.world.create_room_feature(
+            self.hall.id,
+            "cold_fireplace",
+            "Cold Fireplace",
+            "structure",
+            "Only old ash remains inside.",
+        )
+
+        features = self.world.list_room_features(self.hall.id)
+
+        self.assertEqual(table.room_id, self.hall.id)
+        self.assertEqual(fireplace.room_id, self.hall.id)
+        self.assertEqual(
+            {feature.id for feature in features},
+            {"oak_table", "cold_fireplace"},
+        )
+        self.assertEqual(table.feature_type.value, "furniture")
+        self.assertEqual(
+            table.look_text,
+            "A broad table covered in old knife marks.",
+        )
+
+    def test_room_feature_can_be_edited_without_affecting_sibling(self) -> None:
+        first = self.world.create_room_feature(
+            self.hall.id,
+            "chair",
+            "Broken Chair",
+            "furniture",
+            "One leg is missing.",
+        )
+        second = self.world.create_room_feature(
+            self.hall.id,
+            "banner",
+            "Torn Banner",
+            "decoration",
+            "A faded banner hangs from the wall.",
+        )
+
+        updated = self.world.update_room_feature(
+            first.id,
+            name="Splintered Chair",
+            description="The seat has collapsed inward.",
+            feature_type="furniture",
+        )
+
+        sibling = self.world.get_room_feature(second.id)
+        self.assertEqual(updated.name, "Splintered Chair")
+        self.assertEqual(updated.description, "The seat has collapsed inward.")
+        self.assertEqual(sibling.name, "Torn Banner")
+        self.assertEqual(
+            sibling.description,
+            "A faded banner hangs from the wall.",
+        )
+
+    def test_room_feature_can_be_removed_without_affecting_others(self) -> None:
+        first = self.world.create_room_feature(
+            self.hall.id, "altar", "Stone Altar", "structure"
+        )
+        second = self.world.create_room_feature(
+            self.hall.id, "bloodstain", "Old Bloodstain", "environmental"
+        )
+
+        self.world.remove_room_feature(first.id)
+
+        self.assertIsNone(self.world.get_room_feature(first.id))
+        self.assertIsNotNone(self.world.get_room_feature(second.id))
+
+    def test_deleting_room_cascades_its_room_features(self) -> None:
+        feature = self.world.create_room_feature(
+            self.hall.id,
+            "weapon_rack",
+            "Weapon Rack",
+            "furniture",
+        )
+
+        self.world.delete_room(self.hall.id)
+
+        self.assertIsNone(self.world.get_room_feature(feature.id))
 
     def test_location_and_room_contents_survive_restart(self) -> None:
         self.world.place_character(self.character_id, self.entrance.id)

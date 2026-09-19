@@ -11,9 +11,6 @@ from ..database import (
     InvalidHitPointsError,
 )
 from ..models import Character, Stance
-from ..inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
-from ..inventory_service import InventoryError, InventoryService
-from .inventory import refresh_inventory_views
 
 
 def result_embed(title: str, character: Character) -> discord.Embed:
@@ -31,97 +28,6 @@ async def send_error(interaction: discord.Interaction, error: ValueError) -> Non
 class DMCommands(commands.Cog):
     def __init__(self, database: Database) -> None:
         self.database = database
-        self.item_catalog = ItemCatalog.load(DEFAULT_ITEM_CATALOG_PATH)
-        self.inventory_service = InventoryService(database, self.item_catalog)
-
-    async def item_autocomplete(
-        self, interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
-        del interaction
-        query = current.casefold().strip()
-        return [
-            app_commands.Choice(name=template.name, value=template.template_id)
-            for template in self.item_catalog.all()
-            if not query
-            or query in template.name.casefold()
-            or query in template.template_id.casefold()
-        ][:25]
-
-    @app_commands.command(name="giveitem", description="Give an item to a character.")
-    @app_commands.describe(user="Discord user", item="Item", quantity="Stack quantity")
-    @app_commands.autocomplete(item=item_autocomplete)
-    @dm_only()
-    async def give_item(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        item: str,
-        quantity: app_commands.Range[int, 1, 99] = 1,
-    ) -> None:
-        character = self.database.get_character(user.id)
-        if character is None:
-            await send_error(
-                interaction,
-                CharacterNotFoundError("That Discord user does not have an active character."),
-            )
-            return
-        try:
-            self.inventory_service.grant(character, item, quantity)
-            template = self.item_catalog.get(item)
-        except (InventoryError, ValueError) as error:
-            await send_error(interaction, error)
-            return
-        quantity_text = f" ×{quantity}" if quantity > 1 else ""
-        await interaction.response.send_message(
-            f"Gave **{template.name}{quantity_text}** to **{character.name}**.",
-            ephemeral=True,
-        )
-        assert character.character_id is not None
-        await refresh_inventory_views(interaction, character)
-
-    @app_commands.command(name="givecoins", description="Give coins to a character.")
-    @app_commands.describe(
-        user="Discord user",
-        copper="Copper coins",
-        silver="Silver coins",
-        gold="Gold coins",
-    )
-    @dm_only()
-    async def give_coins(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        copper: app_commands.Range[int, 0, 9999] = 0,
-        silver: app_commands.Range[int, 0, 9999] = 0,
-        gold: app_commands.Range[int, 0, 9999] = 0,
-    ) -> None:
-        character = self.database.get_character(user.id)
-        if character is None:
-            await send_error(
-                interaction,
-                CharacterNotFoundError(
-                    "That Discord user does not have an active character."
-                ),
-            )
-            return
-        try:
-            wallet = self.inventory_service.grant_currency(
-                character,
-                copper=copper,
-                silver=silver,
-                gold=gold,
-            )
-        except InventoryError as error:
-            await send_error(interaction, error)
-            return
-        await interaction.response.send_message(
-            f"Gave coins to **{character.name}**. Wallet: "
-            f"**{wallet.gold} gold • {wallet.silver} silver • "
-            f"{wallet.copper} copper**.",
-            ephemeral=True,
-        )
-        assert character.character_id is not None
-        await refresh_inventory_views(interaction, character)
 
     @app_commands.command(name="damage", description="Damage a user's character.")
     @app_commands.describe(user="Discord user", amount="Amount of damage")
