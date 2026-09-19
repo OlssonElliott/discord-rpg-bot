@@ -4,7 +4,7 @@ import logging
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from ..checks import dm_only
 from ..combat import CombatScene
@@ -115,10 +115,102 @@ class CombatCommands(commands.Cog):
         description="Manage the shared combat scene.",
     )
 
-    def __init__(self, database: Database) -> None:
-        self.database = database
-        self.service = CombatService(database)
-        self.world = WorldService(database)
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        self.database: Database = bot.database
+        self.service = CombatService(self.database)
+        self.world = WorldService(self.database)
+        self._scene_messages: dict[int, discord.Message] = {}
+        self._last_scenes: dict[int, CombatScene] = {}
+        self.sync_dashboard_combat.start()
+
+    def cog_unload(self) -> None:
+        self.sync_dashboard_combat.cancel()
+
+    async def _publish_scene(
+        self,
+        guild: discord.Guild,
+        scene: CombatScene,
+        *,
+        channel: discord.TextChannel | None = None,
+    ) -> discord.TextChannel | None:
+        channel = channel or await ensure_combat_channel(guild)
+        if channel is None:
+            return None
+        room = self.world.get_room(scene.room_id)
+        room_name = room.name if room is not None else scene.room_id
+        embed = combat_scene_embed(scene, room_name)
+        message = self._scene_messages.get(guild.id)
+        if message is not None:
+            try:
+                await message.edit(embed=embed)
+                self._last_scenes[guild.id] = scene
+                return channel
+            except discord.NotFound:
+                self._scene_messages.pop(guild.id, None)
+            except discord.HTTPException:
+                LOGGER.exception(
+                    "Could not update combat scene message in guild %s",
+                    guild.id,
+                )
+                return channel
+        try:
+            self._scene_messages[guild.id] = await channel.send(embed=embed)
+            self._last_scenes[guild.id] = scene
+        except discord.HTTPException:
+            LOGGER.exception(
+                "Could not publish combat scene in guild %s",
+                guild.id,
+            )
+        return channel
+
+    async def _publish_ended(
+        self,
+        guild: discord.Guild,
+        previous: CombatScene,
+    ) -> None:
+        room = self.world.get_room(previous.room_id)
+        room_name = room.name if room is not None else previous.room_id
+        embed = discord.Embed(
+            title=f"Combat ended · {room_name}",
+            colour=discord.Colour.from_rgb(91, 78, 59),
+        )
+        message = self._scene_messages.pop(guild.id, None)
+        if message is not None:
+            try:
+                await message.edit(embed=embed)
+            except discord.HTTPException:
+                LOGGER.exception(
+                    "Could not close combat scene message in guild %s",
+                    guild.id,
+                )
+        else:
+            channel = await ensure_combat_channel(guild)
+            if channel is not None:
+                try:
+                    await channel.send(embed=embed)
+                except discord.HTTPException:
+                    LOGGER.exception(
+                        "Could not publish ended combat in guild %s",
+                        guild.id,
+                    )
+        self._last_scenes.pop(guild.id, None)
+
+    @tasks.loop(seconds=2.0)
+    async def sync_dashboard_combat(self) -> None:
+        for guild in self.bot.guilds:
+            scene = self.service.current(guild.id)
+            previous = self._last_scenes.get(guild.id)
+            if scene is None:
+                if previous is not None:
+                    await self._publish_ended(guild, previous)
+                continue
+            if previous != scene:
+                await self._publish_scene(guild, scene)
+
+    @sync_dashboard_combat.before_loop
+    async def before_sync_dashboard_combat(self) -> None:
+        await self.bot.wait_until_ready()
 
     async def room_autocomplete(
         self,
@@ -171,9 +263,7 @@ class CombatCommands(commands.Cog):
             await interaction.response.send_message(str(error), ephemeral=True)
             return
 
-        room = self.world.get_room(scene.room_id)
-        room_name = room.name if room is not None else scene.room_id
-        await channel.send(embed=combat_scene_embed(scene, room_name))
+        await self._publish_scene(guild, scene, channel=channel)
         await interaction.response.send_message(
             f"Combat started in {channel.mention}.",
             ephemeral=True,
@@ -203,9 +293,7 @@ class CombatCommands(commands.Cog):
                 ephemeral=True,
             )
             return
-        room = self.world.get_room(scene.room_id)
-        room_name = room.name if room is not None else scene.room_id
-        await channel.send(embed=combat_scene_embed(scene, room_name))
+        await self._publish_scene(guild, scene, channel=channel)
         await interaction.response.send_message(
             f"Combat state posted in {channel.mention}.",
             ephemeral=True,
@@ -227,15 +315,8 @@ class CombatCommands(commands.Cog):
             await interaction.response.send_message(str(error), ephemeral=True)
             return
         channel = await ensure_combat_channel(guild)
+        await self._publish_ended(guild, scene)
         if channel is not None:
-            room = self.world.get_room(scene.room_id)
-            room_name = room.name if room is not None else scene.room_id
-            await channel.send(
-                embed=discord.Embed(
-                    title=f"Combat ended · {room_name}",
-                    colour=discord.Colour.from_rgb(91, 78, 59),
-                )
-            )
             confirmation = f"Combat ended in {channel.mention}."
         else:
             confirmation = "Combat ended."
@@ -243,4 +324,4 @@ class CombatCommands(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(CombatCommands(bot.database))
+    await bot.add_cog(CombatCommands(bot))

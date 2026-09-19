@@ -43,12 +43,62 @@ export type RoomData = {
   description: string;
   room_image_url: string | null;
   position: { x: number; y: number };
-  counts: { players: number; enemies: number; items: number; containers: number };
+  counts: { players: number; enemies: number; items: number; containers: number; room_features?: number };
   players: { id: number; name: string }[];
   enemies: { id: string; name: string; description?: string }[];
   npcs: { id: string; name: string; description?: string }[];
   containers: { id: string; name: string; description?: string }[];
   loose_items: { id: string; name: string; description?: string; quantity: number }[];
+  room_features?: {
+    id: string;
+    room_id: string;
+    name: string;
+    description: string;
+    feature_type: string;
+  }[];
+};
+
+export type CombatLandmarkData = {
+  id: string;
+  name: string;
+  description: string;
+  source_feature_id: string | null;
+  feature_type: string | null;
+  synthetic: boolean;
+  x: number | null;
+  y: number | null;
+};
+
+export type CombatRouteData = {
+  source_landmark_id: string;
+  destination_landmark_id: string;
+  distance: 'close' | 'far' | 'distant';
+  obstacle: string | null;
+  blocked: boolean;
+};
+
+export type CombatantData = {
+  kind: 'character' | 'enemy';
+  source_id: string;
+  name: string;
+  landmark_id: string;
+  relation: 'at' | 'beside' | 'behind' | 'on' | 'inside';
+};
+
+export type CombatSceneData = {
+  id: number;
+  guild_id: number;
+  room_id: string;
+  room_name: string;
+  area_id: string | null;
+  status: 'active' | 'ended';
+  landmarks: CombatLandmarkData[];
+  routes: CombatRouteData[];
+  combatants: CombatantData[];
+};
+
+export type CombatStateData = {
+  scene: CombatSceneData | null;
 };
 
 export type ConnectionData = {

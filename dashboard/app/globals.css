@@ -63,9 +63,13 @@ button, input, textarea { font: inherit; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; color: #eab86e; border: 1px solid #5c482d; border-radius: 10px; background: #201a13; }
 .kicker { margin: 0 0 1px; color: #8390a2; font-size: 0.72rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .editor-header h1 { margin: 0; font-size: 1.03rem; font-weight: 650; letter-spacing: -.01em; }
+.workspace-tabs { display: flex; gap: 4px; margin-left: 20px; padding: 3px; border: 1px solid #26344a; border-radius: 8px; background: #0a111d; }
+.workspace-tabs button { display: flex; align-items: center; gap: 6px; padding: 6px 9px; color: #8290a3; font-size: .76rem; border-radius: 6px; }
+.workspace-tabs button:hover { color: #dbe2ea; background: #172337; }
+.workspace-tabs button.active { color: #f0c27e; background: #292115; box-shadow: inset 0 0 0 1px #5a4529; }
 .area-picker { display: flex; align-items: center; justify-content: space-between; gap: 26px; min-width: 220px; margin-left: 34px; padding: 8px 12px; color: #e7ebf0; text-align: left; border: 1px solid #2d3b51; border-radius: 8px; background: #111b2a; }
 .area-picker small { display: block; margin-bottom: 1px; color: #8290a3; font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.area-select { width: 270px; margin-left: 34px; }
+.area-select { width: 250px; margin-left: 10px; }
 .area-select select { height: 40px; background: #111b2a; }
 .header-status { display: flex; align-items: center; gap: 7px; margin-left: auto; color: #93a1b4; font-size: .8rem; }
 .header-status span { width: 7px; height: 7px; border-radius: 50%; background: #59b98a; box-shadow: 0 0 0 3px #173426; }
@@ -124,8 +128,56 @@ button, input, textarea { font: inherit; }
 .content-summary .remove-content:hover { color: #df8580; background: rgba(223, 133, 128, .1); }
 .content-summary .remove-content svg { color: currentColor; }
 .inspector__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 24px; }
+.start-combat-location { width: 100%; margin-top: 16px; background: #6f2525; color: #fff1ed; }
 .inspector__actions button:last-child { grid-column: 1 / -1; }
 .delete-location { width: 100%; margin-top: 22px; color: #df8580; }
+.combat-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 390px; height: calc(100vh - 72px); }
+.combat-stage { min-width: 0; padding: 22px; overflow: hidden; background: radial-gradient(circle at 45% 35%, #1b202a 0, #0d121a 62%, #080b10 100%); }
+.combat-stage__heading { display: flex; align-items: center; justify-content: space-between; min-height: 58px; margin-bottom: 12px; }
+.combat-stage__heading h2, .combat-control-panel__heading h2 { margin: 3px 0 2px; font-size: 1.18rem; }
+.combat-stage__heading span { color: #7f8c9c; font-size: .75rem; }
+.combat-board { position: relative; height: calc(100% - 72px); min-height: 430px; overflow: hidden; border: 1px solid #313c4d; border-radius: 12px; background: radial-gradient(circle at 50% 45%, #222b38 0, #111925 56%, #0a1018 100%); box-shadow: inset 0 0 80px #0007; }
+.combat-route-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.combat-route-line { stroke: #73849a; stroke-width: 2; stroke-dasharray: 5 6; }
+.combat-route-line--blocked { stroke: #aa5656; stroke-dasharray: 3 5; }
+.combat-landmark { position: absolute; z-index: 2; width: 154px; min-height: 68px; padding: 9px 10px; cursor: grab; border: 1px solid #4b596d; border-radius: 9px; background: #111b2beF; box-shadow: 0 12px 28px #0008; transform: translate(-50%, -50%); user-select: none; }
+.combat-landmark:active { cursor: grabbing; }
+.combat-landmark--synthetic { border-style: dashed; border-color: #826640; background: #211b13e8; }
+.combat-landmark__title { display: flex; align-items: center; gap: 6px; color: #eef1f5; font-size: .77rem; }
+.combat-landmark__title svg { color: #d39a4a; }
+.combat-landmark__type { display: block; margin-top: 3px; color: #748297; font-size: .62rem; text-transform: uppercase; }
+.combat-landmark__occupants { display: grid; gap: 3px; margin-top: 7px; }
+.combat-token { display: flex; align-items: center; gap: 4px; padding: 3px 5px; color: #cfd7e1; font-size: .65rem; border-radius: 5px; background: #26364a; }
+.combat-token--enemy { color: #ffd0cc; background: #4a292d; }
+.combat-token small { margin-left: auto; color: #92a0b1; font-size: .57rem; }
+.combat-board__hint { position: absolute; left: 12px; bottom: 10px; color: #667487; font-size: .68rem; }
+.combat-control-panel { padding: 22px; overflow-y: auto; border-left: 1px solid #26344a; background: #0f1724; }
+.combat-control-panel__heading { display: flex; align-items: center; justify-content: space-between; }
+.combat-control-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid #26344a; }
+.combat-control-section h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 13px; font-size: .79rem; text-transform: uppercase; }
+.combat-control-section h3 svg { color: #d39a4a; }
+.combat-control-section label { display: block; margin: 9px 0 5px; color: #8e9bae; font-size: .72rem; }
+.combat-control-section select, .combat-control-section input { background: #111b2a; }
+.combatant-editor-list { display: grid; gap: 9px; }
+.combatant-editor { display: grid; grid-template-columns: 1fr 110px; gap: 6px; padding: 9px; border: 1px solid #26344a; border-radius: 8px; background: #111927; }
+.combatant-editor__name { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: #dce2e9; font-size: .77rem; }
+.combatant-editor__name .badge { margin-left: auto; }
+.combatant-editor button { grid-column: 2; }
+.combat-checkbox { display: flex !important; align-items: center; gap: 7px; margin: 11px 0 !important; }
+.combat-checkbox input { width: 15px; height: 15px; }
+.combat-route-list { display: grid; gap: 5px; margin-top: 13px; }
+.combat-route-list p { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 0; padding: 6px 0; color: #abb6c4; font-size: .7rem; border-bottom: 1px solid #1e2b3e; }
+.combat-route-list small { flex-basis: 100%; color: #7f8c9c; }
+.combat-route-list svg { color: #d86662; }
+.combat-end { width: 100%; margin-top: 24px; }
+.combat-empty-workspace { display: grid; height: calc(100vh - 72px); place-items: center; background: radial-gradient(circle at 50% 40%, #171f2b 0, #0a101b 65%); }
+.combat-empty-card { width: min(440px, calc(100vw - 32px)); padding: 30px; border: 1px solid #2d3b51; border-radius: 12px; background: #0f1724; box-shadow: 0 20px 60px #0008; }
+.combat-empty-card > svg { color: #c96f65; }
+.combat-empty-card h2 { margin: 8px 0; }
+.combat-empty-card > p:not(.kicker) { color: #8e9bae; font-size: .82rem; line-height: 1.55; }
+.combat-empty-card label { display: block; margin: 18px 0 6px; color: #aab5c3; font-size: .75rem; }
+.combat-empty-card button { width: 100%; margin-top: 12px; }
+.combat-empty-note { text-align: center; }
 .route-card { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin: 24px 0 16px; padding: 18px 14px; color: #dce2e9; font-size: .82rem; text-align: center; border: 1px solid #2c3a50; border-radius: 8px; background: #111b2a; }
 .route-card span { color: #d39a4a; font-size: 1.25rem; }
 .inspector-note { margin: 0 0 24px; color: #8e9bae; font-size: .8rem; line-height: 1.5; }
@@ -147,7 +199,11 @@ button, input, textarea { font: inherit; }
 @media (max-width: 820px) {
   .editor-header { padding: 0 12px; }
   .editor-title, .header-status { display: none; }
+  .workspace-tabs { margin-left: 0; }
+  .workspace-tabs button { padding: 6px; }
+  .workspace-tabs button svg + * { display: none; }
   .area-select { width: auto; min-width: 0; margin-left: 0; }
-  .editor-body { grid-template-columns: 1fr; }
+  .editor-body, .combat-workspace { grid-template-columns: 1fr; }
   .inspector { position: absolute; right: 10px; bottom: 10px; z-index: 10; width: min(340px, calc(100vw - 20px)); max-height: 48vh; border: 1px solid #26344a; border-radius: 10px; box-shadow: 0 18px 50px #0009; }
+  .combat-control-panel { position: absolute; right: 10px; bottom: 10px; z-index: 10; width: min(390px, calc(100vw - 20px)); max-height: 52vh; border: 1px solid #26344a; border-radius: 10px; box-shadow: 0 18px 50px #0009; }
 }

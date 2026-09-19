@@ -24,7 +24,7 @@ class DashboardAPITests(unittest.TestCase):
         self.room_images = RoomImageStore(
             Path(self.temp_directory.name) / "room_images"
         )
-        self.api = DashboardAPI(self.world, self.room_images)
+        self.api = DashboardAPI(self.world, self.room_images, guild_id=44)
 
     def tearDown(self) -> None:
         self.temp_directory.cleanup()
@@ -129,6 +129,96 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(deleted, {"deleted": "oak_table"})
         self.assertEqual(missing_status, 404)
         self.assertEqual(graph_after_delete["nodes"][0]["room_features"], [])
+
+    def test_combat_scene_can_be_controlled_through_dashboard_api(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
+        self.api.handle(
+            "POST",
+            "/api/areas/keep/rooms",
+            {"id": "hall", "name": "Guard Hall", "x": 0, "y": 0},
+        )
+        for feature_id, name in (
+            ("pillar", "Stone Pillar"),
+            ("table", "Oak Table"),
+        ):
+            status, _ = self.api.handle(
+                "POST",
+                "/api/rooms/hall/features",
+                {
+                    "id": feature_id,
+                    "name": name,
+                    "feature_type": "structure",
+                    "description": "",
+                },
+            )
+            self.assertEqual(status, 201)
+        status, _ = self.api.handle(
+            "POST",
+            "/api/rooms/hall/entities",
+            {
+                "id": "bandit",
+                "name": "Bandit",
+                "kind": "enemy",
+            },
+        )
+        self.assertEqual(status, 201)
+
+        status, state = self.api.handle(
+            "POST",
+            "/api/combat",
+            {"room_id": "hall"},
+        )
+        self.assertEqual(status, 201)
+        scene = state["scene"]
+        self.assertEqual(scene["room_name"], "Guard Hall")
+        self.assertEqual(
+            {landmark["id"] for landmark in scene["landmarks"]},
+            {"room:center", "feature:pillar", "feature:table"},
+        )
+        self.assertEqual(
+            [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
+            [("enemy", "Bandit")],
+        )
+
+        status, positioned = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"x": 0.25, "y": 0.35},
+        )
+        self.assertEqual(status, 200)
+        pillar = next(
+            landmark
+            for landmark in positioned["scene"]["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertEqual((pillar["x"], pillar["y"]), (0.25, 0.35))
+
+        status, routed = self.api.handle(
+            "PUT",
+            "/api/combat/routes",
+            {
+                "source_landmark_id": "feature:pillar",
+                "destination_landmark_id": "feature:table",
+                "distance": "close",
+                "obstacle": "Fallen rubble",
+                "blocked": False,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(routed["scene"]["routes"][0]["obstacle"], "Fallen rubble")
+
+        status, moved = self.api.handle(
+            "PATCH",
+            "/api/combat/combatants/enemy/bandit",
+            {"landmark_id": "feature:pillar", "relation": "behind"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(moved["scene"]["combatants"][0]["landmark_id"], "feature:pillar")
+        self.assertEqual(moved["scene"]["combatants"][0]["relation"], "behind")
+
+        status, ended = self.api.handle("DELETE", "/api/combat")
+        self.assertEqual(status, 200)
+        self.assertIsNone(ended["scene"])
 
     def test_room_feature_templates_are_reusable_and_independent(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})

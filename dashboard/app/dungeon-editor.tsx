@@ -28,6 +28,7 @@ import {
   Save,
   Skull,
   Sparkles,
+  Swords,
   Trash2,
   Upload,
   Users,
@@ -55,6 +56,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
+import { CombatWorkspace } from './combat-workspace';
 import {
   api,
   apiAssetUrl,
@@ -64,6 +66,9 @@ import {
   type AreaSummary,
   type CatalogItem,
   type CharacterSummary,
+  type CombatSceneData,
+  type CombatStateData,
+  type CombatantData,
   type ConnectionData,
   type RoomData,
 } from './api';
@@ -265,6 +270,9 @@ function graphEdges(graph: AreaGraphData): Edge[] {
 }
 
 export function DungeonEditor() {
+  const [workspaceMode, setWorkspaceMode] = useState<'locations' | 'combat'>('locations');
+  const [combatScene, setCombatScene] = useState<CombatSceneData | null>(null);
+  const [combatBusy, setCombatBusy] = useState(false);
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
@@ -390,6 +398,90 @@ export function DungeonEditor() {
   useEffect(() => {
     if (areaId) queueMicrotask(() => void loadGraph(areaId));
   }, [areaId, loadGraph]);
+
+  const loadCombat = useCallback(async (quiet = false) => {
+    try {
+      const state = await api<CombatStateData>('/combat');
+      setCombatScene(state.scene);
+      if (!quiet) setError('');
+    } catch (requestError) {
+      if (!quiet) {
+        setError(requestError instanceof Error ? requestError.message : 'Could not load combat.');
+      }
+    }
+  }, []);
+
+  const startCombat = useCallback(async (roomId: string) => {
+    setCombatBusy(true);
+    try {
+      const state = await api<CombatStateData>('/combat', {
+        method: 'POST',
+        body: JSON.stringify({ room_id: roomId }),
+      });
+      setCombatScene(state.scene);
+      setWorkspaceMode('combat');
+      setNotice('Combat started');
+      setError('');
+      return true;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not start combat.');
+      return false;
+    } finally {
+      setCombatBusy(false);
+    }
+  }, []);
+
+  const endCombat = useCallback(async () => {
+    setCombatBusy(true);
+    try {
+      const state = await api<CombatStateData>('/combat', { method: 'DELETE' });
+      setCombatScene(state.scene);
+      setNotice('Combat ended');
+      setError('');
+      return true;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not end combat.');
+      return false;
+    } finally {
+      setCombatBusy(false);
+    }
+  }, []);
+
+  const updateCombat = useCallback(async (
+    path: string,
+    init: RequestInit,
+    message: string,
+  ) => {
+    setCombatBusy(true);
+    try {
+      const state = await api<CombatStateData>(path, init);
+      setCombatScene(state.scene);
+      setNotice(message);
+      setError('');
+      window.setTimeout(() => setNotice(''), 1400);
+      return true;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Combat change was rejected.');
+      return false;
+    } finally {
+      setCombatBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (workspaceMode !== 'combat') return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (cancelled || document.visibilityState === 'hidden') return;
+      await loadCombat(true);
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [loadCombat, workspaceMode]);
 
   useEffect(() => {
     if (!areaId) return;
@@ -617,11 +709,29 @@ export function DungeonEditor() {
   return (
     <main className="editor-shell">
       <header className="editor-header">
-        <div className="brand-mark"><Map size={19} /></div>
+        <div className="brand-mark">
+          {workspaceMode === 'locations' ? <Map size={19} /> : <Swords size={19} />}
+        </div>
         <div className="editor-title">
           <p className="kicker">DM workspace</p>
-          <h1>Location editor</h1>
+          <h1>{workspaceMode === 'locations' ? 'Location editor' : 'Combat'}</h1>
         </div>
+        <nav className="workspace-tabs" aria-label="DM workspace">
+          <button
+            type="button"
+            className={workspaceMode === 'locations' ? 'active' : ''}
+            onClick={() => setWorkspaceMode('locations')}
+          >
+            <Map size={14} /> Locations
+          </button>
+          <button
+            type="button"
+            className={workspaceMode === 'combat' ? 'active' : ''}
+            onClick={() => setWorkspaceMode('combat')}
+          >
+            <Swords size={14} /> Combat
+          </button>
+        </nav>
         <NativeSelect
           aria-label="Current area"
           className="area-select"
@@ -634,24 +744,71 @@ export function DungeonEditor() {
             </NativeSelectOption>
           ))}
         </NativeSelect>
-        <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
-          <Plus /> Area
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
-          <Box /> Item library
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setFeatureLibraryOpen(true)}>
-          <Sparkles /> Feature library
-        </Button>
+        {workspaceMode === 'locations' && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
+              <Plus /> Area
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
+              <Box /> Item library
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setFeatureLibraryOpen(true)}>
+              <Sparkles /> Feature library
+            </Button>
+          </>
+        )}
         <div className="header-status"><span /> {notice || 'Saved'}</div>
-        <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
-          <Plus /> Add location
-        </Button>
+        {workspaceMode === 'locations' && (
+          <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
+            <Plus /> Add location
+          </Button>
+        )}
       </header>
 
       {error && <div className="error-banner"><CircleAlert size={15} />{error}<button onClick={() => setError('')}>Dismiss</button></div>}
 
-      <section className="editor-body">
+      {workspaceMode === 'combat' ? (
+        <CombatWorkspace
+          scene={combatScene}
+          rooms={graph?.nodes ?? []}
+          preferredRoomId={selectedRoomId}
+          busy={combatBusy}
+          onStart={startCombat}
+          onEnd={endCombat}
+          onRefresh={() => loadCombat()}
+          onPositionLandmark={(landmarkId, x, y) => updateCombat(
+            `/combat/landmarks/${landmarkId}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ x, y }),
+            },
+            'Landmark position saved',
+          )}
+          onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
+            `/combat/combatants/${combatant.kind}/${combatant.source_id}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ landmark_id: landmarkId, relation }),
+            },
+            `${combatant.name} moved`,
+          )}
+          onConnectLandmarks={(sourceId, destinationId, distance, obstacle, blocked) => updateCombat(
+            '/combat/routes',
+            {
+              method: 'PUT',
+              body: JSON.stringify({
+                source_landmark_id: sourceId,
+                destination_landmark_id: destinationId,
+                distance,
+                obstacle,
+                blocked,
+              }),
+            },
+            'Combat route saved',
+          )}
+        />
+      ) : (
+        <section className="editor-body">
         <div className="graph-panel">
           {nodes.length ? (
             <ReactFlow
@@ -736,6 +893,7 @@ export function DungeonEditor() {
                 }),
                 'Character moved',
               )}
+              onStartCombat={() => startCombat(selectedRoom.id)}
               onDelete={() => setDeleteOpen(true)}
               onSelectConnection={(item) => { setSelectedEdgeId(edgeId(item)); setSelectedRoomId(null); }}
             />
@@ -778,6 +936,7 @@ export function DungeonEditor() {
           )}
         </aside>
       </section>
+      )}
 
       <AreaDialog open={addAreaOpen} onOpenChange={setAddAreaOpen} onCreate={async (name, description) => {
         try {
@@ -1011,7 +1170,7 @@ export function DungeonEditor() {
   );
 }
 
-function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onPlaceCharacter, onDelete, onSelectConnection }: {
+function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onPlaceCharacter, onStartCombat, onDelete, onSelectConnection }: {
   room: RoomData;
   connections: ConnectionData[];
   rooms: RoomData[];
@@ -1031,6 +1190,7 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   }) => void;
   onRemoveContent: (kind: ContentKind, id: string) => Promise<boolean>;
   onPlaceCharacter: (characterId: number) => Promise<boolean>;
+  onStartCombat: () => Promise<boolean>;
   onDelete: () => void;
   onSelectConnection: (connection: ConnectionData) => void;
 }) {
@@ -1043,20 +1203,15 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   const attached = connections.filter((connection) => connection.source_room_id === room.id);
   const roomName = (id: string) => rooms.find((item) => item.id === id)?.name || id;
   const selectedCharacter = characters.find((character) => String(character.id) === characterId);
-  const roomFeatures = ((room as RoomData & {
-    room_features?: Array<{
-      id: string;
-      room_id: string;
-      name: string;
-      description: string;
-      feature_type: string;
-    }>;
-  }).room_features ?? []);
+  const roomFeatures = room.room_features ?? [];
   return (
     <>
       <div className="inspector__topline"><span>Selected location</span><Badge variant="outline">{room.counts.players} players</Badge></div>
       <h2>{room.name}</h2>
       <p className="room-id">{room.id}</p>
+      <Button className="start-combat-location" onClick={() => void onStartCombat()}>
+        <Swords /> Start combat here
+      </Button>
       <div className="inspector__section edit-fields">
         <label htmlFor="room-name">Name</label>
         <Input id="room-name" value={name} onChange={(event) => setName(event.target.value)} />

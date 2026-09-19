@@ -3,6 +3,7 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import re
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -100,13 +101,34 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local RPG DM dashboard API.")
-    parser.add_argument("--database", default="rpg_bot.db")
+    parser.add_argument(
+        "--database",
+        default=os.getenv("DATABASE_PATH", "rpg_bot.db"),
+    )
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--guild-id",
+        type=int,
+        default=None,
+        help="Discord guild whose combat state the dashboard controls.",
+    )
     arguments = parser.parse_args()
+
+    guild_id = arguments.guild_id
+    if guild_id is None:
+        configured_guild = os.getenv("DISCORD_GUILD_ID", "").strip()
+        if configured_guild:
+            try:
+                guild_id = int(configured_guild)
+            except ValueError as error:
+                raise ValueError("DISCORD_GUILD_ID must be numeric.") from error
 
     database = Database(arguments.database)
     database.initialize()
-    DashboardRequestHandler.api = DashboardAPI(WorldService(database))
+    DashboardRequestHandler.api = DashboardAPI(
+        WorldService(database),
+        guild_id=guild_id,
+    )
     server = ThreadingHTTPServer(
         ("127.0.0.1", arguments.port), DashboardRequestHandler
     )

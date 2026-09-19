@@ -6,6 +6,8 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+from .combat import CombatScene
+from .combat_service import CombatService
 from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .inventory import ItemTemplate, ItemType, WeaponGrip
 from .room_images import InvalidRoomImageError, RoomImageStore
@@ -162,6 +164,60 @@ def _room_feature_template_data(template: object) -> JsonObject:
     }
 
 
+def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
+    room = world.get_room(scene.room_id)
+    return {
+        "id": scene.id,
+        "guild_id": scene.guild_id,
+        "room_id": scene.room_id,
+        "room_name": room.name if room is not None else scene.room_id,
+        "area_id": room.area_id if room is not None else None,
+        "status": scene.status.value,
+        "landmarks": [
+            {
+                "id": landmark.id,
+                "name": landmark.name,
+                "description": landmark.description or "",
+                "source_feature_id": landmark.source_feature_id,
+                "feature_type": landmark.feature_type,
+                "synthetic": landmark.synthetic,
+                "x": landmark.x,
+                "y": landmark.y,
+            }
+            for landmark in scene.landmarks
+        ],
+        "routes": [
+            {
+                "source_landmark_id": route.source_landmark_id,
+                "destination_landmark_id": route.destination_landmark_id,
+                "distance": route.distance.value,
+                "obstacle": route.obstacle,
+                "blocked": route.blocked,
+            }
+            for route in scene.routes
+        ],
+        "combatants": [
+            {
+                "kind": combatant.kind.value,
+                "source_id": combatant.source_id,
+                "name": combatant.name,
+                "landmark_id": combatant.landmark_id,
+                "relation": combatant.relation.value,
+            }
+            for combatant in scene.combatants
+        ],
+    }
+
+
+def _combat_state_data(
+    scene: CombatScene | None,
+    world: WorldService,
+) -> JsonObject:
+    return {
+        "scene": _combat_scene_data(scene, world) if scene is not None else None
+    }
+
+
 def _container_data(container: object, contents: tuple[object, ...]) -> JsonObject:
     item_data = [_stack_data(stack) for stack in contents]
     return {
@@ -189,9 +245,14 @@ class DashboardAPI:
         self,
         world: WorldService,
         room_images: RoomImageStore | None = None,
+        *,
+        combat: CombatService | None = None,
+        guild_id: int | None = None,
     ) -> None:
         self.world = world
         self.room_images = room_images or RoomImageStore()
+        self.combat = combat or CombatService(world.database)
+        self.guild_id = guild_id
         self._connection_trap_damage: dict[tuple[str, str], int] = {}
 
     def upload_room_image(
@@ -238,6 +299,59 @@ class DashboardAPI:
             return 400, {"error": str(error)}
 
     def _handle(self, method: str, path: str, body: JsonObject) -> ApiResponse:
+        if path == "/api/combat":
+            guild_id = self._combat_guild_id()
+            if method == "GET":
+                return 200, _combat_state_data(
+                    self.combat.current(guild_id),
+                    self.world,
+                )
+            if method == "POST":
+                scene = self.combat.start(
+                    guild_id,
+                    self._text(body, "room_id"),
+                )
+                return 201, _combat_state_data(scene, self.world)
+            if method == "DELETE":
+                self.combat.end(guild_id)
+                return 200, _combat_state_data(None, self.world)
+
+        match = re.fullmatch(r"/api/combat/landmarks/([^/]+)", path)
+        if match and method == "PATCH":
+            scene = self.combat.set_landmark_position(
+                self._combat_guild_id(),
+                match.group(1),
+                self._number(body, "x"),
+                self._number(body, "y"),
+            )
+            return 200, _combat_state_data(scene, self.world)
+
+        if path == "/api/combat/routes" and method == "PUT":
+            scene = self.combat.connect_landmarks(
+                self._combat_guild_id(),
+                self._text(body, "source_landmark_id"),
+                self._text(body, "destination_landmark_id"),
+                self._text(body, "distance"),
+                obstacle=self._optional_text(body, "obstacle"),
+                blocked=self._boolean(body, "blocked", default=False),
+            )
+            return 200, _combat_state_data(scene, self.world)
+
+        match = re.fullmatch(
+            r"/api/combat/combatants/(character|enemy)/([^/]+)",
+            path,
+        )
+        if match and method == "PATCH":
+            kind, source_id = match.groups()
+            scene = self.combat.move_combatant(
+                self._combat_guild_id(),
+                kind,
+                source_id,
+                self._text(body, "landmark_id"),
+                self._text(body, "relation"),
+            )
+            return 200, _combat_state_data(scene, self.world)
+
         if method == "GET" and path == "/api/characters":
             return 200, [
                 _character_data(character) for character in self.world.list_characters()
@@ -1131,6 +1245,14 @@ class DashboardAPI:
                 else room.scene_image_url
             ),
         }
+
+    def _combat_guild_id(self) -> int:
+        if self.guild_id is None or self.guild_id <= 0:
+            raise ValueError(
+                "Combat dashboard requires DISCORD_GUILD_ID or "
+                "dashboard_server --guild-id."
+            )
+        return self.guild_id
 
     @staticmethod
     def _text(body: JsonObject, field: str) -> str:
