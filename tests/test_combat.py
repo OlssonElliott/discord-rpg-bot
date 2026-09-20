@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rpg_bot.combat import (
     CombatantKind,
@@ -312,6 +313,89 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(olof.landmark_id, "feature:stone_pillar")
         self.assertEqual(olof.relation, LandmarkRelation.BEHIND)
         self.assertEqual(scene.id, reopened.id)
+
+    def test_initiative_uses_insight_and_tracks_dynamic_turn_order(self) -> None:
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[15, 9, 20],
+        ):
+            scene = self.service.start(44, self.hall.id)
+
+            self.assertEqual(scene.round_number, 1)
+            self.assertEqual(scene.current_turn_kind, CombatantKind.CHARACTER)
+            self.assertEqual(
+                scene.current_turn_source_id,
+                str(self.olof.character_id),
+            )
+            self.assertEqual(
+                [
+                    (item.name, item.initiative_score)
+                    for item in scene.initiative_order()
+                ],
+                [("Olof", 15), ("Bandit", 9)],
+            )
+
+            scene = self.service.add_enemies(
+                44,
+                "core_goblin_raider",
+            )
+
+        goblin = next(
+            item
+            for item in scene.combatants
+            if item.name == "Goblin Raider"
+        )
+        self.assertEqual(goblin.initiative_roll, 20)
+        self.assertEqual(goblin.initiative_score, 21)
+        self.assertEqual(
+            scene.current_turn_source_id,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.next_turn(44)
+        self.assertEqual(scene.current_turn_source_id, "bandit")
+        self.assertEqual(scene.round_number, 1)
+
+        scene = self.service.next_turn(44)
+        self.assertEqual(scene.current_turn_source_id, goblin.source_id)
+        self.assertEqual(scene.round_number, 2)
+
+        scene = self.service.previous_turn(44)
+        self.assertEqual(scene.current_turn_source_id, "bandit")
+        self.assertEqual(scene.round_number, 1)
+
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.assertEqual(
+            scene.current_turn_source_id,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.set_initiative(
+            44,
+            CombatantKind.ENEMY,
+            "bandit",
+            30,
+        )
+        self.assertEqual(
+            scene.current_turn_source_id,
+            str(self.olof.character_id),
+        )
+        self.assertEqual(scene.initiative_order()[0].source_id, "bandit")
+
+        reopened_database = Database(self.database_path)
+        reopened_database.initialize()
+        reopened = CombatService(reopened_database).current(44)
+        assert reopened is not None
+        self.assertEqual(reopened.round_number, 1)
+        self.assertEqual(
+            reopened.current_turn_source_id,
+            str(self.olof.character_id),
+        )
+        self.assertEqual(reopened.initiative_order()[0].initiative_score, 30)
 
     def test_only_one_active_scene_is_allowed_per_guild(self) -> None:
         self.service.start(44, self.hall.id)

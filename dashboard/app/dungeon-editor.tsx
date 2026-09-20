@@ -839,6 +839,35 @@ export function DungeonEditor() {
             { method: 'DELETE' },
             'Enemy removed from combat',
           )}
+          onNextTurn={() => updateCombat(
+            '/combat/turn/next',
+            { method: 'POST' },
+            'Turn advanced',
+          )}
+          onPreviousTurn={() => updateCombat(
+            '/combat/turn/previous',
+            { method: 'POST' },
+            'Turn moved back',
+          )}
+          onJumpTurn={(combatant) => updateCombat(
+            '/combat/turn',
+            {
+              method: 'PUT',
+              body: JSON.stringify({
+                kind: combatant.kind,
+                source_id: combatant.source_id,
+              }),
+            },
+            `${combatant.name}'s turn`,
+          )}
+          onSetInitiative={(combatant, initiativeScore) => updateCombat(
+            `/combat/initiative/${combatant.kind}/${combatant.source_id}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ initiative_score: initiativeScore }),
+            },
+            `${combatant.name}'s initiative updated`,
+          )}
           onConnectLandmarks={(sourceId, destinationId, distance, obstacle, blocked) => updateCombat(
             '/combat/routes',
             {

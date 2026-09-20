@@ -57,6 +57,18 @@ class CombatantState:
     name: str
     landmark_id: str
     relation: LandmarkRelation = LandmarkRelation.AT
+    initiative_roll: int = 0
+    initiative_score: int = 0
+
+    @property
+    def initiative_key(self) -> tuple[int, int, str, str, str]:
+        return (
+            -self.initiative_score,
+            -self.initiative_roll,
+            self.kind.value,
+            self.name.casefold(),
+            self.source_id,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +80,33 @@ class CombatScene:
     landmarks: tuple[CombatLandmark, ...] = ()
     routes: tuple[CombatRoute, ...] = ()
     combatants: tuple[CombatantState, ...] = ()
+    round_number: int = 1
+    current_turn_kind: CombatantKind | None = None
+    current_turn_source_id: str | None = None
 
     def landmark(self, landmark_id: str) -> CombatLandmark | None:
         return next(
             (landmark for landmark in self.landmarks if landmark.id == landmark_id),
+            None,
+        )
+
+    def initiative_order(self) -> tuple[CombatantState, ...]:
+        return tuple(
+            sorted(
+                self.combatants,
+                key=lambda combatant: combatant.initiative_key,
+            )
+        )
+
+    def current_combatant(self) -> CombatantState | None:
+        if self.current_turn_kind is None or self.current_turn_source_id is None:
+            return None
+        return next(
+            (
+                combatant
+                for combatant in self.combatants
+                if combatant.kind is self.current_turn_kind
+                and combatant.source_id == self.current_turn_source_id
+            ),
             None,
         )

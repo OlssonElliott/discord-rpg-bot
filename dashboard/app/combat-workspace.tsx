@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   Background,
   ConnectionMode,
@@ -17,6 +17,8 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import {
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   Flag,
   RefreshCw,
@@ -64,6 +66,13 @@ type CombatWorkspaceProps = {
     quantity: number,
   ) => Promise<boolean>;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
+  onNextTurn: () => Promise<boolean>;
+  onPreviousTurn: () => Promise<boolean>;
+  onJumpTurn: (combatant: CombatantData) => Promise<boolean>;
+  onSetInitiative: (
+    combatant: CombatantData,
+    initiativeScore: number,
+  ) => Promise<boolean>;
   onConnectLandmarks: (
     sourceId: string,
     destinationId: string,
@@ -173,11 +182,18 @@ function CombatLandmarkNode({
         {combatants.map((combatant) => (
           <span
             key={`${combatant.kind}:${combatant.source_id}`}
-            className={`combat-token combat-token--${combatant.kind}`}
+            className={[
+              'combat-token',
+              `combat-token--${combatant.kind}`,
+              combatant.is_current_turn ? 'combat-token--current' : '',
+            ].filter(Boolean).join(' ')}
           >
             {combatant.kind === 'character' ? <Users size={12} /> : <Skull size={12} />}
             {combatant.name}
-            {combatant.relation !== 'at' && <small>{combatant.relation}</small>}
+            {combatant.is_current_turn && <small>TURN</small>}
+            {!combatant.is_current_turn && combatant.relation !== 'at' && (
+              <small>{combatant.relation}</small>
+            )}
           </span>
         ))}
       </div>
@@ -244,12 +260,43 @@ function combatEdges(
   });
 }
 
+function CollapsibleCombatSection({
+  open,
+  onToggle,
+  title,
+  summary,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  title: ReactNode;
+  summary?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="combat-control-section">
+      <button
+        type="button"
+        className="combat-section-toggle"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className="combat-section-toggle__title">{title}</span>
+        {summary && <Badge variant="outline">{summary}</Badge>}
+        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+      </button>
+      {open && <div className="combat-section-body">{children}</div>}
+    </section>
+  );
+}
+
 function CombatantEditor({
   combatant,
   scene,
   busy,
   onMove,
   onRemoveEnemy,
+  onSetInitiative,
 }: {
   combatant: CombatantData;
   scene: CombatSceneData;
@@ -260,21 +307,37 @@ function CombatantEditor({
     relation: Relation,
   ) => Promise<boolean>;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
+  onSetInitiative: (
+    combatant: CombatantData,
+    initiativeScore: number,
+  ) => Promise<boolean>;
 }) {
   const [landmarkId, setLandmarkId] = useState(combatant.landmark_id);
   const [relation, setRelation] = useState<Relation>(combatant.relation);
+  const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
 
   useEffect(() => {
     setLandmarkId(combatant.landmark_id);
     setRelation(combatant.relation);
-  }, [combatant.landmark_id, combatant.relation]);
+    setInitiativeScore(combatant.initiative_score);
+  }, [
+    combatant.initiative_score,
+    combatant.landmark_id,
+    combatant.relation,
+  ]);
 
   return (
-    <div className="combatant-editor">
+    <div
+      className={[
+        'combatant-editor',
+        combatant.is_current_turn ? 'combatant-editor--current' : '',
+      ].filter(Boolean).join(' ')}
+    >
       <div className="combatant-editor__name">
         {combatant.kind === 'character' ? <Users size={15} /> : <Skull size={15} />}
         <span>{combatant.name}</span>
-        <Badge variant="outline">{combatant.kind}</Badge>
+        {combatant.is_current_turn && <Badge>Current turn</Badge>}
+        <Badge variant="outline">Init {combatant.initiative_score}</Badge>
       </div>
       <NativeSelect value={landmarkId} onChange={(event) => setLandmarkId(event.target.value)}>
         {scene.landmarks.map((landmark) => (
@@ -304,6 +367,29 @@ function CombatantEditor({
       >
         Move
       </Button>
+      <div className="combatant-editor__initiative">
+        <span>
+          Initiative
+          <small>d20 {combatant.initiative_roll}</small>
+        </span>
+        <Input
+          type="number"
+          value={initiativeScore}
+          onChange={(event) => setInitiativeScore(Number(event.target.value))}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={
+            busy
+            || !Number.isInteger(initiativeScore)
+            || initiativeScore === combatant.initiative_score
+          }
+          onClick={() => void onSetInitiative(combatant, initiativeScore)}
+        >
+          Set
+        </Button>
+      </div>
       {combatant.kind === 'enemy' && (
         <Button
           className="combatant-editor__remove"
@@ -332,6 +418,10 @@ export function CombatWorkspace({
   onMoveCombatant,
   onAddEnemy,
   onRemoveEnemy,
+  onNextTurn,
+  onPreviousTurn,
+  onJumpTurn,
+  onSetInitiative,
   onConnectLandmarks,
   onDeleteLandmark,
   onDeleteConnection,
@@ -349,6 +439,10 @@ export function CombatWorkspace({
   const [enemyTemplateId, setEnemyTemplateId] = useState('');
   const [enemyLandmarkId, setEnemyLandmarkId] = useState('room:center');
   const [enemyQuantity, setEnemyQuantity] = useState(1);
+  const [selectionOpen, setSelectionOpen] = useState(true);
+  const [connectionsOpen, setConnectionsOpen] = useState(true);
+  const [addEnemyOpen, setAddEnemyOpen] = useState(false);
+  const [combatantsOpen, setCombatantsOpen] = useState(true);
 
   useEffect(() => {
     if (scene) return;
@@ -412,6 +506,7 @@ export function CombatWorkspace({
 
   const selectRoute = useCallback((sourceId: string, destinationId: string) => {
     if (!scene) return;
+    setSelectionOpen(true);
     const key = routeKey(sourceId, destinationId);
     const route = scene.routes.find(
       (item) => routeKey(
@@ -430,6 +525,7 @@ export function CombatWorkspace({
   }, [scene]);
 
   const selectLandmark = useCallback((landmarkId: string) => {
+    setSelectionOpen(true);
     setSelectedRouteId(null);
     setSelectedLandmarkId(landmarkId);
   }, []);
@@ -548,6 +644,19 @@ export function CombatWorkspace({
       (landmark) => landmark.id === selectedRoute.destination_landmark_id,
     )
     : null;
+  const orderedCombatants = scene.combatants;
+  const currentInitiativeIndex = orderedCombatants.findIndex(
+    (combatant) => combatant.is_current_turn,
+  );
+  const currentCombatant = currentInitiativeIndex >= 0
+    ? orderedCombatants[currentInitiativeIndex]
+    : null;
+  const upcomingCombatants = currentInitiativeIndex >= 0
+    ? [
+      ...orderedCombatants.slice(currentInitiativeIndex),
+      ...orderedCombatants.slice(0, currentInitiativeIndex),
+    ]
+    : orderedCombatants;
 
   return (
     <section className="combat-workspace">
@@ -561,6 +670,68 @@ export function CombatWorkspace({
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void onRefresh()}>
             <RefreshCw /> Refresh
           </Button>
+        </div>
+        <div className="combat-initiative">
+          <div className="combat-initiative__heading">
+            <div>
+              <span className="combat-initiative__round">
+                Round {scene.round_number}
+              </span>
+              <strong>
+                {currentCombatant
+                  ? `${currentCombatant.name}'s turn`
+                  : 'No current turn'}
+              </strong>
+            </div>
+            <div className="combat-initiative__controls">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || !scene.combatants.length}
+                onClick={() => void onPreviousTurn()}
+              >
+                Previous
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy || !scene.combatants.length}
+                onClick={() => void onNextTurn()}
+              >
+                Next turn
+              </Button>
+            </div>
+          </div>
+          <div className="combat-initiative__track">
+            {upcomingCombatants.map((combatant, index) => (
+              <button
+                type="button"
+                key={`${combatant.kind}:${combatant.source_id}`}
+                className={[
+                  'combat-initiative__entry',
+                  combatant.is_current_turn
+                    ? 'combat-initiative__entry--current'
+                    : '',
+                ].filter(Boolean).join(' ')}
+                disabled={busy}
+                onClick={() => void onJumpTurn(combatant)}
+              >
+                <small>
+                  {combatant.is_current_turn
+                    ? 'NOW'
+                    : index === 1
+                      ? 'NEXT'
+                      : `+${index}`}
+                </small>
+                <span>{combatant.name}</span>
+                <strong>{combatant.initiative_score}</strong>
+              </button>
+            ))}
+            {!upcomingCombatants.length && (
+              <span className="combat-initiative__empty">
+                Add a combatant to begin initiative.
+              </span>
+            )}
+          </div>
         </div>
         <div className="combat-board">
           <ReactFlow
@@ -609,122 +780,142 @@ export function CombatWorkspace({
           <Badge>Active</Badge>
         </div>
 
-        {selectedLandmark ? (
-          <section className="combat-control-section combat-selection-section">
-            <div className="combat-selection-title">
-              <h3><Flag size={15} /> Selected landmark</h3>
-              <Badge variant="outline">
-                {selectedLandmark.synthetic
-                  ? 'Anchor'
-                  : selectedLandmark.source_connection_id
-                    ? 'Door'
-                    : selectedLandmark.source_feature_id
-                      ? selectedLandmark.feature_type || 'Room feature'
-                      : 'Custom'}
-              </Badge>
+        <CollapsibleCombatSection
+          open={selectionOpen}
+          onToggle={() => setSelectionOpen((open) => !open)}
+          title={
+            selectedLandmark
+              ? <><Flag size={15} /> Selected landmark</>
+              : selectedRoute
+                ? <><Route size={15} /> Selected connection</>
+                : <><Flag size={15} /> Selection</>
+          }
+          summary={
+            selectedLandmark?.name
+            || (
+              selectedRoute
+                ? `${selectedRouteSource?.name || 'Route'} ↔ ${selectedRouteDestination?.name || 'Route'}`
+                : 'None'
+            )
+          }
+        >
+          {selectedLandmark ? (
+            <div className="combat-selection-section">
+              <div className="combat-selection-title">
+                <strong className="combat-selection-name">{selectedLandmark.name}</strong>
+                <Badge variant="outline">
+                  {selectedLandmark.synthetic
+                    ? 'Anchor'
+                    : selectedLandmark.source_connection_id
+                      ? 'Door'
+                      : selectedLandmark.source_feature_id
+                        ? selectedLandmark.feature_type || 'Room feature'
+                        : 'Custom'}
+                </Badge>
+              </div>
+              <p className="combat-selection-description">
+                {selectedLandmark.description || 'No description.'}
+              </p>
+              {selectedLandmark.source_connection_id && (
+                <p className="combat-selection-meta">Linked to the room exit.</p>
+              )}
+              {selectedLandmark.source_feature_id && (
+                <p className="combat-selection-meta">Snapshot of a room feature.</p>
+              )}
+              {selectedLandmark.feature_type === 'custom' && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void onDeleteLandmark(selectedLandmark.id).then(
+                    (removed) => {
+                      if (removed) setSelectedLandmarkId(null);
+                    },
+                  )}
+                >
+                  <Trash2 /> Remove landmark
+                </Button>
+              )}
             </div>
-            <strong className="combat-selection-name">{selectedLandmark.name}</strong>
-            <p className="combat-selection-description">
-              {selectedLandmark.description || 'No description.'}
-            </p>
-            {selectedLandmark.source_connection_id && (
-              <p className="combat-selection-meta">Linked to the room exit.</p>
-            )}
-            {selectedLandmark.source_feature_id && (
-              <p className="combat-selection-meta">Snapshot of a room feature.</p>
-            )}
-            {selectedLandmark.feature_type === 'custom' && (
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={busy}
-                onClick={() => void onDeleteLandmark(selectedLandmark.id).then(
-                  (removed) => {
-                    if (removed) setSelectedLandmarkId(null);
-                  },
-                )}
+          ) : selectedRoute ? (
+            <div className="combat-selection-section">
+              <div className="combat-route-card">
+                <strong>
+                  {selectedRouteSource?.name || selectedRoute.source_landmark_id}
+                </strong>
+                <span>↔</span>
+                <strong>
+                  {selectedRouteDestination?.name || selectedRoute.destination_landmark_id}
+                </strong>
+              </div>
+              <label htmlFor="combat-route-distance">Distance</label>
+              <NativeSelect
+                id="combat-route-distance"
+                value={routeDistance}
+                onChange={(event) => setRouteDistance(event.target.value as Distance)}
               >
-                <Trash2 /> Remove landmark
-              </Button>
-            )}
-          </section>
-        ) : selectedRoute ? (
-          <section className="combat-control-section combat-selection-section">
-            <h3><Route size={15} /> Selected connection</h3>
-            <div className="combat-route-card">
-              <strong>
-                {selectedRouteSource?.name || selectedRoute.source_landmark_id}
-              </strong>
-              <span>↔</span>
-              <strong>
-                {selectedRouteDestination?.name || selectedRoute.destination_landmark_id}
-              </strong>
-            </div>
-            <label htmlFor="combat-route-distance">Distance</label>
-            <NativeSelect
-              id="combat-route-distance"
-              value={routeDistance}
-              onChange={(event) => setRouteDistance(event.target.value as Distance)}
-            >
-              <NativeSelectOption value="close">Close</NativeSelectOption>
-              <NativeSelectOption value="far">Far</NativeSelectOption>
-              <NativeSelectOption value="distant">Distant</NativeSelectOption>
-            </NativeSelect>
-            <label htmlFor="combat-route-obstacle">Obstacle or risk</label>
-            <Input
-              id="combat-route-obstacle"
-              placeholder="Rubble, fire, open ground…"
-              value={routeObstacle}
-              onChange={(event) => setRouteObstacle(event.target.value)}
-            />
-            <label className="combat-checkbox">
-              <input
-                type="checkbox"
-                checked={routeBlocked}
-                onChange={(event) => setRouteBlocked(event.target.checked)}
+                <NativeSelectOption value="close">Close</NativeSelectOption>
+                <NativeSelectOption value="far">Far</NativeSelectOption>
+                <NativeSelectOption value="distant">Distant</NativeSelectOption>
+              </NativeSelect>
+              <label htmlFor="combat-route-obstacle">Obstacle or risk</label>
+              <Input
+                id="combat-route-obstacle"
+                placeholder="Rubble, fire, open ground…"
+                value={routeObstacle}
+                onChange={(event) => setRouteObstacle(event.target.value)}
               />
-              Connection is blocked
-            </label>
-            <div className="combat-connection-actions">
-              <Button
-                size="sm"
-                disabled={!canSaveRoute || busy}
-                onClick={() => void onConnectLandmarks(
-                  routeSource,
-                  routeDestination,
-                  routeDistance,
-                  routeObstacle,
-                  routeBlocked,
-                )}
-              >
-                Save connection
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={busy}
-                onClick={() => void onDeleteConnection(
-                  selectedRoute.source_landmark_id,
-                  selectedRoute.destination_landmark_id,
-                ).then((removed) => {
-                  if (removed) setSelectedRouteId(null);
-                })}
-              >
-                <Trash2 /> Remove
-              </Button>
+              <label className="combat-checkbox">
+                <input
+                  type="checkbox"
+                  checked={routeBlocked}
+                  onChange={(event) => setRouteBlocked(event.target.checked)}
+                />
+                Connection is blocked
+              </label>
+              <div className="combat-connection-actions">
+                <Button
+                  size="sm"
+                  disabled={!canSaveRoute || busy}
+                  onClick={() => void onConnectLandmarks(
+                    routeSource,
+                    routeDestination,
+                    routeDistance,
+                    routeObstacle,
+                    routeBlocked,
+                  )}
+                >
+                  Save connection
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void onDeleteConnection(
+                    selectedRoute.source_landmark_id,
+                    selectedRoute.destination_landmark_id,
+                  ).then((removed) => {
+                    if (removed) setSelectedRouteId(null);
+                  })}
+                >
+                  <Trash2 /> Remove
+                </Button>
+              </div>
             </div>
-          </section>
-        ) : (
-          <section className="combat-control-section combat-selection-section">
+          ) : (
             <p className="combat-selection-description">
               Select a landmark or connection to inspect it. Drag between landmark
               handles to create a new close connection.
             </p>
-          </section>
-        )}
+          )}
+        </CollapsibleCombatSection>
 
-        <section className="combat-control-section">
-          <h3><Route size={15} /> Connections</h3>
+        <CollapsibleCombatSection
+          open={connectionsOpen}
+          onToggle={() => setConnectionsOpen((open) => !open)}
+          title={<><Route size={15} /> Connections</>}
+          summary={String(scene.routes.length)}
+        >
           <div className="combat-route-list">
             {scene.routes.map((route) => {
               const source = scene.landmarks.find(
@@ -760,10 +951,13 @@ export function CombatWorkspace({
               <p className="muted-row">No landmark connections yet.</p>
             )}
           </div>
-        </section>
+        </CollapsibleCombatSection>
 
-        <section className="combat-control-section">
-          <h3><Skull size={15} /> Add enemy</h3>
+        <CollapsibleCombatSection
+          open={addEnemyOpen}
+          onToggle={() => setAddEnemyOpen((open) => !open)}
+          title={<><Skull size={15} /> Add enemy</>}
+        >
           <div className="combat-enemy-adder">
             <label>
               Enemy type
@@ -830,10 +1024,14 @@ export function CombatWorkspace({
               </p>
             )}
           </div>
-        </section>
+        </CollapsibleCombatSection>
 
-        <section className="combat-control-section">
-          <h3><Shield size={15} /> Combatants</h3>
+        <CollapsibleCombatSection
+          open={combatantsOpen}
+          onToggle={() => setCombatantsOpen((open) => !open)}
+          title={<><Shield size={15} /> Combatants</>}
+          summary={String(scene.combatants.length)}
+        >
           <div className="combatant-editor-list">
             {scene.combatants.map((combatant) => (
               <CombatantEditor
@@ -843,11 +1041,14 @@ export function CombatWorkspace({
                 busy={busy}
                 onMove={onMoveCombatant}
                 onRemoveEnemy={onRemoveEnemy}
+                onSetInitiative={onSetInitiative}
               />
             ))}
-            {!scene.combatants.length && <p className="muted-row">No combatants are in this scene.</p>}
+            {!scene.combatants.length && (
+              <p className="muted-row">No combatants are in this scene.</p>
+            )}
           </div>
-        </section>
+        </CollapsibleCombatSection>
 
         <Button
           className="combat-end"

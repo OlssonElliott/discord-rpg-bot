@@ -299,6 +299,61 @@ class DashboardAPITests(unittest.TestCase):
             self.world.get_enemy(goblins[0]["source_id"])
         )
 
+        remaining_goblin = goblins[1]
+        initiative_status, initiative_state = self.api.handle(
+            "PATCH",
+            f"/api/combat/initiative/enemy/{remaining_goblin['source_id']}",
+            {"initiative_score": 30},
+        )
+        self.assertEqual(initiative_status, 200)
+        edited_goblin = next(
+            combatant
+            for combatant in initiative_state["scene"]["combatants"]
+            if combatant["source_id"] == remaining_goblin["source_id"]
+        )
+        self.assertEqual(edited_goblin["initiative_score"], 30)
+
+        jump_status, jumped = self.api.handle(
+            "PUT",
+            "/api/combat/turn",
+            {
+                "kind": "enemy",
+                "source_id": remaining_goblin["source_id"],
+            },
+        )
+        self.assertEqual(jump_status, 200)
+        self.assertEqual(
+            jumped["scene"]["current_turn_source_id"],
+            remaining_goblin["source_id"],
+        )
+        self.assertTrue(
+            next(
+                combatant
+                for combatant in jumped["scene"]["combatants"]
+                if combatant["source_id"] == remaining_goblin["source_id"]
+            )["is_current_turn"]
+        )
+
+        next_status, advanced = self.api.handle(
+            "POST",
+            "/api/combat/turn/next",
+        )
+        self.assertEqual(next_status, 200)
+        self.assertNotEqual(
+            advanced["scene"]["current_turn_source_id"],
+            remaining_goblin["source_id"],
+        )
+
+        previous_status, restored = self.api.handle(
+            "POST",
+            "/api/combat/turn/previous",
+        )
+        self.assertEqual(previous_status, 200)
+        self.assertEqual(
+            restored["scene"]["current_turn_source_id"],
+            remaining_goblin["source_id"],
+        )
+
         status, ended = self.api.handle("DELETE", "/api/combat")
         self.assertEqual(status, 200)
         self.assertIsNone(ended["scene"])

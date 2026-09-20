@@ -122,6 +122,9 @@ export type CombatantData = {
   name: string;
   landmark_id: string;
   relation: 'at' | 'beside' | 'behind' | 'on' | 'inside';
+  initiative_roll: number;
+  initiative_score: number;
+  is_current_turn: boolean;
 };
 
 export type CombatSceneData = {
@@ -131,6 +134,9 @@ export type CombatSceneData = {
   room_name: string;
   area_id: string | null;
   status: 'active' | 'ended';
+  round_number: number;
+  current_turn_kind: 'character' | 'enemy' | null;
+  current_turn_source_id: string | null;
   landmarks: CombatLandmarkData[];
   routes: CombatRouteData[];
   combatants: CombatantData[];

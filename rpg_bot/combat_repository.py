@@ -39,6 +39,12 @@ class CombatRepository:
                 status TEXT NOT NULL CHECK (status IN ('active', 'ended')),
                 created_at TEXT NOT NULL,
                 ended_at TEXT,
+                round_number INTEGER NOT NULL DEFAULT 1 CHECK (round_number >= 1),
+                current_turn_kind TEXT CHECK (
+                    current_turn_kind IS NULL
+                    OR current_turn_kind IN ('character', 'enemy')
+                ),
+                current_turn_source_id TEXT,
                 FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
             );
 
@@ -85,6 +91,8 @@ class CombatRepository:
                 relation TEXT NOT NULL CHECK (
                     relation IN ('at', 'beside', 'behind', 'on', 'inside')
                 ),
+                initiative_roll INTEGER NOT NULL DEFAULT 0,
+                initiative_score INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (scene_id, kind, source_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, landmark_id)
@@ -99,6 +107,36 @@ class CombatRepository:
         if "source_connection_id" not in landmark_columns:
             connection.execute(
                 "ALTER TABLE combat_landmarks ADD COLUMN source_connection_id TEXT"
+            )
+
+        scene_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(combat_scenes)")
+        }
+        if "round_number" not in scene_columns:
+            connection.execute(
+                "ALTER TABLE combat_scenes ADD COLUMN round_number INTEGER NOT NULL DEFAULT 1"
+            )
+        if "current_turn_kind" not in scene_columns:
+            connection.execute(
+                "ALTER TABLE combat_scenes ADD COLUMN current_turn_kind TEXT"
+            )
+        if "current_turn_source_id" not in scene_columns:
+            connection.execute(
+                "ALTER TABLE combat_scenes ADD COLUMN current_turn_source_id TEXT"
+            )
+
+        combatant_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(combatants)")
+        }
+        if "initiative_roll" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN initiative_roll INTEGER NOT NULL DEFAULT 0"
+            )
+        if "initiative_score" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN initiative_score INTEGER NOT NULL DEFAULT 0"
             )
 
     def start_scene(
@@ -173,8 +211,9 @@ class CombatRepository:
             connection.executemany(
                 """
                 INSERT INTO combatants (
-                    scene_id, kind, source_id, name, landmark_id, relation
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    scene_id, kind, source_id, name, landmark_id, relation,
+                    initiative_roll, initiative_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -184,14 +223,31 @@ class CombatRepository:
                         combatant.name,
                         combatant.landmark_id,
                         combatant.relation.value,
+                        combatant.initiative_roll,
+                        combatant.initiative_score,
                     )
                     for combatant in combatants
                 ],
             )
 
+            if combatants:
+                first = min(
+                    combatants,
+                    key=lambda combatant: combatant.initiative_key,
+                )
+                connection.execute(
+                    """
+                    UPDATE combat_scenes
+                    SET current_turn_kind = ?, current_turn_source_id = ?
+                    WHERE id = ?
+                    """,
+                    (first.kind.value, first.source_id, scene_id),
+                )
+
             row = connection.execute(
                 """
-                SELECT id, guild_id, room_id, status
+                SELECT id, guild_id, room_id, status, round_number,
+                       current_turn_kind, current_turn_source_id
                 FROM combat_scenes WHERE id = ?
                 """,
                 (scene_id,),
@@ -204,7 +260,8 @@ class CombatRepository:
             self._ensure_schema(connection)
             row = connection.execute(
                 """
-                SELECT id, guild_id, room_id, status
+                SELECT id, guild_id, room_id, status, round_number,
+                       current_turn_kind, current_turn_source_id
                 FROM combat_scenes
                 WHERE guild_id = ? AND status = 'active'
                 """,
@@ -238,8 +295,9 @@ class CombatRepository:
                 connection.execute(
                     """
                     INSERT INTO combatants (
-                        scene_id, kind, source_id, name, landmark_id, relation
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        scene_id, kind, source_id, name, landmark_id, relation,
+                        initiative_roll, initiative_score
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -248,6 +306,8 @@ class CombatRepository:
                         combatant.name,
                         combatant.landmark_id,
                         combatant.relation.value,
+                        combatant.initiative_roll,
+                        combatant.initiative_score,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -276,12 +336,80 @@ class CombatRepository:
                     f"Unknown combatant '{kind.value}:{source_id}'."
                 )
 
+    def set_turn(
+        self,
+        scene_id: int,
+        round_number: int,
+        kind: CombatantKind | None,
+        source_id: str | None,
+    ) -> None:
+        if round_number < 1:
+            raise ValueError("Combat round must be at least 1.")
+        if (kind is None) != (source_id is None):
+            raise ValueError(
+                "Combat turn kind and source ID must both be set or both be empty."
+            )
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if kind is not None and source_id is not None:
+                if connection.execute(
+                    """
+                    SELECT 1 FROM combatants
+                    WHERE scene_id = ? AND kind = ? AND source_id = ?
+                    """,
+                    (scene_id, kind.value, source_id),
+                ).fetchone() is None:
+                    raise ValueError(
+                        f"Unknown combatant '{kind.value}:{source_id}'."
+                    )
+            cursor = connection.execute(
+                """
+                UPDATE combat_scenes
+                SET round_number = ?,
+                    current_turn_kind = ?,
+                    current_turn_source_id = ?
+                WHERE id = ? AND status = 'active'
+                """,
+                (
+                    round_number,
+                    kind.value if kind is not None else None,
+                    source_id,
+                    scene_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("The combat scene is not active.")
+
+    def set_initiative(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        initiative_score: int,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET initiative_score = ?
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (initiative_score, scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
     def end_scene(self, guild_id: int) -> CombatScene | None:
         with self._connect() as connection:
             self._ensure_schema(connection)
             row = connection.execute(
                 """
-                SELECT id, guild_id, room_id, status
+                SELECT id, guild_id, room_id, status, round_number,
+                       current_turn_kind, current_turn_source_id
                 FROM combat_scenes
                 WHERE guild_id = ? AND status = 'active'
                 """,
@@ -300,7 +428,8 @@ class CombatRepository:
             )
             ended = connection.execute(
                 """
-                SELECT id, guild_id, room_id, status
+                SELECT id, guild_id, room_id, status, round_number,
+                       current_turn_kind, current_turn_source_id
                 FROM combat_scenes WHERE id = ?
                 """,
                 (scene_id,),
@@ -521,10 +650,12 @@ class CombatRepository:
         ).fetchall()
         combatant_rows = connection.execute(
             """
-            SELECT kind, source_id, name, landmark_id, relation
+            SELECT kind, source_id, name, landmark_id, relation,
+                   initiative_roll, initiative_score
             FROM combatants
             WHERE scene_id = ?
-            ORDER BY kind, name COLLATE NOCASE, source_id
+            ORDER BY initiative_score DESC, initiative_roll DESC,
+                     kind, name COLLATE NOCASE, source_id
             """,
             (scene_id,),
         ).fetchall()
@@ -564,9 +695,18 @@ class CombatRepository:
                     item["name"],
                     item["landmark_id"],
                     LandmarkRelation(item["relation"]),
+                    item["initiative_roll"],
+                    item["initiative_score"],
                 )
                 for item in combatant_rows
             ),
+            int(row["round_number"]),
+            (
+                CombatantKind(row["current_turn_kind"])
+                if row["current_turn_kind"] is not None
+                else None
+            ),
+            row["current_turn_source_id"],
         )
 
     @contextmanager

@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import math
+import random
 import re
 from uuid import uuid4
 
@@ -153,25 +154,40 @@ class CombatService:
             positioned_landmarks.append(landmark)
         landmarks = positioned_landmarks
 
-        combatants = [
-            CombatantState(
-                CombatantKind.CHARACTER,
-                str(character.character_id),
-                character.name,
-                self.CENTER_LANDMARK_ID,
+        combatants: list[CombatantState] = []
+        for character in room.characters:
+            if character.character_id is None:
+                continue
+            initiative_roll, initiative_score = self._roll_initiative(
+                self._character_insight_modifier(character.character_id)
             )
-            for character in room.characters
-            if character.character_id is not None
-        ]
-        combatants.extend(
-            CombatantState(
-                CombatantKind.ENEMY,
-                enemy.id,
-                enemy.name,
-                self.CENTER_LANDMARK_ID,
+            combatants.append(
+                CombatantState(
+                    CombatantKind.CHARACTER,
+                    str(character.character_id),
+                    character.name,
+                    self.CENTER_LANDMARK_ID,
+                    LandmarkRelation.AT,
+                    initiative_roll,
+                    initiative_score,
+                )
             )
-            for enemy in room.enemies
-        )
+
+        for enemy in room.enemies:
+            initiative_roll, initiative_score = self._roll_initiative(
+                self._enemy_insight_modifier(enemy.id)
+            )
+            combatants.append(
+                CombatantState(
+                    CombatantKind.ENEMY,
+                    enemy.id,
+                    enemy.name,
+                    self.CENTER_LANDMARK_ID,
+                    LandmarkRelation.AT,
+                    initiative_roll,
+                    initiative_score,
+                )
+            )
 
         try:
             scene = self.repository.start_scene(
@@ -266,6 +282,49 @@ class CombatService:
             ),
         )
 
+    @staticmethod
+    def _roll_initiative(insight_modifier: int) -> tuple[int, int]:
+        roll = random.randint(1, 20)
+        return roll, roll + insight_modifier
+
+    def _character_insight_modifier(self, character_id: int) -> int:
+        insight = self.database.get_character_attribute(character_id, "insight")
+        return (insight - 10) // 2
+
+    def _enemy_insight_modifier(self, enemy_id: str) -> int:
+        enemy = self.world.get_enemy(enemy_id)
+        if enemy is None:
+            return 0
+        template = self.world.get_enemy_template(enemy.template_id)
+        return template.insight if template is not None else 0
+
+    @staticmethod
+    def _turn_index(scene: CombatScene) -> int | None:
+        ordered = scene.initiative_order()
+        for index, combatant in enumerate(ordered):
+            if (
+                combatant.kind is scene.current_turn_kind
+                and combatant.source_id == scene.current_turn_source_id
+            ):
+                return index
+        return None
+
+    def _ensure_turn(self, guild_id: int) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if scene.current_combatant() is not None or not scene.combatants:
+            return scene
+        first = scene.initiative_order()[0]
+        try:
+            self.repository.set_turn(
+                scene.id,
+                scene.round_number,
+                first.kind,
+                first.source_id,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
     def current(self, guild_id: int) -> CombatScene | None:
         return self.repository.get_active_scene(guild_id)
 
@@ -308,6 +367,9 @@ class CombatService:
                 scene.room_id,
                 template.template_id,
             )
+            initiative_roll, initiative_score = self._roll_initiative(
+                template.insight
+            )
             try:
                 self.repository.add_combatant(
                     scene.id,
@@ -317,13 +379,15 @@ class CombatService:
                         enemy.name,
                         destination_id,
                         LandmarkRelation.AT,
+                        initiative_roll,
+                        initiative_score,
                     ),
                 )
             except ValueError as error:
                 self.world.remove_entity(enemy.id)
                 raise CombatError(str(error)) from error
 
-        return self._require_current(guild_id)
+        return self._ensure_turn(guild_id)
 
     def remove_enemy(
         self,
@@ -331,19 +395,147 @@ class CombatService:
         enemy_id: str,
     ) -> CombatScene:
         scene = self._require_current(guild_id)
-        if not any(
-            combatant.kind is CombatantKind.ENEMY
-            and combatant.source_id == enemy_id
-            for combatant in scene.combatants
-        ):
+        ordered = scene.initiative_order()
+        target_index = next(
+            (
+                index
+                for index, combatant in enumerate(ordered)
+                if combatant.kind is CombatantKind.ENEMY
+                and combatant.source_id == enemy_id
+            ),
+            None,
+        )
+        if target_index is None:
             raise CombatError(
                 f"Enemy '{enemy_id}' is not in the active combat scene."
             )
+
+        removing_current = (
+            scene.current_turn_kind is CombatantKind.ENEMY
+            and scene.current_turn_source_id == enemy_id
+        )
+        next_combatant = None
+        next_round = scene.round_number
+        if removing_current and len(ordered) > 1:
+            next_index = (target_index + 1) % len(ordered)
+            next_combatant = ordered[next_index]
+            if next_index == 0:
+                next_round += 1
+
         try:
             self.repository.remove_combatant(
                 scene.id,
                 CombatantKind.ENEMY,
                 enemy_id,
+            )
+            if removing_current:
+                self.repository.set_turn(
+                    scene.id,
+                    next_round,
+                    next_combatant.kind if next_combatant is not None else None,
+                    next_combatant.source_id if next_combatant is not None else None,
+                )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._ensure_turn(guild_id)
+
+    def next_turn(self, guild_id: int) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if not scene.combatants:
+            return scene
+        if scene.current_combatant() is None:
+            return self._ensure_turn(guild_id)
+
+        ordered = scene.initiative_order()
+        current_index = self._turn_index(scene)
+        assert current_index is not None
+        next_index = (current_index + 1) % len(ordered)
+        target = ordered[next_index]
+        next_round = scene.round_number + (1 if next_index == 0 else 0)
+        try:
+            self.repository.set_turn(
+                scene.id,
+                next_round,
+                target.kind,
+                target.source_id,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def previous_turn(self, guild_id: int) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if not scene.combatants:
+            return scene
+        if scene.current_combatant() is None:
+            return self._ensure_turn(guild_id)
+
+        ordered = scene.initiative_order()
+        current_index = self._turn_index(scene)
+        assert current_index is not None
+        previous_index = (current_index - 1) % len(ordered)
+        target = ordered[previous_index]
+        previous_round = scene.round_number
+        if current_index == 0 and scene.round_number > 1:
+            previous_round -= 1
+        try:
+            self.repository.set_turn(
+                scene.id,
+                previous_round,
+                target.kind,
+                target.source_id,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def jump_turn(
+        self,
+        guild_id: int,
+        kind: CombatantKind | str,
+        source_id: str,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        try:
+            parsed_kind = (
+                kind
+                if isinstance(kind, CombatantKind)
+                else CombatantKind(kind)
+            )
+            self.repository.set_turn(
+                scene.id,
+                scene.round_number,
+                parsed_kind,
+                source_id,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def set_initiative(
+        self,
+        guild_id: int,
+        kind: CombatantKind | str,
+        source_id: str,
+        initiative_score: int,
+    ) -> CombatScene:
+        if (
+            isinstance(initiative_score, bool)
+            or not isinstance(initiative_score, int)
+        ):
+            raise CombatError("Initiative must be a whole number.")
+        scene = self._require_current(guild_id)
+        try:
+            parsed_kind = (
+                kind
+                if isinstance(kind, CombatantKind)
+                else CombatantKind(kind)
+            )
+            self.repository.set_initiative(
+                scene.id,
+                parsed_kind,
+                source_id,
+                initiative_score,
             )
         except ValueError as error:
             raise CombatError(str(error)) from error

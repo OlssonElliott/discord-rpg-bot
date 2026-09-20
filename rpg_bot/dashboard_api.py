@@ -174,6 +174,13 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
         "room_name": room.name if room is not None else scene.room_id,
         "area_id": room.area_id if room is not None else None,
         "status": scene.status.value,
+        "round_number": scene.round_number,
+        "current_turn_kind": (
+            scene.current_turn_kind.value
+            if scene.current_turn_kind is not None
+            else None
+        ),
+        "current_turn_source_id": scene.current_turn_source_id,
         "landmarks": [
             {
                 "id": landmark.id,
@@ -205,6 +212,12 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "name": combatant.name,
                 "landmark_id": combatant.landmark_id,
                 "relation": combatant.relation.value,
+                "initiative_roll": combatant.initiative_roll,
+                "initiative_score": combatant.initiative_score,
+                "is_current_turn": (
+                    combatant.kind is scene.current_turn_kind
+                    and combatant.source_id == scene.current_turn_source_id
+                ),
             }
             for combatant in scene.combatants
         ],
@@ -431,6 +444,36 @@ class DashboardAPI:
                 quantity=self._integer(body, "quantity", default=1),
             )
             return 201, _combat_state_data(scene, self.world)
+
+        if path == "/api/combat/turn/next" and method == "POST":
+            scene = self.combat.next_turn(self._combat_guild_id())
+            return 200, _combat_state_data(scene, self.world)
+        if path == "/api/combat/turn/previous" and method == "POST":
+            scene = self.combat.previous_turn(self._combat_guild_id())
+            return 200, _combat_state_data(scene, self.world)
+        if path == "/api/combat/turn" and method == "PUT":
+            scene = self.combat.jump_turn(
+                self._combat_guild_id(),
+                self._text(body, "kind"),
+                self._text(body, "source_id"),
+            )
+            return 200, _combat_state_data(scene, self.world)
+
+        initiative_match = re.fullmatch(
+            r"/api/combat/initiative/(character|enemy)/([^/]+)",
+            path,
+        )
+        if initiative_match and method == "PATCH":
+            kind, source_id = initiative_match.groups()
+            if "initiative_score" not in body:
+                raise ValueError("'initiative_score' is required.")
+            scene = self.combat.set_initiative(
+                self._combat_guild_id(),
+                kind,
+                source_id,
+                self._integer(body, "initiative_score", default=0),
+            )
+            return 200, _combat_state_data(scene, self.world)
 
         match = re.fullmatch(
             r"/api/combat/combatants/(character|enemy)/([^/]+)",
