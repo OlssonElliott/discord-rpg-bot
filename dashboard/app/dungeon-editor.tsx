@@ -24,6 +24,7 @@ import {
   CircleAlert,
   ImageIcon,
   Map,
+  PanelRightOpen,
   Plus,
   Save,
   Skull,
@@ -32,6 +33,7 @@ import {
   Trash2,
   Upload,
   Users,
+  X,
 } from 'lucide-react';
 import {
   AlertDialog,
@@ -285,6 +287,7 @@ export function DungeonEditor() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -938,7 +941,12 @@ export function DungeonEditor() {
           onError={setError}
         />
       ) : (
-        <section className="editor-body">
+        <section
+          className={[
+            'editor-body',
+            inspectorOpen ? '' : 'editor-body--inspector-closed',
+          ].filter(Boolean).join(' ')}
+        >
         <div className="graph-panel">
           {nodes.length ? (
             <ReactFlow
@@ -947,8 +955,16 @@ export function DungeonEditor() {
               nodeTypes={nodeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
-              onNodeClick={(_, node) => { setSelectedRoomId(node.id); setSelectedEdgeId(null); }}
-              onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedRoomId(null); }}
+              onNodeClick={(_, node) => {
+                setSelectedRoomId(node.id);
+                setSelectedEdgeId(null);
+                setInspectorOpen(true);
+              }}
+              onEdgeClick={(_, edge) => {
+                setSelectedEdgeId(edge.id);
+                setSelectedRoomId(null);
+                setInspectorOpen(true);
+              }}
               onNodeDragStop={savePosition}
               onConnect={onConnect}
               connectionMode={ConnectionMode.Loose}
@@ -970,9 +986,34 @@ export function DungeonEditor() {
             </div>
           )}
           <div className="canvas-hint">Drag to pan · Scroll to zoom · Drag a handle to connect</div>
+          {!inspectorOpen && (
+            <Button
+              className="inspector-reopen"
+              variant="outline"
+              size="sm"
+              onClick={() => setInspectorOpen(true)}
+              title="Open inspector"
+            >
+              <PanelRightOpen />
+              Inspector
+            </Button>
+          )}
         </div>
 
+        {inspectorOpen && (
         <aside className="inspector">
+          <div className="inspector__toolbar">
+            <span>Inspector</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setInspectorOpen(false)}
+              title="Close inspector"
+              aria-label="Close inspector"
+            >
+              <X />
+            </Button>
+          </div>
           {selectedRoom ? (
             <RoomInspector
               key={`${selectedRoom.id}:${selectedRoom.name}:${selectedRoom.description}:${selectedRoom.room_image_url || ''}`}
@@ -1066,6 +1107,7 @@ export function DungeonEditor() {
             <div className="inspector-empty"><p>Select a location or connection to edit it.</p></div>
           )}
         </aside>
+        )}
       </section>
       )}
 

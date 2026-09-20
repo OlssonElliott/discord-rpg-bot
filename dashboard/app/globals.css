@@ -75,9 +75,11 @@ button, input, textarea { font: inherit; }
 .header-status span { width: 7px; height: 7px; border-radius: 50%; background: #59b98a; box-shadow: 0 0 0 3px #173426; }
 .add-location { background: #d39a4a; color: #151009; }
 .editor-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; height: calc(100vh - 72px); }
+.editor-body--inspector-closed { grid-template-columns: minmax(0, 1fr); }
 .error-banner { position: fixed; top: 82px; left: 50%; z-index: 40; display: flex; align-items: center; gap: 8px; min-width: 320px; padding: 9px 12px; color: #ffd3d0; font-size: .8rem; border: 1px solid #7d3e42; border-radius: 8px; background: #351d24; box-shadow: 0 12px 30px #0008; transform: translateX(-50%); }
 .error-banner button { margin-left: auto; color: #ffc1bd; text-decoration: underline; }
 .graph-panel { position: relative; min-width: 0; background: radial-gradient(circle at 45% 35%, #142033 0, #0b1320 58%, #080e17 100%); }
+.inspector-reopen { position: absolute; top: 14px; right: 14px; z-index: 8; gap: 6px; background: #0f1724e8; box-shadow: 0 8px 22px #0007; }
 .canvas-hint { position: absolute; left: 18px; bottom: 18px; z-index: 5; padding: 7px 10px; color: #8593a6; font-size: .72rem; border: 1px solid #26344a; border-radius: 7px; background: #0d1522dd; }
 .room-node { width: 204px; padding: 14px 15px 13px; border: 1px solid #33445c; border-radius: 9px; background: linear-gradient(145deg, #172338, #101a29); box-shadow: 0 12px 30px #02060d80; }
 .room-node--selected { border-color: #d39a4a; box-shadow: 0 0 0 2px #d39a4a22, 0 15px 36px #02060daa; }
@@ -91,7 +93,10 @@ button, input, textarea { font: inherit; }
 .react-flow__controls, .react-flow__minimap { border: 1px solid #2c3a50; border-radius: 8px; overflow: hidden; background: #101927; }
 .react-flow__controls-button { color: #c8d0da; border-bottom-color: #2c3a50; background: #101927; }
 .react-flow__controls-button svg { fill: currentColor; }
-.inspector { overflow-y: auto; padding: 24px 22px 32px; border-left: 1px solid #26344a; background: #0f1724; }
+.inspector { overflow-y: auto; padding: 16px 22px 32px; border-left: 1px solid #26344a; background: #0f1724; }
+.inspector__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 14px; padding-bottom: 9px; color: #718096; font-size: .64rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; border-bottom: 1px solid #1e2b3e; }
+.inspector__toolbar button { color: #8e9bae; }
+.inspector__toolbar button:hover { color: #eef1f5; background: #182337; }
 .inspector__topline { display: flex; align-items: center; justify-content: space-between; color: #8290a3; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .inspector h2 { margin: 17px 0 1px; font-size: 1.45rem; letter-spacing: -.035em; }
 .room-id { margin: 0; color: #718096; font-family: var(--font-geist-mono), monospace; font-size: .75rem; }
@@ -128,8 +133,8 @@ button, input, textarea { font: inherit; }
 .content-summary .remove-content:hover { color: #df8580; background: rgba(223, 133, 128, .1); }
 .content-summary .remove-content svg { color: currentColor; }
 .inspector__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 24px; }
+.inspector__actions button { width: 100%; }
 .start-combat-location { width: 100%; margin-top: 16px; background: #6f2525; color: #fff1ed; }
-.inspector__actions button:last-child { grid-column: 1 / -1; }
 .delete-location { width: 100%; margin-top: 22px; color: #df8580; }
 
 .character-workspace { display: grid; grid-template-columns: 310px minmax(0, 1fr); height: calc(100vh - 72px); background: #0a101b; }
@@ -272,13 +277,14 @@ button, input, textarea { font: inherit; }
 .combat-control-section label { display: block; margin: 9px 0 5px; color: #8e9bae; font-size: .72rem; }
 .combat-control-section select, .combat-control-section input { background: #111b2a; }
 .combatant-editor-list { display: grid; gap: 9px; }
-.combatant-editor { display: grid; grid-template-columns: 1fr 110px; gap: 6px; padding: 9px; border: 1px solid #26344a; border-radius: 8px; background: #111927; }
+.combatant-editor { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) 110px; gap: 6px; padding: 9px; border: 1px solid #26344a; border-radius: 8px; background: #111927; }
 .combatant-editor--current { border-color: #b78540; background: #191b20; box-shadow: inset 3px 0 #d39a4a; }
 .combatant-editor--selected { outline: 1px solid #617590; outline-offset: 1px; }
-.combatant-editor__name { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: #dce2e9; font-size: .77rem; }
-.combatant-editor__name > .badge:first-of-type { margin-left: auto; }
-.combatant-editor__movement-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #c6a76d; font-size: .64rem; border: 1px solid #4c3e29; border-radius: 6px; background: #1b1711; }
-.combatant-editor__condition-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #d6a9a5; font-size: .64rem; border: 1px solid #5d3d42; border-radius: 6px; background: #211417; }
+.combatant-editor__name { grid-column: 1 / -1; display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px; color: #dce2e9; font-size: .77rem; }
+.combatant-editor__name > span { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combatant-editor__name > .badge { flex: 0 0 auto; white-space: nowrap; }
+.combatant-editor__movement-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #c6a76d; font-size: .64rem; line-height: 1.35; border: 1px solid #4c3e29; border-radius: 6px; background: #1b1711; }
+.combatant-editor__condition-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #d6a9a5; font-size: .64rem; line-height: 1.35; border: 1px solid #5d3d42; border-radius: 6px; background: #211417; }
 .combatant-editor button { grid-column: 2; }
 .combatant-editor__standard-action { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 8px; border: 1px solid #34445b; border-radius: 7px; background: #101a28; }
 .combatant-editor__standard-action > div { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 8px; color: #9facc0; font-size: .66rem; }

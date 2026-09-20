@@ -822,10 +822,10 @@ export function CombatWorkspace({
   const [enemyTemplateId, setEnemyTemplateId] = useState('');
   const [enemyLandmarkId, setEnemyLandmarkId] = useState('room:center');
   const [enemyQuantity, setEnemyQuantity] = useState(1);
-  const [selectionOpen, setSelectionOpen] = useState(true);
-  const [connectionsOpen, setConnectionsOpen] = useState(true);
+  const [selectionOpen, setSelectionOpen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [addEnemyOpen, setAddEnemyOpen] = useState(false);
-  const [combatantsOpen, setCombatantsOpen] = useState(true);
+  const [combatantsOpen, setCombatantsOpen] = useState(false);
   const [combatLogOpen, setCombatLogOpen] = useState(false);
   const [selectedCombatantKey, setSelectedCombatantKey] = useState<string | null>(null);
   const [inspectOpen, setInspectOpen] = useState(false);
