@@ -130,6 +130,31 @@ class AttackResult:
 
 
 @dataclass(frozen=True, slots=True)
+class EnemyAttackResult:
+    attacker_source_id: str
+    attacker_name: str
+    target_source_id: str
+    target_name: str
+    attack_profile: str
+    attack_dc: int
+    defense_method: str
+    defense_attribute: str
+    defense_roll: int
+    defense_modifier: int
+    defense_total: int
+    defended: bool
+    critical_defense: bool
+    damage_expression: str
+    damage_rolls: tuple[int, ...] = ()
+    raw_damage: int = 0
+    armor_reduction: int = 0
+    final_damage: int = 0
+    target_hp: int = 0
+    target_max_hp: int = 0
+    target_down: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class CombatLogEntry:
     id: int
     round_number: int

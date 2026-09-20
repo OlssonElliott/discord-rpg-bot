@@ -5163,6 +5163,40 @@ class Database:
             raise InvalidHitPointsError("Damage must be greater than 0.")
         return self._update_hp(discord_user_id, "MAX(0, hp - ?)", amount)
 
+    def damage_character_by_id(
+        self,
+        character_id: int,
+        amount: int,
+    ) -> Character:
+        if amount <= 0:
+            raise InvalidHitPointsError("Damage must be greater than 0.")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE characters
+                SET hp = MAX(0, hp - ?)
+                WHERE id = ? AND is_archived = 0
+                """,
+                (amount, character_id),
+            )
+            if cursor.rowcount == 0:
+                raise CharacterNotFoundError(
+                    f"Character {character_id} does not exist."
+                )
+            row = connection.execute(
+                """
+                SELECT id, discord_user_id, name, hp, max_hp, stance,
+                       lineage, race, age, gender,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       is_active, is_archived, portrait_key, current_room_id
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            assert row is not None
+            return self._to_character_with_skills(connection, row)
+
     def heal(self, discord_user_id: int, amount: int) -> Character:
         if amount <= 0:
             raise InvalidHitPointsError("Healing must be greater than 0.")

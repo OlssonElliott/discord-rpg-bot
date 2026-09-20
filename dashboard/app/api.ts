@@ -241,9 +241,34 @@ export type CombatAttackResultData = {
   target_defeated: boolean;
 };
 
+export type CombatEnemyAttackResultData = {
+  attacker_source_id: string;
+  attacker_name: string;
+  target_source_id: string;
+  target_name: string;
+  attack_profile: string;
+  attack_dc: number;
+  defense_method: string;
+  defense_attribute: string;
+  defense_roll: number;
+  defense_modifier: number;
+  defense_total: number;
+  defended: boolean;
+  critical_defense: boolean;
+  damage_expression: string;
+  damage_rolls: number[];
+  raw_damage: number;
+  armor_reduction: number;
+  final_damage: number;
+  target_hp: number;
+  target_max_hp: number;
+  target_down: boolean;
+};
+
 export type CombatStateData = {
   scene: CombatSceneData | null;
   attack_result?: CombatAttackResultData;
+  enemy_attack_result?: CombatEnemyAttackResultData;
 };
 
 export type ConnectionData = {

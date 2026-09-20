@@ -15,6 +15,7 @@ from .combat import (
     CombatantKind,
     CombatantState,
     DamageRoll,
+    EnemyAttackResult,
     LandmarkDistance,
     LandmarkRelation,
 )
@@ -399,6 +400,78 @@ class CombatService:
         }:
             return "dexterity"
         return "strength"
+
+    def _equipped_armor_stats(
+        self,
+        character_id: int,
+    ) -> tuple[int, int]:
+        inventory = self.database.get_character_inventory(character_id)
+        armor_id = inventory.equipment.get(EquipmentSlot.ARMOR)
+        if armor_id is None:
+            return 0, 0
+        try:
+            instance = inventory.item(armor_id)
+            template = self.world.catalog.get(instance.template_id)
+        except ValueError:
+            return 0, 0
+        if template.item_type is not ItemType.ARMOR:
+            return 0, 0
+        protection = (
+            instance.durability
+            if instance.durability is not None
+            else template.protection or 0
+        )
+        return max(0, protection), template.dodge_penalty
+
+    def _automatic_defense(
+        self,
+        character_id: int,
+    ) -> tuple[str, str, int]:
+        _, dodge_penalty = self._equipped_armor_stats(character_id)
+        strength = self.database.get_character_attribute(
+            character_id,
+            "strength",
+        )
+        dexterity = self.database.get_character_attribute(
+            character_id,
+            "dexterity",
+        )
+        arcana = self.database.get_character_attribute(
+            character_id,
+            "arcana",
+        )
+        options = (
+            ("guard", "strength", (strength - 10) // 2),
+            (
+                "dodge",
+                "dexterity",
+                (dexterity - 10) // 2 + dodge_penalty,
+            ),
+            ("arcane_defense", "arcana", (arcana - 10) // 2),
+        )
+        return max(options, key=lambda option: option[2])
+
+    @staticmethod
+    def _roll_damage_expression(
+        expression: str,
+    ) -> tuple[tuple[int, ...], int]:
+        match = re.fullmatch(
+            r"\s*(\d*)d(\d+)([+-]\d+)?\s*",
+            expression.casefold(),
+        )
+        if match is None:
+            raise CombatError(
+                f"Unsupported enemy damage expression '{expression}'."
+            )
+        count = int(match.group(1) or "1")
+        die = int(match.group(2))
+        bonus = int(match.group(3) or "0")
+        if count < 1 or die < 1:
+            raise CombatError(
+                f"Unsupported enemy damage expression '{expression}'."
+            )
+        rolls = tuple(random.randint(1, die) for _ in range(count))
+        return rolls, max(0, sum(rolls) + bonus)
 
     @staticmethod
     def _same_combat_position(
@@ -1461,6 +1534,196 @@ class CombatService:
                     scene.round_number,
                     "combatant_defeated",
                     f"{target.name} was defeated.",
+                    actor_kind=target.kind,
+                    actor_source_id=target.source_id,
+                    actor_name=target.name,
+                )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+
+        return self._require_current(guild_id), result
+
+    def attack_character(
+        self,
+        guild_id: int,
+        target_character_id: str,
+    ) -> tuple[CombatScene, EnemyAttackResult]:
+        scene = self._require_current(guild_id)
+        attacker = scene.current_combatant()
+        if attacker is None:
+            raise CombatError("There is no current combatant.")
+        if attacker.kind is not CombatantKind.ENEMY:
+            raise CombatError(
+                "Only an enemy can use this attack action."
+            )
+        if attacker.standard_action_spent:
+            raise CombatError(
+                f"{attacker.name} has already spent their Standard Action."
+            )
+
+        target = next(
+            (
+                combatant
+                for combatant in scene.combatants
+                if combatant.kind is CombatantKind.CHARACTER
+                and combatant.source_id == target_character_id
+            ),
+            None,
+        )
+        if target is None:
+            raise CombatError(
+                f"Character '{target_character_id}' is not in the active combat."
+            )
+        if not self._same_combat_position(attacker, target):
+            raise CombatError(
+                f"{target.name} is not within melee range of {attacker.name}."
+            )
+
+        enemy = self.world.get_enemy(attacker.source_id)
+        if enemy is None:
+            raise CombatError(
+                "This legacy enemy has no combat stats. "
+                "Use a structured enemy type for attacks."
+            )
+        if enemy.status is not EnemyStatus.ACTIVE or enemy.current_hp <= 0:
+            raise CombatError(f"{enemy.name} is no longer able to attack.")
+
+        template = self.world.get_enemy_template(enemy.template_id)
+        if template is None:
+            raise CombatError(
+                f"Enemy template '{enemy.template_id}' does not exist."
+            )
+
+        try:
+            character_id = int(target.source_id)
+        except ValueError as error:
+            raise CombatError(
+                f"Character combatant '{target.source_id}' is invalid."
+            ) from error
+
+        character = next(
+            (
+                candidate
+                for candidate in self.database.list_all_characters()
+                if candidate.character_id == character_id
+            ),
+            None,
+        )
+        if character is None:
+            raise CombatError(
+                f"Character {character_id} does not exist."
+            )
+        if character.hp <= 0:
+            raise CombatError(f"{character.name} is already down.")
+
+        (
+            defense_method,
+            defense_attribute,
+            defense_modifier,
+        ) = self._automatic_defense(character_id)
+
+        defense_roll = random.randint(1, 20)
+        defense_total = defense_roll + defense_modifier
+        critical_defense = defense_roll == 20
+        defended = critical_defense or (
+            defense_roll != 1
+            and defense_total >= template.attack_dc
+        )
+
+        damage_rolls: tuple[int, ...] = ()
+        raw_damage = 0
+        armor_reduction = 0
+        final_damage = 0
+        target_hp = character.hp
+
+        if not defended:
+            damage_rolls, raw_damage = self._roll_damage_expression(
+                template.damage
+            )
+            armor_reduction, _ = self._equipped_armor_stats(character_id)
+            if raw_damage > 0:
+                final_damage = max(
+                    1,
+                    raw_damage - armor_reduction,
+                )
+                updated_character = self.database.damage_character_by_id(
+                    character_id,
+                    final_damage,
+                )
+                target_hp = updated_character.hp
+
+        target_down = target_hp == 0
+
+        result = EnemyAttackResult(
+            attacker_source_id=attacker.source_id,
+            attacker_name=attacker.name,
+            target_source_id=target.source_id,
+            target_name=target.name,
+            attack_profile=template.attack_profile,
+            attack_dc=template.attack_dc,
+            defense_method=defense_method,
+            defense_attribute=defense_attribute,
+            defense_roll=defense_roll,
+            defense_modifier=defense_modifier,
+            defense_total=defense_total,
+            defended=defended,
+            critical_defense=critical_defense,
+            damage_expression=template.damage,
+            damage_rolls=damage_rolls,
+            raw_damage=raw_damage,
+            armor_reduction=armor_reduction,
+            final_damage=final_damage,
+            target_hp=target_hp,
+            target_max_hp=character.max_hp,
+            target_down=target_down,
+        )
+
+        try:
+            self.repository.set_standard_action_spent(
+                scene.id,
+                attacker.kind,
+                attacker.source_id,
+                True,
+            )
+
+            defense_label = defense_method.replace("_", " ")
+            if defended:
+                message = (
+                    f"{attacker.name} attacked {target.name} with "
+                    f"{template.attack_profile}. "
+                    f"{target.name} automatically used {defense_label}: "
+                    f"{defense_roll}{defense_modifier:+d} = "
+                    f"{defense_total} vs Attack DC {template.attack_dc}, "
+                    f"defended."
+                )
+            else:
+                message = (
+                    f"{attacker.name} attacked {target.name} with "
+                    f"{template.attack_profile}. "
+                    f"{target.name} automatically used {defense_label}: "
+                    f"{defense_roll}{defense_modifier:+d} = "
+                    f"{defense_total} vs Attack DC {template.attack_dc}, "
+                    f"failed. {final_damage} damage "
+                    f"({raw_damage} raw, {armor_reduction} armor reduction). "
+                    f"{target.name} has {target_hp}/{character.max_hp} HP."
+                )
+
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "enemy_attack_resolved",
+                message,
+                actor_kind=attacker.kind,
+                actor_source_id=attacker.source_id,
+                actor_name=attacker.name,
+            )
+
+            if target_down:
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "combatant_downed",
+                    f"{target.name} was reduced to 0 HP.",
                     actor_kind=target.kind,
                     actor_source_id=target.source_id,
                     actor_name=target.name,

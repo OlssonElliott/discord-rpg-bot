@@ -730,6 +730,136 @@ class CombatServiceTests(unittest.TestCase):
             )
         )
 
+    def test_enemy_attack_automatically_uses_best_defense(self) -> None:
+        defender = self.database.create_character(
+            19,
+            "Ari",
+            14,
+            attributes={
+                "Strength": 12,
+                "Dexterity": 18,
+                "Arcana": 14,
+                "Vitality": 10,
+                "Insight": 10,
+                "Personality": 10,
+            },
+        )
+        assert defender.character_id is not None
+        self.world.place_character(defender.character_id, self.hall.id)
+
+        armor = self.world.catalog.get("chainmail_armor")
+        armor_instance_id = self.database.add_inventory_item(
+            defender.character_id,
+            armor.template_id,
+            durability=armor.durability,
+        )
+        self.database.equip_inventory_item(
+            defender.character_id,
+            armor_instance_id,
+            EquipmentSlot.ARMOR,
+        )
+
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            return_value=9,
+        ):
+            scene, result = self.service.attack_character(
+                44,
+                str(defender.character_id),
+            )
+
+        self.assertEqual(result.defense_method, "dodge")
+        self.assertEqual(result.defense_attribute, "dexterity")
+        self.assertEqual(result.defense_modifier, 3)
+        self.assertEqual(result.defense_total, 12)
+        self.assertTrue(result.defended)
+        self.assertEqual(result.final_damage, 0)
+        self.assertEqual(result.target_hp, 14)
+
+        attacker = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(attacker.standard_action_spent)
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "already spent",
+        ):
+            self.service.attack_character(
+                44,
+                str(defender.character_id),
+            )
+
+    def test_failed_automatic_defense_applies_armor_and_character_damage(self) -> None:
+        armor = self.world.catalog.get("leather_armor")
+        armor_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            armor.template_id,
+            durability=armor.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            armor_instance_id,
+            EquipmentSlot.ARMOR,
+        )
+
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[5, 4],
+        ):
+            scene, result = self.service.attack_character(
+                44,
+                str(self.olof.character_id),
+            )
+
+        self.assertEqual(result.defense_method, "guard")
+        self.assertFalse(result.defended)
+        self.assertEqual(result.damage_rolls, (4,))
+        self.assertEqual(result.raw_damage, 4)
+        self.assertEqual(result.armor_reduction, 1)
+        self.assertEqual(result.final_damage, 3)
+        self.assertEqual(result.target_hp, 12)
+
+        updated_olof = next(
+            character
+            for character in self.database.list_all_characters()
+            if character.character_id == self.olof.character_id
+        )
+        self.assertEqual(updated_olof.hp, 12)
+        self.assertTrue(
+            any(
+                "automatically used guard" in entry.message
+                and "3 damage" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
     def test_only_one_active_scene_is_allowed_per_guild(self) -> None:
         self.service.start(44, self.hall.id)
 

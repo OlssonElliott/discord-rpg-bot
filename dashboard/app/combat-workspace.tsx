@@ -77,7 +77,10 @@ type CombatWorkspaceProps = {
     quantity: number,
   ) => Promise<boolean>;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
-  onAttack: (targetEnemyId: string) => Promise<boolean>;
+  onAttack: (
+    attacker: CombatantData,
+    targetId: string,
+  ) => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
   onSetInitiative: (
@@ -503,7 +506,10 @@ function CombatantEditor({
   ) => Promise<boolean>;
   onInspect: (combatant: CombatantData) => void;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
-  onAttack: (targetEnemyId: string) => Promise<boolean>;
+  onAttack: (
+    attacker: CombatantData,
+    targetId: string,
+  ) => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
     initiativeScore: number,
@@ -514,11 +520,12 @@ function CombatantEditor({
   );
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
-  const enemyTargets = scene.combatants.filter(
-    (candidate) => candidate.kind === 'enemy',
+  const targetKind = combatant.kind === 'character' ? 'enemy' : 'character';
+  const attackTargets = scene.combatants.filter(
+    (candidate) => candidate.kind === targetKind,
   );
   const [attackTargetId, setAttackTargetId] = useState(
-    enemyTargets[0]?.source_id || '',
+    attackTargets[0]?.source_id || '',
   );
 
   useEffect(() => {
@@ -539,18 +546,18 @@ function CombatantEditor({
       attackTargetId
       && scene.combatants.some(
         (candidate) => (
-          candidate.kind === 'enemy'
+          candidate.kind === targetKind
           && candidate.source_id === attackTargetId
         ),
       )
     ) {
       return;
     }
-    const firstEnemy = scene.combatants.find(
-      (candidate) => candidate.kind === 'enemy',
+    const firstTarget = scene.combatants.find(
+      (candidate) => candidate.kind === targetKind,
     );
-    setAttackTargetId(firstEnemy?.source_id || '');
-  }, [attackTargetId, scene.combatants]);
+    setAttackTargetId(firstTarget?.source_id || '');
+  }, [attackTargetId, scene.combatants, targetKind]);
 
   const routeSource = combatant.route_source_landmark_id
     ? scene.landmarks.find(
@@ -628,8 +635,7 @@ function CombatantEditor({
       >
         Move toward
       </Button>
-      {combatant.kind === 'character' && (
-        <div className="combatant-editor__standard-action">
+      <div className="combatant-editor__standard-action">
           <div>
             <span>Standard Action</span>
             <Badge
@@ -654,7 +660,7 @@ function CombatantEditor({
             onChange={(event) => setAttackTargetId(event.target.value)}
           >
             <NativeSelectOption value="">Choose target…</NativeSelectOption>
-            {enemyTargets.map((target) => (
+            {attackTargets.map((target) => (
               <NativeSelectOption
                 key={target.source_id}
                 value={target.source_id}
@@ -671,12 +677,11 @@ function CombatantEditor({
               || combatant.standard_action_spent
               || !attackTargetId
             }
-            onClick={() => void onAttack(attackTargetId)}
+            onClick={() => void onAttack(combatant, attackTargetId)}
           >
             <Swords /> Attack
           </Button>
         </div>
-      )}
       <div className="combatant-editor__initiative">
         <span>
           Initiative

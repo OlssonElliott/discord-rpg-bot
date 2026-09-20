@@ -838,11 +838,17 @@ export function DungeonEditor() {
             { method: 'DELETE' },
             'Enemy removed from combat',
           )}
-          onAttack={(targetEnemyId) => updateCombat(
-            '/combat/actions/attack',
+          onAttack={(attacker, targetId) => updateCombat(
+            attacker.kind === 'character'
+              ? '/combat/actions/attack'
+              : '/combat/actions/enemy-attack',
             {
               method: 'POST',
-              body: JSON.stringify({ target_enemy_id: targetEnemyId }),
+              body: JSON.stringify(
+                attacker.kind === 'character'
+                  ? { target_enemy_id: targetId }
+                  : { target_character_id: targetId },
+              ),
             },
             'Attack resolved',
           )}

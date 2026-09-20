@@ -6,7 +6,7 @@ import re
 from typing import Any
 from urllib.parse import quote
 
-from .combat import AttackResult, CombatScene
+from .combat import AttackResult, CombatScene, EnemyAttackResult
 from .combat_service import CombatService
 from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .enemies import EnemyInstance, EnemyTemplate
@@ -291,6 +291,32 @@ def _attack_result_data(result: AttackResult) -> JsonObject:
         "target_hp": result.target_hp,
         "target_max_hp": result.target_max_hp,
         "target_defeated": result.target_defeated,
+    }
+
+
+def _enemy_attack_result_data(result: EnemyAttackResult) -> JsonObject:
+    return {
+        "attacker_source_id": result.attacker_source_id,
+        "attacker_name": result.attacker_name,
+        "target_source_id": result.target_source_id,
+        "target_name": result.target_name,
+        "attack_profile": result.attack_profile,
+        "attack_dc": result.attack_dc,
+        "defense_method": result.defense_method,
+        "defense_attribute": result.defense_attribute,
+        "defense_roll": result.defense_roll,
+        "defense_modifier": result.defense_modifier,
+        "defense_total": result.defense_total,
+        "defended": result.defended,
+        "critical_defense": result.critical_defense,
+        "damage_expression": result.damage_expression,
+        "damage_rolls": list(result.damage_rolls),
+        "raw_damage": result.raw_damage,
+        "armor_reduction": result.armor_reduction,
+        "final_damage": result.final_damage,
+        "target_hp": result.target_hp,
+        "target_max_hp": result.target_max_hp,
+        "target_down": result.target_down,
     }
 
 
@@ -807,6 +833,15 @@ class DashboardAPI:
             )
             payload = _combat_state_data(scene, self.world)
             payload["attack_result"] = _attack_result_data(result)
+            return 200, payload
+
+        if path == "/api/combat/actions/enemy-attack" and method == "POST":
+            scene, result = self.combat.attack_character(
+                self._combat_guild_id(),
+                self._text(body, "target_character_id"),
+            )
+            payload = _combat_state_data(scene, self.world)
+            payload["enemy_attack_result"] = _enemy_attack_result_data(result)
             return 200, payload
 
         movement_match = re.fullmatch(

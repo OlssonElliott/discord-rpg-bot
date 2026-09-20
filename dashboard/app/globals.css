@@ -225,6 +225,8 @@ button, input, textarea { font: inherit; }
 .combat-log-entry p { margin: 6px 0 0; color: #aab5c3; font-size: .68rem; line-height: 1.4; }
 .combat-log-entry--turn_started { border-left-color: #d39a4a; }
 .combat-log-entry--attack_resolved { border-left-color: #a96c49; }
+.combat-log-entry--enemy_attack_resolved { border-left-color: #8c5e78; }
+.combat-log-entry--combatant_downed { border-left-color: #b44747; }
 .combat-log-entry--combatant_defeated { border-left-color: #b44747; }
 .combat-log-entry--combatant_removed { border-left-color: #a95b5b; }
 .combat-log-entry--combatant_joined { border-left-color: #688e72; }
