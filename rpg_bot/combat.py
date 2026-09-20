@@ -49,6 +49,14 @@ class CombatRoute:
     obstacle: str | None = None
     blocked: bool = False
 
+    @property
+    def movement_cost(self) -> int:
+        return {
+            LandmarkDistance.CLOSE: 1,
+            LandmarkDistance.FAR: 3,
+            LandmarkDistance.DISTANT: 5,
+        }[self.distance]
+
 
 @dataclass(frozen=True, slots=True)
 class CombatantState:
@@ -60,6 +68,21 @@ class CombatantState:
     initiative_roll: int = 0
     initiative_score: int = 0
     acted_this_round: bool = False
+    movement_budget: int = 3
+    movement_remaining: int = 3
+    route_source_landmark_id: str | None = None
+    route_destination_landmark_id: str | None = None
+    route_progress: int = 0
+    route_cost: int = 0
+
+    @property
+    def is_between_landmarks(self) -> bool:
+        return (
+            self.route_source_landmark_id is not None
+            and self.route_destination_landmark_id is not None
+            and self.route_cost > 0
+            and 0 < self.route_progress < self.route_cost
+        )
 
     @property
     def initiative_key(self) -> tuple[int, int, str, str, str]:

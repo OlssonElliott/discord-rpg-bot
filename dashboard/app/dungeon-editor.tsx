@@ -814,7 +814,7 @@ export function DungeonEditor() {
             'Landmark position saved',
           )}
           onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
-            `/combat/combatants/${combatant.kind}/${combatant.source_id}`,
+            `/combat/movement/${combatant.kind}/${combatant.source_id}`,
             {
               method: 'PATCH',
               body: JSON.stringify({ landmark_id: landmarkId, relation }),

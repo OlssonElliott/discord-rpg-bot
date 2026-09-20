@@ -1,6 +1,7 @@
 """Application service for landmark-based combat scene state."""
 
 from dataclasses import replace
+import heapq
 import math
 import random
 import re
@@ -8,6 +9,7 @@ from uuid import uuid4
 
 from .combat import (
     CombatLandmark,
+    CombatRoute,
     CombatScene,
     CombatantKind,
     CombatantState,
@@ -161,6 +163,9 @@ class CombatService:
             initiative_roll, initiative_score = self._roll_initiative(
                 self._character_insight_modifier(character.character_id)
             )
+            movement_budget = self._character_movement_budget(
+                character.character_id
+            )
             combatants.append(
                 CombatantState(
                     CombatantKind.CHARACTER,
@@ -170,6 +175,8 @@ class CombatService:
                     LandmarkRelation.AT,
                     initiative_roll,
                     initiative_score,
+                    movement_budget=movement_budget,
+                    movement_remaining=movement_budget,
                 )
             )
 
@@ -177,6 +184,7 @@ class CombatService:
             initiative_roll, initiative_score = self._roll_initiative(
                 self._enemy_insight_modifier(enemy.id)
             )
+            movement_budget = self._enemy_movement_budget(enemy.id)
             combatants.append(
                 CombatantState(
                     CombatantKind.ENEMY,
@@ -186,6 +194,8 @@ class CombatService:
                     LandmarkRelation.AT,
                     initiative_roll,
                     initiative_score,
+                    movement_budget=movement_budget,
+                    movement_remaining=movement_budget,
                 )
             )
 
@@ -316,6 +326,246 @@ class CombatService:
         template = self.world.get_enemy_template(enemy.template_id)
         return template.insight if template is not None else 0
 
+    def _character_movement_budget(self, character_id: int) -> int:
+        strength = self.database.get_character_attribute(
+            character_id,
+            "strength",
+        )
+        return max(1, 3 + (strength - 10) // 2)
+
+    def _enemy_movement_budget(self, enemy_id: str) -> int:
+        enemy = self.world.get_enemy(enemy_id)
+        if enemy is None:
+            return 3
+        template = self.world.get_enemy_template(enemy.template_id)
+        return max(
+            1,
+            3 + (template.strength if template is not None else 0),
+        )
+
+    @staticmethod
+    def _route_between(
+        scene: CombatScene,
+        first_landmark_id: str,
+        second_landmark_id: str,
+    ) -> CombatRoute | None:
+        route_ids = {first_landmark_id, second_landmark_id}
+        return next(
+            (
+                route
+                for route in scene.routes
+                if {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                } == route_ids
+            ),
+            None,
+        )
+
+    @classmethod
+    def _path_cost(
+        cls,
+        scene: CombatScene,
+        path: tuple[str, ...],
+    ) -> int:
+        total = 0
+        for source_id, destination_id in zip(path, path[1:]):
+            route = cls._route_between(
+                scene,
+                source_id,
+                destination_id,
+            )
+            if route is None:
+                raise CombatError(
+                    "Combat route changed while movement was resolved."
+                )
+            total += route.movement_cost
+        return total
+
+    @classmethod
+    def _shortest_path(
+        cls,
+        scene: CombatScene,
+        start_landmark_id: str,
+        destination_landmark_id: str,
+    ) -> tuple[str, ...] | None:
+        if start_landmark_id == destination_landmark_id:
+            return (start_landmark_id,)
+
+        neighbours: dict[str, list[tuple[str, int]]] = {}
+        for route in scene.routes:
+            if route.blocked:
+                continue
+            neighbours.setdefault(
+                route.source_landmark_id,
+                [],
+            ).append(
+                (route.destination_landmark_id, route.movement_cost)
+            )
+            neighbours.setdefault(
+                route.destination_landmark_id,
+                [],
+            ).append(
+                (route.source_landmark_id, route.movement_cost)
+            )
+
+        queue: list[tuple[int, str, tuple[str, ...]]] = [
+            (0, start_landmark_id, (start_landmark_id,))
+        ]
+        best_cost: dict[str, int] = {}
+
+        while queue:
+            cost, landmark_id, path = heapq.heappop(queue)
+            if (
+                landmark_id in best_cost
+                and best_cost[landmark_id] <= cost
+            ):
+                continue
+
+            best_cost[landmark_id] = cost
+            if landmark_id == destination_landmark_id:
+                return path
+
+            for neighbour_id, route_cost in neighbours.get(
+                landmark_id,
+                (),
+            ):
+                next_cost = cost + route_cost
+                if best_cost.get(
+                    neighbour_id,
+                    next_cost + 1,
+                ) <= next_cost:
+                    continue
+                heapq.heappush(
+                    queue,
+                    (
+                        next_cost,
+                        neighbour_id,
+                        (*path, neighbour_id),
+                    ),
+                )
+
+        return None
+
+    @classmethod
+    def _movement_legs(
+        cls,
+        scene: CombatScene,
+        combatant: CombatantState,
+        destination_landmark_id: str,
+    ) -> list[tuple[str, str, CombatRoute, int]]:
+        def path_legs(
+            path: tuple[str, ...],
+        ) -> list[tuple[str, str, CombatRoute, int]]:
+            result: list[tuple[str, str, CombatRoute, int]] = []
+            for source_id, destination_id in zip(path, path[1:]):
+                route = cls._route_between(
+                    scene,
+                    source_id,
+                    destination_id,
+                )
+                if route is None:
+                    raise CombatError(
+                        "Combat route changed while movement was resolved."
+                    )
+                result.append(
+                    (source_id, destination_id, route, 0)
+                )
+            return result
+
+        if not combatant.is_between_landmarks:
+            path = cls._shortest_path(
+                scene,
+                combatant.landmark_id,
+                destination_landmark_id,
+            )
+            if path is None:
+                raise CombatError(
+                    f"No unblocked route reaches landmark "
+                    f"'{destination_landmark_id}'."
+                )
+            return path_legs(path)
+
+        source_id = combatant.route_source_landmark_id
+        route_destination_id = combatant.route_destination_landmark_id
+        assert source_id is not None
+        assert route_destination_id is not None
+
+        current_route = cls._route_between(
+            scene,
+            source_id,
+            route_destination_id,
+        )
+        if current_route is None:
+            raise CombatError(
+                "The route under this combatant no longer exists."
+            )
+
+        candidates: list[
+            tuple[int, list[tuple[str, str, CombatRoute, int]]]
+        ] = []
+
+        path_from_destination = cls._shortest_path(
+            scene,
+            route_destination_id,
+            destination_landmark_id,
+        )
+        if path_from_destination is not None:
+            candidates.append(
+                (
+                    combatant.route_cost
+                    - combatant.route_progress
+                    + cls._path_cost(
+                        scene,
+                        path_from_destination,
+                    ),
+                    [
+                        (
+                            source_id,
+                            route_destination_id,
+                            current_route,
+                            combatant.route_progress,
+                        ),
+                        *path_legs(path_from_destination),
+                    ],
+                )
+            )
+
+        path_from_source = cls._shortest_path(
+            scene,
+            source_id,
+            destination_landmark_id,
+        )
+        if path_from_source is not None:
+            candidates.append(
+                (
+                    combatant.route_progress
+                    + cls._path_cost(
+                        scene,
+                        path_from_source,
+                    ),
+                    [
+                        (
+                            route_destination_id,
+                            source_id,
+                            current_route,
+                            combatant.route_cost
+                            - combatant.route_progress,
+                        ),
+                        *path_legs(path_from_source),
+                    ],
+                )
+            )
+
+        if not candidates:
+            raise CombatError(
+                f"No unblocked route reaches landmark "
+                f"'{destination_landmark_id}'."
+            )
+
+        candidates.sort(key=lambda candidate: candidate[0])
+        return candidates[0][1]
+
     @staticmethod
     def _turn_index(scene: CombatScene) -> int | None:
         ordered = scene.initiative_order()
@@ -342,6 +592,11 @@ class CombatService:
             available = list(scene.initiative_order())
         first = available[0]
         try:
+            self.repository.reset_combatant_movement(
+                scene.id,
+                first.kind,
+                first.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 scene.round_number,
@@ -414,6 +669,7 @@ class CombatService:
                 template.insight
             )
             current_combatant = scene.current_combatant()
+            movement_budget = self._enemy_movement_budget(enemy.id)
             candidate = CombatantState(
                 CombatantKind.ENEMY,
                 enemy.id,
@@ -422,6 +678,8 @@ class CombatService:
                 LandmarkRelation.AT,
                 initiative_roll,
                 initiative_score,
+                movement_budget=movement_budget,
+                movement_remaining=movement_budget,
             )
             has_passed_current_turn = (
                 current_combatant is not None
@@ -518,6 +776,11 @@ class CombatService:
                     available = list(remaining_scene.initiative_order())
 
                 next_combatant = available[0]
+                self.repository.reset_combatant_movement(
+                    scene.id,
+                    next_combatant.kind,
+                    next_combatant.source_id,
+                )
                 self.repository.set_turn(
                     scene.id,
                     next_round,
@@ -566,6 +829,11 @@ class CombatService:
                 available = list(updated.initiative_order())
 
             target = available[0]
+            self.repository.reset_combatant_movement(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 next_round,
@@ -608,6 +876,11 @@ class CombatService:
                 target.source_id,
                 False,
             )
+            self.repository.reset_combatant_movement(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 previous_round,
@@ -645,6 +918,11 @@ class CombatService:
                 for combatant in scene.combatants
                 if combatant.kind is parsed_kind
                 and combatant.source_id == source_id
+            )
+            self.repository.reset_combatant_movement(
+                scene.id,
+                parsed_kind,
+                source_id,
             )
             self.repository.set_turn(
                 scene.id,
@@ -744,6 +1022,18 @@ class CombatService:
         destination_landmark_id: str,
     ) -> CombatScene:
         scene = self._require_current(guild_id)
+        route_ids = {source_landmark_id, destination_landmark_id}
+        if any(
+            combatant.is_between_landmarks
+            and {
+                combatant.route_source_landmark_id,
+                combatant.route_destination_landmark_id,
+            } == route_ids
+            for combatant in scene.combatants
+        ):
+            raise CombatError(
+                "Move combatants off this connection before removing it."
+            )
         try:
             self.repository.delete_route(
                 scene.id,
@@ -767,6 +1057,8 @@ class CombatService:
             raise CombatError("Only manually added combat landmarks can be removed.")
         if any(
             combatant.landmark_id == landmark_id
+            or combatant.route_source_landmark_id == landmark_id
+            or combatant.route_destination_landmark_id == landmark_id
             for combatant in scene.combatants
         ):
             raise CombatError(
@@ -814,6 +1106,18 @@ class CombatService:
         blocked: bool = False,
     ) -> CombatScene:
         scene = self._require_current(guild_id)
+        route_ids = {source_landmark_id, destination_landmark_id}
+        if any(
+            combatant.is_between_landmarks
+            and {
+                combatant.route_source_landmark_id,
+                combatant.route_destination_landmark_id,
+            } == route_ids
+            for combatant in scene.combatants
+        ):
+            raise CombatError(
+                "Finish movement on this connection before changing it."
+            )
         try:
             parsed_distance = (
                 distance
@@ -840,9 +1144,14 @@ class CombatService:
         landmark_id: str,
         relation: LandmarkRelation | str = LandmarkRelation.AT,
     ) -> CombatScene:
+        """DM repositioning that does not spend turn movement."""
         scene = self._require_current(guild_id)
         try:
-            parsed_kind = kind if isinstance(kind, CombatantKind) else CombatantKind(kind)
+            parsed_kind = (
+                kind
+                if isinstance(kind, CombatantKind)
+                else CombatantKind(kind)
+            )
             parsed_relation = (
                 relation
                 if isinstance(relation, LandmarkRelation)
@@ -873,6 +1182,171 @@ class CombatService:
                 actor_source_id=combatant.source_id,
                 actor_name=combatant.name,
             )
+        except (ValueError, StopIteration) as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def move_combatant_toward(
+        self,
+        guild_id: int,
+        kind: CombatantKind | str,
+        source_id: str,
+        landmark_id: str,
+        relation: LandmarkRelation | str = LandmarkRelation.AT,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        try:
+            parsed_kind = kind if isinstance(kind, CombatantKind) else CombatantKind(kind)
+            parsed_relation = (
+                relation
+                if isinstance(relation, LandmarkRelation)
+                else LandmarkRelation(relation)
+            )
+            combatant = next(
+                item
+                for item in scene.combatants
+                if item.kind is parsed_kind and item.source_id == source_id
+            )
+
+            if (
+                scene.current_turn_kind is not parsed_kind
+                or scene.current_turn_source_id != source_id
+            ):
+                raise CombatError(
+                    "Only the current combatant can spend movement."
+                )
+
+            destination = scene.landmark(landmark_id)
+            if destination is None:
+                raise CombatError(
+                    f"Unknown combat landmark '{landmark_id}'."
+                )
+
+            if (
+                not combatant.is_between_landmarks
+                and combatant.landmark_id == landmark_id
+            ):
+                self.repository.set_combatant_position(
+                    scene.id,
+                    parsed_kind,
+                    source_id,
+                    landmark_id,
+                    parsed_relation,
+                    movement_remaining=combatant.movement_remaining,
+                )
+                return self._require_current(guild_id)
+
+            if combatant.movement_remaining <= 0:
+                raise CombatError(
+                    f"{combatant.name} has no movement remaining this turn."
+                )
+
+            legs = self._movement_legs(
+                scene,
+                combatant,
+                landmark_id,
+            )
+            movement_remaining = combatant.movement_remaining
+            arrived_landmark_id = combatant.landmark_id
+            completed = False
+
+            for (
+                leg_source_id,
+                leg_destination_id,
+                route,
+                already_moved,
+            ) in legs:
+                leg_remaining = route.movement_cost - already_moved
+
+                if movement_remaining < leg_remaining:
+                    travelled_from_leg_source = (
+                        already_moved + movement_remaining
+                    )
+
+                    self.repository.set_combatant_position(
+                        scene.id,
+                        parsed_kind,
+                        source_id,
+                        leg_source_id,
+                        LandmarkRelation.AT,
+                        movement_remaining=0,
+                        route_source_landmark_id=leg_source_id,
+                        route_destination_landmark_id=leg_destination_id,
+                        route_progress=travelled_from_leg_source,
+                        route_cost=route.movement_cost,
+                    )
+
+                    source = scene.landmark(leg_source_id)
+                    route_destination = scene.landmark(
+                        leg_destination_id
+                    )
+                    self.repository.append_log(
+                        scene.id,
+                        scene.round_number,
+                        "combatant_moved",
+                        (
+                            f"{combatant.name} moved between "
+                            f"{source.name if source is not None else leg_source_id} "
+                            f"and "
+                            f"{route_destination.name if route_destination is not None else leg_destination_id} "
+                            f"({travelled_from_leg_source}/"
+                            f"{route.movement_cost})."
+                        ),
+                        actor_kind=combatant.kind,
+                        actor_source_id=combatant.source_id,
+                        actor_name=combatant.name,
+                    )
+                    return self._require_current(guild_id)
+
+                movement_remaining -= leg_remaining
+                arrived_landmark_id = leg_destination_id
+
+                if arrived_landmark_id == landmark_id:
+                    completed = True
+                    break
+                if movement_remaining == 0:
+                    break
+
+            final_relation = (
+                parsed_relation
+                if completed
+                else LandmarkRelation.AT
+            )
+            self.repository.set_combatant_position(
+                scene.id,
+                parsed_kind,
+                source_id,
+                arrived_landmark_id,
+                final_relation,
+                movement_remaining=movement_remaining,
+            )
+
+            arrived = scene.landmark(arrived_landmark_id)
+            if completed:
+                message = (
+                    f"{combatant.name} moved {parsed_relation.value} "
+                    f"{destination.name}. "
+                    f"{movement_remaining}/{combatant.movement_budget} "
+                    f"movement remains."
+                )
+            else:
+                message = (
+                    f"{combatant.name} reached "
+                    f"{arrived.name if arrived is not None else arrived_landmark_id} "
+                    f"with no movement remaining."
+                )
+
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "combatant_moved",
+                message,
+                actor_kind=combatant.kind,
+                actor_source_id=combatant.source_id,
+                actor_name=combatant.name,
+            )
+        except CombatError:
+            raise
         except (ValueError, StopIteration) as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)

@@ -236,7 +236,10 @@ function combatNodes(
       data: {
         landmark,
         combatants: scene.combatants.filter(
-          (combatant) => combatant.landmark_id === landmark.id,
+          (combatant) => (
+            !combatant.is_between_landmarks
+            && combatant.landmark_id === landmark.id
+          ),
         ),
       },
     };
@@ -256,6 +259,28 @@ function combatEdges(
       route.source_landmark_id,
       route.destination_landmark_id,
     );
+    const travellers = scene.combatants.filter(
+      (combatant) => (
+        combatant.is_between_landmarks
+        && combatant.route_source_landmark_id
+        && combatant.route_destination_landmark_id
+        && routeKey(
+          combatant.route_source_landmark_id,
+          combatant.route_destination_landmark_id,
+        ) === id
+      ),
+    );
+    const travellerLabel = travellers
+      .map(
+        (combatant) => (
+          `${combatant.name} ${combatant.route_progress}/${combatant.route_cost}`
+        ),
+      )
+      .join(', ');
+    const routeLabel = route.blocked
+      ? `${route.distance} · move ${route.movement_cost} · blocked`
+      : `${route.distance} · move ${route.movement_cost}`;
+
     return {
       id,
       source: route.source_landmark_id,
@@ -265,11 +290,15 @@ function combatEdges(
         positions.get(route.destination_landmark_id),
       ),
       type: 'straight',
-      label: route.blocked ? `${route.distance} · blocked` : route.distance,
+      label: travellerLabel
+        ? `${routeLabel} · ${travellerLabel}`
+        : routeLabel,
       selected: id === selectedRouteId,
-      className: route.blocked
-        ? 'combat-connection-edge combat-connection-edge--blocked'
-        : 'combat-connection-edge',
+      className: [
+        'combat-connection-edge',
+        route.blocked ? 'combat-connection-edge--blocked' : '',
+        travellers.length ? 'combat-connection-edge--occupied' : '',
+      ].filter(Boolean).join(' '),
     };
   });
 }
@@ -477,19 +506,35 @@ function CombatantEditor({
     initiativeScore: number,
   ) => Promise<boolean>;
 }) {
-  const [landmarkId, setLandmarkId] = useState(combatant.landmark_id);
+  const [landmarkId, setLandmarkId] = useState(
+    combatant.route_destination_landmark_id || combatant.landmark_id,
+  );
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
 
   useEffect(() => {
-    setLandmarkId(combatant.landmark_id);
+    setLandmarkId(
+      combatant.route_destination_landmark_id || combatant.landmark_id,
+    );
     setRelation(combatant.relation);
     setInitiativeScore(combatant.initiative_score);
   }, [
     combatant.initiative_score,
     combatant.landmark_id,
     combatant.relation,
+    combatant.route_destination_landmark_id,
   ]);
+
+  const routeSource = combatant.route_source_landmark_id
+    ? scene.landmarks.find(
+      (landmark) => landmark.id === combatant.route_source_landmark_id,
+    )
+    : null;
+  const routeDestination = combatant.route_destination_landmark_id
+    ? scene.landmarks.find(
+      (landmark) => landmark.id === combatant.route_destination_landmark_id,
+    )
+    : null;
 
   return (
     <div
@@ -503,9 +548,25 @@ function CombatantEditor({
         {combatant.kind === 'character' ? <Users size={15} /> : <Skull size={15} />}
         <span>{combatant.name}</span>
         {combatant.is_current_turn && <Badge>Current turn</Badge>}
+        <Badge variant="outline">
+          Move {combatant.movement_remaining}/{combatant.movement_budget}
+        </Badge>
         <Badge variant="outline">Init {combatant.initiative_score}</Badge>
       </div>
-      <NativeSelect value={landmarkId} onChange={(event) => setLandmarkId(event.target.value)}>
+      {combatant.is_between_landmarks && (
+        <p className="combatant-editor__movement-state">
+          Between {routeSource?.name || combatant.route_source_landmark_id}
+          {' ↔ '}
+          {routeDestination?.name || combatant.route_destination_landmark_id}
+          {' · '}
+          {combatant.route_progress}/{combatant.route_cost}
+        </p>
+      )}
+      <NativeSelect
+        value={landmarkId}
+        disabled={busy || !combatant.is_current_turn}
+        onChange={(event) => setLandmarkId(event.target.value)}
+      >
         {scene.landmarks.map((landmark) => (
           <NativeSelectOption key={landmark.id} value={landmark.id}>
             {landmark.name}
@@ -514,6 +575,7 @@ function CombatantEditor({
       </NativeSelect>
       <NativeSelect
         value={relation}
+        disabled={busy || !combatant.is_current_turn}
         onChange={(event) => setRelation(event.target.value as Relation)}
       >
         <NativeSelectOption value="at">At</NativeSelectOption>
@@ -527,11 +589,17 @@ function CombatantEditor({
         variant="outline"
         disabled={
           busy
-          || (landmarkId === combatant.landmark_id && relation === combatant.relation)
+          || !combatant.is_current_turn
+          || combatant.movement_remaining <= 0
+          || (
+            !combatant.is_between_landmarks
+            && landmarkId === combatant.landmark_id
+            && relation === combatant.relation
+          )
         }
         onClick={() => void onMove(combatant, landmarkId, relation)}
       >
-        Move
+        Move toward
       </Button>
       <div className="combatant-editor__initiative">
         <span>
@@ -649,6 +717,30 @@ export function CombatWorkspace({
   }, [enemyLandmarkId, scene]);
 
   useEffect(() => {
+    const ignoreBenignResizeObserverError = (event: ErrorEvent) => {
+      if (
+        event.message === 'ResizeObserver loop completed with undelivered notifications.'
+        || event.message === 'ResizeObserver loop limit exceeded'
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    window.addEventListener(
+      'error',
+      ignoreBenignResizeObserverError,
+      true,
+    );
+    return () => {
+      window.removeEventListener(
+        'error',
+        ignoreBenignResizeObserverError,
+        true,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     if (!scene) {
       setNodes([]);
       setEdges([]);
@@ -659,8 +751,10 @@ export function CombatWorkspace({
       return;
     }
     const nextNodes = combatNodes(scene, selectedLandmarkId);
-    setNodes(nextNodes);
-    setEdges(combatEdges(scene, nextNodes, selectedRouteId));
+    const frame = window.requestAnimationFrame(() => {
+      setNodes(nextNodes);
+      setEdges(combatEdges(scene, nextNodes, selectedRouteId));
+    });
     if (
       selectedLandmarkId
       && !scene.landmarks.some((landmark) => landmark.id === selectedLandmarkId)
@@ -686,6 +780,7 @@ export function CombatWorkspace({
     ) {
       setSelectedCombatantKey(null);
     }
+    return () => window.cancelAnimationFrame(frame);
   }, [
     scene,
     selectedCombatantKey,
@@ -1075,6 +1170,9 @@ export function CombatWorkspace({
                   {selectedRouteDestination?.name || selectedRoute.destination_landmark_id}
                 </strong>
               </div>
+              <p className="combat-selection-meta">
+                Movement cost: {selectedRoute.movement_cost}
+              </p>
               <label htmlFor="combat-route-distance">Distance</label>
               <NativeSelect
                 id="combat-route-distance"
@@ -1169,6 +1267,7 @@ export function CombatWorkspace({
                   <span>↔</span>
                   <strong>{destination?.name || route.destination_landmark_id}</strong>
                   <Badge variant="outline">{route.distance}</Badge>
+                  <Badge variant="outline">move {route.movement_cost}</Badge>
                   {route.obstacle && <small>{route.obstacle}</small>}
                   {route.blocked && <CircleAlert size={14} />}
                 </button>

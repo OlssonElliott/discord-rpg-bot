@@ -171,6 +171,7 @@ button, input, textarea { font: inherit; }
 .combat-landmark-node__type { display: block; margin-top: 4px; color: #748297; font-size: .6rem; text-transform: uppercase; }
 .combat-landmark-node__occupants { display: grid; gap: 3px; margin-top: 8px; }
 .combat-connection-edge .react-flow__edge-path { stroke-width: 2; }
+.combat-connection-edge--occupied .react-flow__edge-path { stroke: #d39a4a; stroke-width: 3; }
 .combat-connection-edge--blocked .react-flow__edge-path { stroke: #aa5656; stroke-dasharray: 4 5; }
 .combat-board .react-flow__edge-text { fill: #b8c2cf; font-size: 11px; text-transform: capitalize; }
 .combat-board .react-flow__edge-textbg { fill: #111925; fill-opacity: .92; }
@@ -201,6 +202,7 @@ button, input, textarea { font: inherit; }
 .combatant-editor--selected { outline: 1px solid #617590; outline-offset: 1px; }
 .combatant-editor__name { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: #dce2e9; font-size: .77rem; }
 .combatant-editor__name > .badge:first-of-type { margin-left: auto; }
+.combatant-editor__movement-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #c6a76d; font-size: .64rem; border: 1px solid #4c3e29; border-radius: 6px; background: #1b1711; }
 .combatant-editor button { grid-column: 2; }
 .combatant-editor__initiative { display: grid; grid-column: 1 / -1; grid-template-columns: 1fr 80px 62px; align-items: center; gap: 6px; margin-top: 3px; }
 .combatant-editor__initiative > span { display: flex; color: #8e9bae; font-size: .68rem; flex-direction: column; }

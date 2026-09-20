@@ -95,6 +95,12 @@ class CombatRepository:
                 initiative_roll INTEGER NOT NULL DEFAULT 0,
                 initiative_score INTEGER NOT NULL DEFAULT 0,
                 acted_this_round INTEGER NOT NULL DEFAULT 0 CHECK (acted_this_round IN (0, 1)),
+                movement_budget INTEGER NOT NULL DEFAULT 3 CHECK (movement_budget >= 1),
+                movement_remaining INTEGER NOT NULL DEFAULT 3 CHECK (movement_remaining >= 0),
+                route_source_landmark_id TEXT,
+                route_destination_landmark_id TEXT,
+                route_progress INTEGER NOT NULL DEFAULT 0 CHECK (route_progress >= 0),
+                route_cost INTEGER NOT NULL DEFAULT 0 CHECK (route_cost >= 0),
                 PRIMARY KEY (scene_id, kind, source_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, landmark_id)
@@ -160,6 +166,30 @@ class CombatRepository:
         if "acted_this_round" not in combatant_columns:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN acted_this_round INTEGER NOT NULL DEFAULT 0"
+            )
+        if "movement_budget" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN movement_budget INTEGER NOT NULL DEFAULT 3"
+            )
+        if "movement_remaining" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN movement_remaining INTEGER NOT NULL DEFAULT 3"
+            )
+        if "route_source_landmark_id" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN route_source_landmark_id TEXT"
+            )
+        if "route_destination_landmark_id" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN route_destination_landmark_id TEXT"
+            )
+        if "route_progress" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN route_progress INTEGER NOT NULL DEFAULT 0"
+            )
+        if "route_cost" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN route_cost INTEGER NOT NULL DEFAULT 0"
             )
 
     def start_scene(
@@ -235,8 +265,11 @@ class CombatRepository:
                 """
                 INSERT INTO combatants (
                     scene_id, kind, source_id, name, landmark_id, relation,
-                    initiative_roll, initiative_score, acted_this_round
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    initiative_roll, initiative_score, acted_this_round,
+                    movement_budget, movement_remaining,
+                    route_source_landmark_id, route_destination_landmark_id,
+                    route_progress, route_cost
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -249,6 +282,12 @@ class CombatRepository:
                         combatant.initiative_roll,
                         combatant.initiative_score,
                         int(combatant.acted_this_round),
+                        combatant.movement_budget,
+                        combatant.movement_remaining,
+                        combatant.route_source_landmark_id,
+                        combatant.route_destination_landmark_id,
+                        combatant.route_progress,
+                        combatant.route_cost,
                     )
                     for combatant in combatants
                 ],
@@ -320,8 +359,11 @@ class CombatRepository:
                     """
                     INSERT INTO combatants (
                         scene_id, kind, source_id, name, landmark_id, relation,
-                        initiative_roll, initiative_score, acted_this_round
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        initiative_roll, initiative_score, acted_this_round,
+                        movement_budget, movement_remaining,
+                        route_source_landmark_id, route_destination_landmark_id,
+                        route_progress, route_cost
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -333,6 +375,12 @@ class CombatRepository:
                         combatant.initiative_roll,
                         combatant.initiative_score,
                         int(combatant.acted_this_round),
+                        combatant.movement_budget,
+                        combatant.movement_remaining,
+                        combatant.route_source_landmark_id,
+                        combatant.route_destination_landmark_id,
+                        combatant.route_progress,
+                        combatant.route_cost,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -704,26 +752,68 @@ class CombatRepository:
         source_id: str,
         landmark_id: str,
         relation: LandmarkRelation,
+        *,
+        movement_remaining: int | None = None,
+        route_source_landmark_id: str | None = None,
+        route_destination_landmark_id: str | None = None,
+        route_progress: int = 0,
+        route_cost: int = 0,
     ) -> None:
+        if movement_remaining is not None and movement_remaining < 0:
+            raise ValueError("Movement remaining cannot be negative.")
+        if route_progress < 0 or route_cost < 0 or route_progress > route_cost:
+            raise ValueError("Combat route progress is invalid.")
+        route_values = (
+            route_source_landmark_id,
+            route_destination_landmark_id,
+        )
+        if (route_source_landmark_id is None) != (
+            route_destination_landmark_id is None
+        ):
+            raise ValueError(
+                "Both route endpoints are required for partial movement."
+            )
+        if route_source_landmark_id is None and (route_progress or route_cost):
+            raise ValueError("Route progress requires route endpoints.")
+
         with self._connect() as connection:
             self._ensure_schema(connection)
-            if connection.execute(
-                """
-                SELECT 1 FROM combat_landmarks
-                WHERE scene_id = ? AND id = ?
-                """,
-                (scene_id, landmark_id),
-            ).fetchone() is None:
-                raise ValueError(f"Unknown combat landmark '{landmark_id}'.")
+            landmark_ids = {landmark_id}
+            landmark_ids.update(
+                value for value in route_values if value is not None
+            )
+            for candidate_id in landmark_ids:
+                if connection.execute(
+                    """
+                    SELECT 1 FROM combat_landmarks
+                    WHERE scene_id = ? AND id = ?
+                    """,
+                    (scene_id, candidate_id),
+                ).fetchone() is None:
+                    raise ValueError(
+                        f"Unknown combat landmark '{candidate_id}'."
+                    )
+
             cursor = connection.execute(
                 """
                 UPDATE combatants
-                SET landmark_id = ?, relation = ?
+                SET landmark_id = ?,
+                    relation = ?,
+                    movement_remaining = COALESCE(?, movement_remaining),
+                    route_source_landmark_id = ?,
+                    route_destination_landmark_id = ?,
+                    route_progress = ?,
+                    route_cost = ?
                 WHERE scene_id = ? AND kind = ? AND source_id = ?
                 """,
                 (
                     landmark_id,
                     relation.value,
+                    movement_remaining,
+                    route_source_landmark_id,
+                    route_destination_landmark_id,
+                    route_progress,
+                    route_cost,
                     scene_id,
                     kind.value,
                     source_id,
@@ -731,6 +821,27 @@ class CombatRepository:
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"Unknown combatant '{kind.value}:{source_id}'.")
+
+    def reset_combatant_movement(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET movement_remaining = movement_budget
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
 
     @staticmethod
     def _load_scene(
@@ -761,7 +872,10 @@ class CombatRepository:
         combatant_rows = connection.execute(
             """
             SELECT kind, source_id, name, landmark_id, relation,
-                   initiative_roll, initiative_score, acted_this_round
+                   initiative_roll, initiative_score, acted_this_round,
+                   movement_budget, movement_remaining,
+                   route_source_landmark_id, route_destination_landmark_id,
+                   route_progress, route_cost
             FROM combatants
             WHERE scene_id = ?
             ORDER BY initiative_score DESC, initiative_roll DESC,
@@ -819,6 +933,12 @@ class CombatRepository:
                     item["initiative_roll"],
                     item["initiative_score"],
                     bool(item["acted_this_round"]),
+                    item["movement_budget"],
+                    item["movement_remaining"],
+                    item["route_source_landmark_id"],
+                    item["route_destination_landmark_id"],
+                    item["route_progress"],
+                    item["route_cost"],
                 )
                 for item in combatant_rows
             ),

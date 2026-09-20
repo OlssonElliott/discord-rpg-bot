@@ -200,6 +200,7 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "source_landmark_id": route.source_landmark_id,
                 "destination_landmark_id": route.destination_landmark_id,
                 "distance": route.distance.value,
+                "movement_cost": route.movement_cost,
                 "obstacle": route.obstacle,
                 "blocked": route.blocked,
             }
@@ -215,6 +216,13 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "initiative_roll": combatant.initiative_roll,
                 "initiative_score": combatant.initiative_score,
                 "acted_this_round": combatant.acted_this_round,
+                "movement_budget": combatant.movement_budget,
+                "movement_remaining": combatant.movement_remaining,
+                "route_source_landmark_id": combatant.route_source_landmark_id,
+                "route_destination_landmark_id": combatant.route_destination_landmark_id,
+                "route_progress": combatant.route_progress,
+                "route_cost": combatant.route_cost,
+                "is_between_landmarks": combatant.is_between_landmarks,
                 "is_current_turn": (
                     combatant.kind is scene.current_turn_kind
                     and combatant.source_id == scene.current_turn_source_id
@@ -756,6 +764,21 @@ class DashboardAPI:
                     )
                 }
             return 200, data
+
+        movement_match = re.fullmatch(
+            r"/api/combat/movement/(character|enemy)/([^/]+)",
+            path,
+        )
+        if movement_match and method == "PATCH":
+            kind, source_id = movement_match.groups()
+            scene = self.combat.move_combatant_toward(
+                self._combat_guild_id(),
+                kind,
+                source_id,
+                self._text(body, "landmark_id"),
+                self._text(body, "relation"),
+            )
+            return 200, _combat_state_data(scene, self.world)
 
         match = re.fullmatch(
             r"/api/combat/combatants/(character|enemy)/([^/]+)",

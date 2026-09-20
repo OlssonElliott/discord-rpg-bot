@@ -112,6 +112,7 @@ export type CombatRouteData = {
   source_landmark_id: string;
   destination_landmark_id: string;
   distance: 'close' | 'far' | 'distant';
+  movement_cost: number;
   obstacle: string | null;
   blocked: boolean;
 };
@@ -125,6 +126,13 @@ export type CombatantData = {
   initiative_roll: number;
   initiative_score: number;
   acted_this_round: boolean;
+  movement_budget: number;
+  movement_remaining: number;
+  route_source_landmark_id: string | null;
+  route_destination_landmark_id: string | null;
+  route_progress: number;
+  route_cost: number;
+  is_between_landmarks: boolean;
   is_current_turn: boolean;
 };
 

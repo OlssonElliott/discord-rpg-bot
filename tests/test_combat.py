@@ -438,6 +438,120 @@ class CombatServiceTests(unittest.TestCase):
             [entry.message for entry in scene.log_entries],
         )
 
+    def test_strength_sets_movement_budget(self) -> None:
+        runner = self.database.create_character(
+            9,
+            "Bran",
+            14,
+            attributes={
+                "Strength": 14,
+                "Dexterity": 10,
+                "Arcana": 10,
+                "Vitality": 10,
+                "Insight": 10,
+                "Personality": 10,
+            },
+        )
+        assert runner.character_id is not None
+        self.world.place_character(runner.character_id, self.hall.id)
+
+        scene = self.service.start(44, self.hall.id)
+        bran = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(runner.character_id)
+        )
+
+        self.assertEqual(bran.movement_budget, 5)
+        self.assertEqual(bran.movement_remaining, 5)
+
+    def test_movement_can_end_between_landmarks_and_continue_next_turn(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(olof.movement_budget, 3)
+
+        scene = self.service.move_combatant_toward(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            "feature:stone_pillar",
+        )
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+
+        self.assertTrue(olof.is_between_landmarks)
+        self.assertEqual(
+            olof.route_source_landmark_id,
+            "room:center",
+        )
+        self.assertEqual(
+            olof.route_destination_landmark_id,
+            "feature:stone_pillar",
+        )
+        self.assertEqual(
+            (olof.route_progress, olof.route_cost),
+            (3, 5),
+        )
+        self.assertEqual(olof.movement_remaining, 0)
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "no movement remaining",
+        ):
+            self.service.move_combatant_toward(
+                44,
+                CombatantKind.CHARACTER,
+                str(self.olof.character_id),
+                "feature:stone_pillar",
+            )
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            "feature:stone_pillar",
+            LandmarkRelation.BEHIND,
+        )
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+
+        self.assertFalse(olof.is_between_landmarks)
+        self.assertEqual(
+            olof.landmark_id,
+            "feature:stone_pillar",
+        )
+        self.assertEqual(
+            olof.relation,
+            LandmarkRelation.BEHIND,
+        )
+        self.assertEqual(olof.movement_remaining, 1)
+
     def test_only_one_active_scene_is_allowed_per_guild(self) -> None:
         self.service.start(44, self.hall.id)
 
