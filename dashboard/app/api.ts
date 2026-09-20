@@ -5,12 +5,70 @@ export type AreaSummary = {
   room_count: number;
 };
 
+export type CharacterStatus = 'active' | 'downed' | 'stable' | 'recovering' | 'dead';
+
+export type EquipmentSlotValue = 'main_hand' | 'off_hand' | 'clothing' | 'armor' | 'container';
+
 export type CharacterSummary = {
   id: number;
   discord_user_id: number;
   name: string;
   current_room_id: string | null;
+  current_room_name: string | null;
   is_active: boolean;
+  portrait_url: string | null;
+  race: string | null;
+  lineage: string | null;
+  hp: number;
+  max_hp: number;
+  status: CharacterStatus;
+};
+
+export type CharacterAdminData = {
+  kind: 'character';
+  source_id: string;
+  id: number;
+  discord_user_id: number;
+  name: string;
+  description: string;
+  portrait_url: string | null;
+  hp: number;
+  max_hp: number;
+  status: CharacterStatus;
+  failed_death_saves: number;
+  death_save_dc: number | null;
+  stance: 'steady' | 'bad_stance' | 'prone';
+  race: string | null;
+  lineage: string | null;
+  age: string | null;
+  gender: string | null;
+  current_room_id: string | null;
+  current_room_name: string | null;
+  is_active: boolean;
+  attributes: Record<string, number>;
+  skills: Record<string, number>;
+  inventory: {
+    id: string;
+    template_id: string;
+    name: string;
+    description: string;
+    quantity: number;
+    durability: number | null;
+    equipped_slot: EquipmentSlotValue | null;
+  }[];
+  equipment: {
+    slot: EquipmentSlotValue;
+    id: string;
+    template_id: string;
+    name: string;
+    description: string;
+  }[];
+  wallet: {
+    copper: number;
+    silver: number;
+    gold: number;
+  };
+  enemy: null;
 };
 
 export type CatalogItem = {
@@ -325,6 +383,22 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const payload = await response.json() as T & { error?: string };
   if (!response.ok) {
     throw new Error(payload.error || `Request failed (${response.status}).`);
+  }
+  return payload;
+}
+
+export async function uploadCharacterPortrait<T>(characterId: number, file: File): Promise<T> {
+  const response = await fetch(`${API_ROOT}/characters/${characterId}/portrait`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const payload = await response.json() as T & { error?: string };
+  if (!response.ok) {
+    throw new Error(payload.error || `Portrait upload failed (${response.status}).`);
   }
   return payload;
 }

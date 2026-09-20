@@ -16,6 +16,7 @@ from rpg_bot.dice_visuals import (
     DEFAULT_DICE_NUMBER_COLOR,
     InvalidDiceColorError,
 )
+from rpg_bot.inventory import EquipmentSlot
 from rpg_bot.models import CharacterCombatStatus, Stance
 
 
@@ -113,6 +114,109 @@ class DatabaseTests(unittest.TestCase):
         self.database.create_character(123, "Olof", 22)
         self.assertEqual(self.database.set_hp(123, 7).hp, 7)
         self.assertEqual(self.database.set_stance(123, Stance.PRONE).stance, Stance.PRONE)
+
+    def test_dm_admin_can_update_complete_character_state(self) -> None:
+        self.database.create_area("keep", "Keep")
+        self.database.create_room("hall", "keep", "Hall")
+        character = self.database.create_character(
+            123,
+            "Olof",
+            12,
+            attributes={"Strength": 11, "Vitality": 13},
+            skills={"Perception": 1},
+        )
+        assert character.character_id is not None
+
+        updated = self.database.update_character_admin(
+            character.character_id,
+            name="Olof the Scarred",
+            hp=-3,
+            max_hp=14,
+            stance=Stance.PRONE,
+            lineage="Northman",
+            race="Human",
+            age="33",
+            gender="Male",
+            attributes={
+                "Strength": 15,
+                "Dexterity": 9,
+                "Arcana": 8,
+                "Vitality": 14,
+                "Insight": 12,
+                "Personality": 10,
+            },
+            skills={"Perception": 2, "Survival": 1},
+            status=CharacterCombatStatus.DOWNED,
+            failed_death_saves=1,
+            current_room_id="hall",
+            copper=7,
+            silver=4,
+            gold=2,
+        )
+
+        state = self.database.get_character_combat_state(
+            character.character_id
+        )
+        inventory = self.database.get_character_inventory(
+            character.character_id
+        )
+        self.assertEqual(updated.name, "Olof the Scarred")
+        self.assertEqual((updated.hp, updated.max_hp), (-3, 14))
+        self.assertEqual(updated.stance, Stance.PRONE)
+        self.assertEqual(updated.current_room_id, "hall")
+        self.assertEqual(updated.attributes["Strength"], 15)
+        self.assertEqual(updated.skills, {"Perception": 2, "Survival": 1})
+        self.assertEqual(state.status, CharacterCombatStatus.DOWNED)
+        self.assertEqual(state.failed_death_saves, 1)
+        self.assertEqual(
+            (inventory.copper, inventory.silver, inventory.gold),
+            (7, 4, 2),
+        )
+
+    def test_dm_admin_can_update_inventory_item_and_equipment(self) -> None:
+        character = self.database.create_character(123, "Olof", 12)
+        assert character.character_id is not None
+        instance_id = self.database.add_inventory_item(
+            character.character_id,
+            "test_blade",
+            quantity=1,
+            durability=6,
+        )
+
+        self.database.set_character_inventory_item_admin(
+            character.character_id,
+            instance_id,
+            quantity=2,
+            durability=4,
+            equipped_slot=EquipmentSlot.MAIN_HAND,
+        )
+
+        inventory = self.database.get_character_inventory(
+            character.character_id
+        )
+        item = next(
+            item for item in inventory.items if item.instance_id == instance_id
+        )
+        self.assertEqual((item.quantity, item.durability), (2, 4))
+        self.assertEqual(
+            inventory.equipment[EquipmentSlot.MAIN_HAND],
+            instance_id,
+        )
+
+        self.database.set_character_inventory_item_admin(
+            character.character_id,
+            instance_id,
+            quantity=0,
+            durability=4,
+            equipped_slot=None,
+        )
+        inventory = self.database.get_character_inventory(
+            character.character_id
+        )
+        self.assertFalse(
+            any(item.instance_id == instance_id for item in inventory.items)
+        )
+        self.assertNotIn(EquipmentSlot.MAIN_HAND, inventory.equipment)
 
     def test_published_character_sheet_message_persists_per_channel(self) -> None:
         character = self.database.create_character(123, "Olof", 22)

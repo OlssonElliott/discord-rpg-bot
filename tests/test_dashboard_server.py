@@ -32,6 +32,7 @@ class DashboardServerConfigurationTests(unittest.TestCase):
         def populate_environment() -> bool:
             os.environ["DATABASE_PATH"] = "configured-dashboard.db"
             os.environ["DISCORD_GUILD_ID"] = "987654321"
+            os.environ["CHARACTER_MEDIA_PATH"] = "configured-characters"
             return True
 
         with (
@@ -43,6 +44,9 @@ class DashboardServerConfigurationTests(unittest.TestCase):
             ) as load_environment,
             patch("rpg_bot.dashboard_server.Database") as database_type,
             patch("rpg_bot.dashboard_server.WorldService") as world_service_type,
+            patch(
+                "rpg_bot.dashboard_server.CharacterPortraitStore"
+            ) as portrait_store_type,
             patch("rpg_bot.dashboard_server.DashboardAPI") as dashboard_api_type,
             patch(
                 "rpg_bot.dashboard_server.ThreadingHTTPServer",
@@ -55,8 +59,12 @@ class DashboardServerConfigurationTests(unittest.TestCase):
         database_type.assert_called_once_with("configured-dashboard.db")
         database_type.return_value.initialize.assert_called_once_with()
         world_service_type.assert_called_once_with(database_type.return_value)
+        portrait_store_type.assert_called_once_with(
+            "configured-characters"
+        )
         dashboard_api_type.assert_called_once_with(
             world_service_type.return_value,
+            portraits=portrait_store_type.return_value,
             guild_id=987654321,
         )
         server.serve_forever.assert_called_once_with()

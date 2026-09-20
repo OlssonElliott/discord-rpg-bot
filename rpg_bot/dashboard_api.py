@@ -10,7 +10,9 @@ from .combat import AttackResult, CombatScene, EnemyAttackResult
 from .combat_service import CombatService
 from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .enemies import EnemyInstance, EnemyTemplate
-from .inventory import ItemTemplate, ItemType, WeaponGrip
+from .inventory import EquipmentSlot, ItemTemplate, ItemType, WeaponGrip
+from .models import CharacterCombatStatus, Stance
+from .portraits import CharacterPortraitStore, InvalidPortraitError
 from .room_images import InvalidRoomImageError, RoomImageStore
 from .world import (
     AreaGraph,
@@ -83,13 +85,144 @@ def _graph_data(graph: AreaGraph, room_images: RoomImageStore) -> JsonObject:
     }
 
 
-def _character_data(character: object) -> JsonObject:
+def _character_portrait_url(
+    character: object,
+    portraits: CharacterPortraitStore,
+) -> str | None:
+    if character.character_id is None:
+        return None
+    if portraits.path_for(character.portrait_key) is None:
+        return None
+    version = quote(character.portrait_key or "portrait", safe="")
+    return (
+        f"/api/characters/{character.character_id}/portrait"
+        f"?version={version}"
+    )
+
+
+def _character_data(
+    world: WorldService,
+    portraits: CharacterPortraitStore,
+    character: object,
+) -> JsonObject:
+    state = world.database.get_character_combat_state(character.character_id)
+    room = (
+        world.get_room(character.current_room_id)
+        if character.current_room_id is not None
+        else None
+    )
     return {
         "id": character.character_id,
         "discord_user_id": character.discord_user_id,
         "name": character.name,
         "current_room_id": character.current_room_id,
+        "current_room_name": room.name if room is not None else None,
         "is_active": character.is_active,
+        "portrait_url": _character_portrait_url(character, portraits),
+        "race": character.race,
+        "lineage": character.lineage,
+        "hp": character.hp,
+        "max_hp": character.max_hp,
+        "status": state.status.value,
+    }
+
+
+def _character_admin_data(
+    world: WorldService,
+    portraits: CharacterPortraitStore,
+    character: object,
+) -> JsonObject:
+    character_id = character.character_id
+    if character_id is None:
+        raise ValueError("The character has not been saved.")
+
+    inventory = world.database.get_character_inventory(character_id)
+    equipped_slots = {
+        instance_id: slot.value
+        for slot, instance_id in inventory.equipment.items()
+    }
+    inventory_data: list[JsonObject] = []
+    for item in inventory.items:
+        summary = _catalog_item_summary(world, item.template_id)
+        inventory_data.append(
+            {
+                "id": item.instance_id,
+                **summary,
+                "quantity": item.quantity,
+                "durability": item.durability,
+                "equipped_slot": equipped_slots.get(item.instance_id),
+            }
+        )
+
+    equipment_data: list[JsonObject] = []
+    for slot, instance_id in inventory.equipment.items():
+        item = next(
+            (
+                candidate
+                for candidate in inventory.items
+                if candidate.instance_id == instance_id
+            ),
+            None,
+        )
+        summary = (
+            _catalog_item_summary(world, item.template_id)
+            if item is not None
+            else {
+                "template_id": instance_id,
+                "name": instance_id,
+                "description": "",
+            }
+        )
+        equipment_data.append(
+            {
+                "slot": slot.value,
+                "id": instance_id,
+                **summary,
+            }
+        )
+
+    combat_state = world.database.get_character_combat_state(character_id)
+    room = (
+        world.get_room(character.current_room_id)
+        if character.current_room_id is not None
+        else None
+    )
+    death_save_dc = (
+        10 + (abs(character.hp) + 1) // 2
+        if combat_state.status is CharacterCombatStatus.DOWNED
+        else None
+    )
+    return {
+        "kind": "character",
+        "source_id": str(character_id),
+        "id": character_id,
+        "discord_user_id": character.discord_user_id,
+        "name": character.name,
+        "description": "",
+        "portrait_url": _character_portrait_url(character, portraits),
+        "hp": character.hp,
+        "max_hp": character.max_hp,
+        "status": combat_state.status.value,
+        "failed_death_saves": combat_state.failed_death_saves,
+        "death_save_dc": death_save_dc,
+        "stance": character.stance.value,
+        "race": character.race,
+        "lineage": character.lineage,
+        "age": character.age,
+        "gender": character.gender,
+        "current_room_id": character.current_room_id,
+        "current_room_name": room.name if room is not None else None,
+        "is_active": character.is_active,
+        "attributes": dict(character.attributes),
+        "skills": dict(character.skills),
+        "inventory": inventory_data,
+        "equipment": equipment_data,
+        "wallet": {
+            "copper": inventory.copper,
+            "silver": inventory.silver,
+            "gold": inventory.gold,
+        },
+        "enemy": None,
     }
 
 
@@ -717,11 +850,13 @@ class DashboardAPI:
         world: WorldService,
         room_images: RoomImageStore | None = None,
         *,
+        portraits: CharacterPortraitStore | None = None,
         combat: CombatService | None = None,
         guild_id: int | None = None,
     ) -> None:
         self.world = world
         self.room_images = room_images or RoomImageStore()
+        self.portraits = portraits or CharacterPortraitStore()
         self.combat = combat or CombatService(world.database)
         self.guild_id = guild_id
         self._connection_trap_damage: dict[tuple[str, str], int] = {}
@@ -756,6 +891,40 @@ class DashboardAPI:
         if room is None:
             return None
         return self.room_images.path_for(room.scene_image_path)
+
+    def character_portrait_path(self, character_id: int) -> Path | None:
+        character = self.world.database.get_character_by_global_id(character_id)
+        if character is None:
+            return None
+        return self.portraits.path_for(character.portrait_key)
+
+    def upload_character_portrait(
+        self,
+        character_id: int,
+        content: bytes,
+    ) -> ApiResponse:
+        character = self.world.database.get_character_by_global_id(character_id)
+        if character is None:
+            return 404, {"error": f"Character {character_id} does not exist."}
+        try:
+            new_key = self.portraits.save(character_id, content)
+            try:
+                updated = self.world.database.set_character_portrait(
+                    character.discord_user_id,
+                    character_id,
+                    new_key,
+                )
+            except Exception:
+                self.portraits.remove(new_key)
+                raise
+            self.portraits.remove(character.portrait_key)
+            return 200, _character_admin_data(
+                self.world,
+                self.portraits,
+                updated,
+            )
+        except (InvalidPortraitError, ValueError, WorldError) as error:
+            return 400, {"error": str(error)}
 
     def handle(
         self,
@@ -962,8 +1131,274 @@ class DashboardAPI:
 
         if method == "GET" and path == "/api/characters":
             return 200, [
-                _character_data(character) for character in self.world.list_characters()
+                _character_data(self.world, self.portraits, character)
+                for character in self.world.list_characters()
             ]
+
+        character_match = re.fullmatch(r"/api/characters/([1-9][0-9]*)", path)
+        if character_match:
+            character_id = int(character_match.group(1))
+            character = self.world.database.get_character_by_global_id(
+                character_id
+            )
+            if character is None:
+                return 404, {
+                    "error": f"Character {character_id} does not exist."
+                }
+            if method == "GET":
+                return 200, _character_admin_data(
+                    self.world,
+                    self.portraits,
+                    character,
+                )
+            if method == "PATCH":
+                state = self.world.database.get_character_combat_state(
+                    character_id
+                )
+                inventory = self.world.database.get_character_inventory(
+                    character_id
+                )
+
+                stance_value = body.get("stance", character.stance.value)
+                try:
+                    stance = Stance(stance_value)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        "Stance must be steady, bad_stance, or prone."
+                    ) from error
+
+                status_value = body.get("status", state.status.value)
+                try:
+                    status = CharacterCombatStatus(status_value)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        "Status must be active, downed, stable, recovering, or dead."
+                    ) from error
+
+                attributes_raw = body.get(
+                    "attributes",
+                    dict(character.attributes),
+                )
+                if not isinstance(attributes_raw, dict):
+                    raise ValueError("'attributes' must be an object.")
+                attributes: dict[str, int] = {}
+                for attribute, value in attributes_raw.items():
+                    if not isinstance(attribute, str):
+                        raise ValueError("Attribute names must be text.")
+                    if isinstance(value, bool) or not isinstance(value, int):
+                        raise ValueError("Attribute values must be integers.")
+                    attributes[attribute] = value
+
+                skills_raw = body.get("skills", dict(character.skills))
+                if not isinstance(skills_raw, dict):
+                    raise ValueError("'skills' must be an object.")
+                skills: dict[str, int] = {}
+                for skill, rank in skills_raw.items():
+                    if not isinstance(skill, str):
+                        raise ValueError("Skill names must be text.")
+                    if isinstance(rank, bool) or not isinstance(rank, int):
+                        raise ValueError("Skill ranks must be integers.")
+                    skills[skill] = rank
+
+                wallet_raw = body.get(
+                    "wallet",
+                    {
+                        "copper": inventory.copper,
+                        "silver": inventory.silver,
+                        "gold": inventory.gold,
+                    },
+                )
+                if not isinstance(wallet_raw, dict):
+                    raise ValueError("'wallet' must be an object.")
+
+                current_room_id = (
+                    self._optional_text(body, "current_room_id")
+                    if "current_room_id" in body
+                    else character.current_room_id
+                )
+                updated = self.world.database.update_character_admin(
+                    character_id,
+                    name=(
+                        self._text(body, "name")
+                        if "name" in body
+                        else character.name
+                    ),
+                    hp=self._integer(body, "hp", default=character.hp),
+                    max_hp=self._integer(
+                        body,
+                        "max_hp",
+                        default=character.max_hp,
+                    ),
+                    stance=stance,
+                    lineage=(
+                        self._optional_text(body, "lineage")
+                        if "lineage" in body
+                        else character.lineage
+                    ),
+                    race=(
+                        self._optional_text(body, "race")
+                        if "race" in body
+                        else character.race
+                    ),
+                    age=(
+                        self._optional_text(body, "age")
+                        if "age" in body
+                        else character.age
+                    ),
+                    gender=(
+                        self._optional_text(body, "gender")
+                        if "gender" in body
+                        else character.gender
+                    ),
+                    attributes=attributes,
+                    skills=skills,
+                    status=status,
+                    failed_death_saves=self._integer(
+                        body,
+                        "failed_death_saves",
+                        default=state.failed_death_saves,
+                    ),
+                    current_room_id=current_room_id,
+                    copper=self._integer(
+                        wallet_raw,
+                        "copper",
+                        default=inventory.copper,
+                    ),
+                    silver=self._integer(
+                        wallet_raw,
+                        "silver",
+                        default=inventory.silver,
+                    ),
+                    gold=self._integer(
+                        wallet_raw,
+                        "gold",
+                        default=inventory.gold,
+                    ),
+                )
+                return 200, _character_admin_data(
+                    self.world,
+                    self.portraits,
+                    updated,
+                )
+
+        character_items_match = re.fullmatch(
+            r"/api/characters/([1-9][0-9]*)/items",
+            path,
+        )
+        if character_items_match and method == "POST":
+            character_id = int(character_items_match.group(1))
+            if self.world.database.get_character_by_global_id(character_id) is None:
+                return 404, {
+                    "error": f"Character {character_id} does not exist."
+                }
+            template = self.world.catalog.get(
+                self._text(body, "template_id")
+            )
+            quantity = self._integer(body, "quantity", default=1)
+            if quantity <= 0:
+                raise ValueError("Quantity must be greater than zero.")
+            self.world.database.add_inventory_item(
+                character_id,
+                template.template_id,
+                quantity=quantity,
+                durability=template.durability,
+                stackable=template.stackable,
+            )
+            updated = self.world.database.get_character_by_global_id(
+                character_id
+            )
+            assert updated is not None
+            return 201, _character_admin_data(
+                self.world,
+                self.portraits,
+                updated,
+            )
+
+        character_item_match = re.fullmatch(
+            r"/api/characters/([1-9][0-9]*)/items/([^/]+)",
+            path,
+        )
+        if character_item_match and method in {"PATCH", "DELETE"}:
+            character_id = int(character_item_match.group(1))
+            instance_id = character_item_match.group(2)
+            character = self.world.database.get_character_by_global_id(
+                character_id
+            )
+            if character is None:
+                return 404, {
+                    "error": f"Character {character_id} does not exist."
+                }
+
+            inventory = self.world.database.get_character_inventory(
+                character_id
+            )
+            item = next(
+                (
+                    candidate
+                    for candidate in inventory.items
+                    if candidate.instance_id == instance_id
+                ),
+                None,
+            )
+            if item is None:
+                return 404, {"error": "That item is not in this inventory."}
+
+            equipped_slot = next(
+                (
+                    slot
+                    for slot, equipped_id in inventory.equipment.items()
+                    if equipped_id == instance_id
+                ),
+                None,
+            )
+            if method == "DELETE":
+                quantity = 0
+                durability = item.durability
+                parsed_slot = None
+            else:
+                quantity = self._integer(
+                    body,
+                    "quantity",
+                    default=item.quantity,
+                )
+                durability_value = body.get("durability", item.durability)
+                if durability_value is not None and (
+                    isinstance(durability_value, bool)
+                    or not isinstance(durability_value, int)
+                ):
+                    raise ValueError("'durability' must be an integer or null.")
+                durability = durability_value
+
+                if "equipped_slot" not in body:
+                    parsed_slot = equipped_slot
+                else:
+                    slot_value = body.get("equipped_slot")
+                    if slot_value is None or slot_value == "":
+                        parsed_slot = None
+                    else:
+                        try:
+                            parsed_slot = EquipmentSlot(slot_value)
+                        except (TypeError, ValueError) as error:
+                            raise ValueError(
+                                "Unknown equipment slot."
+                            ) from error
+
+            self.world.database.set_character_inventory_item_admin(
+                character_id,
+                instance_id,
+                quantity=quantity,
+                durability=durability,
+                equipped_slot=parsed_slot,
+            )
+            updated = self.world.database.get_character_by_global_id(
+                character_id
+            )
+            assert updated is not None
+            return 200, _character_admin_data(
+                self.world,
+                self.portraits,
+                updated,
+            )
 
         if method == "GET" and path == "/api/items":
             return 200, [

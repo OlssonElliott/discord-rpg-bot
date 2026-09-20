@@ -56,6 +56,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
+import { CharacterWorkspace } from './character-workspace';
 import { CombatWorkspace } from './combat-workspace';
 import {
   api,
@@ -272,7 +273,7 @@ function graphEdges(graph: AreaGraphData): Edge[] {
 }
 
 export function DungeonEditor() {
-  const [workspaceMode, setWorkspaceMode] = useState<'locations' | 'combat'>('locations');
+  const [workspaceMode, setWorkspaceMode] = useState<'locations' | 'characters' | 'combat'>('locations');
   const [combatScene, setCombatScene] = useState<CombatSceneData | null>(null);
   const [combatBusy, setCombatBusy] = useState(false);
   const [areas, setAreas] = useState<AreaSummary[]>([]);
@@ -726,11 +727,23 @@ export function DungeonEditor() {
     <main className="editor-shell">
       <header className="editor-header">
         <div className="brand-mark">
-          {workspaceMode === 'locations' ? <Map size={19} /> : <Swords size={19} />}
+          {workspaceMode === 'locations' ? (
+            <Map size={19} />
+          ) : workspaceMode === 'characters' ? (
+            <Users size={19} />
+          ) : (
+            <Swords size={19} />
+          )}
         </div>
         <div className="editor-title">
           <p className="kicker">DM workspace</p>
-          <h1>{workspaceMode === 'locations' ? 'Location editor' : 'Combat'}</h1>
+          <h1>
+            {workspaceMode === 'locations'
+              ? 'Location editor'
+              : workspaceMode === 'characters'
+                ? 'Characters'
+                : 'Combat'}
+          </h1>
         </div>
         <nav className="workspace-tabs" aria-label="DM workspace">
           <button
@@ -742,24 +755,33 @@ export function DungeonEditor() {
           </button>
           <button
             type="button"
+            className={workspaceMode === 'characters' ? 'active' : ''}
+            onClick={() => setWorkspaceMode('characters')}
+          >
+            <Users size={14} /> Characters
+          </button>
+          <button
+            type="button"
             className={workspaceMode === 'combat' ? 'active' : ''}
             onClick={() => setWorkspaceMode('combat')}
           >
             <Swords size={14} /> Combat
           </button>
         </nav>
-        <NativeSelect
-          aria-label="Current area"
-          className="area-select"
-          value={areaId}
-          onChange={(event) => setAreaId(event.target.value)}
-        >
-          {areas.map((area) => (
-            <NativeSelectOption key={area.id} value={area.id}>
-              {area.name} · {area.room_count} locations
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+        {workspaceMode !== 'characters' && (
+          <NativeSelect
+            aria-label="Current area"
+            className="area-select"
+            value={areaId}
+            onChange={(event) => setAreaId(event.target.value)}
+          >
+            {areas.map((area) => (
+              <NativeSelectOption key={area.id} value={area.id}>
+                {area.name} · {area.room_count} locations
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        )}
         {workspaceMode === 'locations' && (
           <>
             <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
@@ -773,9 +795,11 @@ export function DungeonEditor() {
             </Button>
           </>
         )}
-        <Button variant="outline" size="sm" onClick={() => setEnemyLibraryOpen(true)}>
-          <Skull /> Enemy library
-        </Button>
+        {workspaceMode !== 'characters' && (
+          <Button variant="outline" size="sm" onClick={() => setEnemyLibraryOpen(true)}>
+            <Skull /> Enemy library
+          </Button>
+        )}
         <div className="header-status"><span /> {notice || 'Saved'}</div>
         {workspaceMode === 'locations' && (
           <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
@@ -900,6 +924,18 @@ export function DungeonEditor() {
             },
             'Combat connection removed',
           )}
+        />
+      ) : workspaceMode === 'characters' ? (
+        <CharacterWorkspace
+          characters={characters}
+          catalogItems={catalogItems}
+          areas={areas}
+          onCharactersChanged={loadCharacters}
+          onNotice={(message) => {
+            setNotice(message);
+            window.setTimeout(() => setNotice(''), 1400);
+          }}
+          onError={setError}
         />
       ) : (
         <section className="editor-body">

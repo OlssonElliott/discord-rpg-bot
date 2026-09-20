@@ -8,6 +8,7 @@ from PIL import Image
 from rpg_bot.dashboard_api import DashboardAPI
 from rpg_bot.database import Database
 from rpg_bot.inventory import ItemCatalog
+from rpg_bot.portraits import CharacterPortraitStore
 from rpg_bot.room_images import RoomImageStore
 from rpg_bot.world import InventoryHolder
 from rpg_bot.world_service import WorldService
@@ -24,7 +25,15 @@ class DashboardAPITests(unittest.TestCase):
         self.room_images = RoomImageStore(
             Path(self.temp_directory.name) / "room_images"
         )
-        self.api = DashboardAPI(self.world, self.room_images, guild_id=44)
+        self.portraits = CharacterPortraitStore(
+            Path(self.temp_directory.name) / "characters"
+        )
+        self.api = DashboardAPI(
+            self.world,
+            self.room_images,
+            portraits=self.portraits,
+            guild_id=44,
+        )
 
     def tearDown(self) -> None:
         self.temp_directory.cleanup()
@@ -384,6 +393,181 @@ class DashboardAPITests(unittest.TestCase):
         status, ended = self.api.handle("DELETE", "/api/combat")
         self.assertEqual(status, 200)
         self.assertIsNone(ended["scene"])
+
+    def test_character_workspace_can_inspect_and_edit_character(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
+        self.api.handle(
+            "POST",
+            "/api/areas/keep/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+        character = self.database.create_character(
+            77,
+            "Mira",
+            18,
+            race="Human",
+            attributes={
+                "Strength": 12,
+                "Dexterity": 10,
+                "Arcana": 9,
+                "Vitality": 13,
+                "Insight": 14,
+                "Personality": 11,
+            },
+            skills={"Perception": 2},
+        )
+        assert character.character_id is not None
+        self.world.place_character(character.character_id, "hall")
+
+        list_status, listed = self.api.handle("GET", "/api/characters")
+        inspect_status, inspected = self.api.handle(
+            "GET",
+            f"/api/characters/{character.character_id}",
+        )
+
+        self.assertEqual(list_status, 200)
+        self.assertEqual(listed[0]["name"], "Mira")
+        self.assertEqual(listed[0]["current_room_name"], "Hall")
+        self.assertEqual(listed[0]["status"], "active")
+        self.assertEqual(inspect_status, 200)
+        self.assertEqual(inspected["attributes"]["Insight"], 14)
+        self.assertEqual(inspected["skills"]["Perception"], 2)
+
+        update_status, updated = self.api.handle(
+            "PATCH",
+            f"/api/characters/{character.character_id}",
+            {
+                "name": "Mira Thorn",
+                "hp": -3,
+                "max_hp": 20,
+                "status": "downed",
+                "failed_death_saves": 1,
+                "stance": "prone",
+                "race": "Human",
+                "lineage": "Northborn",
+                "age": "29",
+                "gender": "Female",
+                "current_room_id": "hall",
+                "attributes": {
+                    "Strength": 13,
+                    "Dexterity": 11,
+                    "Arcana": 9,
+                    "Vitality": 15,
+                    "Insight": 14,
+                    "Personality": 10,
+                },
+                "skills": {
+                    "Perception": 3,
+                    "Survival": 1,
+                },
+                "wallet": {
+                    "copper": 8,
+                    "silver": 4,
+                    "gold": 2,
+                },
+            },
+        )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["name"], "Mira Thorn")
+        self.assertEqual((updated["hp"], updated["max_hp"]), (-3, 20))
+        self.assertEqual(updated["status"], "downed")
+        self.assertEqual(updated["failed_death_saves"], 1)
+        self.assertEqual(updated["stance"], "prone")
+        self.assertEqual(updated["attributes"]["Vitality"], 15)
+        self.assertEqual(updated["skills"]["Survival"], 1)
+        self.assertEqual(updated["wallet"], {
+            "copper": 8,
+            "silver": 4,
+            "gold": 2,
+        })
+
+    def test_character_workspace_can_manage_inventory(self) -> None:
+        character = self.database.create_character(77, "Mira", 18)
+        assert character.character_id is not None
+        self.world.create_item_template(
+            {
+                "id": "test_blade",
+                "item_type": "weapon",
+                "name": "Test Blade",
+                "rarity": "common",
+                "value": 5,
+                "description": "A testing weapon.",
+                "weight": 1,
+                "grip": "one_handed",
+                "durability": 6,
+                "damage_parts": [
+                    {"amount": 6, "damage_type": "slash"}
+                ],
+            }
+        )
+
+        add_status, added = self.api.handle(
+            "POST",
+            f"/api/characters/{character.character_id}/items",
+            {"template_id": "test_blade", "quantity": 1},
+        )
+        self.assertEqual(add_status, 201)
+        item = next(
+            item
+            for item in added["inventory"]
+            if item["template_id"] == "test_blade"
+        )
+
+        edit_status, edited = self.api.handle(
+            "PATCH",
+            (
+                f"/api/characters/{character.character_id}"
+                f"/items/{item['id']}"
+            ),
+            {
+                "quantity": 2,
+                "durability": 4,
+                "equipped_slot": "main_hand",
+            },
+        )
+        self.assertEqual(edit_status, 200)
+        edited_item = next(
+            candidate
+            for candidate in edited["inventory"]
+            if candidate["id"] == item["id"]
+        )
+        self.assertEqual(edited_item["quantity"], 2)
+        self.assertEqual(edited_item["durability"], 4)
+        self.assertEqual(edited_item["equipped_slot"], "main_hand")
+
+        delete_status, after_delete = self.api.handle(
+            "DELETE",
+            (
+                f"/api/characters/{character.character_id}"
+                f"/items/{item['id']}"
+            ),
+        )
+        self.assertEqual(delete_status, 200)
+        self.assertFalse(
+            any(
+                candidate["id"] == item["id"]
+                for candidate in after_delete["inventory"]
+            )
+        )
+
+    def test_character_workspace_can_upload_portrait(self) -> None:
+        character = self.database.create_character(77, "Mira", 18)
+        assert character.character_id is not None
+        image = Image.new("RGB", (320, 240), "white")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+
+        status, updated = self.api.upload_character_portrait(
+            character.character_id,
+            buffer.getvalue(),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIsNotNone(updated["portrait_url"])
+        self.assertIsNotNone(
+            self.api.character_portrait_path(character.character_id)
+        )
 
     def test_character_combatant_can_be_inspected(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
