@@ -36,6 +36,44 @@ export type CatalogItem = {
   affected_amount?: number;
 };
 
+export type EnemyTemplateData = {
+  id: string;
+  name: string;
+  description: string;
+  race: string;
+  difficulty_level: number;
+  strength: number;
+  dexterity: number;
+  arcana: number;
+  vitality: number;
+  insight: number;
+  personality: number;
+  max_hp: number;
+  armor: number;
+  magical_resistance: number;
+  attack_dc: number;
+  defense_dc: number;
+  damage: string;
+  attack_profile: string;
+  special_ability: string | null;
+  typical_behaviour: string;
+  main_hand_item_id: string | null;
+  off_hand_item_id: string | null;
+  armor_item_id: string | null;
+};
+
+export type PlacedEnemy = {
+  id: string;
+  room_id: string;
+  template_id: string | null;
+  template_name: string | null;
+  name: string;
+  description: string;
+  current_hp: number | null;
+  max_hp: number | null;
+  status: 'active' | 'dead' | 'fled';
+};
+
 export type RoomData = {
   id: string;
   area_id: string;
@@ -45,7 +83,7 @@ export type RoomData = {
   position: { x: number; y: number };
   counts: { players: number; enemies: number; items: number; containers: number; room_features?: number };
   players: { id: number; name: string }[];
-  enemies: { id: string; name: string; description?: string }[];
+  enemies: PlacedEnemy[];
   npcs: { id: string; name: string; description?: string }[];
   containers: { id: string; name: string; description?: string }[];
   loose_items: { id: string; name: string; description?: string; quantity: number }[];

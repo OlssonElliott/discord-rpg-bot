@@ -617,6 +617,42 @@ class Database:
                 description TEXT,
                 FOREIGN KEY (room_id) REFERENCES rooms(id)
             );
+            CREATE TABLE IF NOT EXISTS enemy_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                race TEXT NOT NULL DEFAULT 'Unknown',
+                difficulty_level INTEGER NOT NULL DEFAULT 1 CHECK (difficulty_level >= 0),
+                strength INTEGER NOT NULL DEFAULT 0 CHECK (strength >= 0),
+                dexterity INTEGER NOT NULL DEFAULT 0 CHECK (dexterity >= 0),
+                arcana INTEGER NOT NULL DEFAULT 0 CHECK (arcana >= 0),
+                vitality INTEGER NOT NULL DEFAULT 0 CHECK (vitality >= 0),
+                insight INTEGER NOT NULL DEFAULT 0 CHECK (insight >= 0),
+                personality INTEGER NOT NULL DEFAULT 0 CHECK (personality >= 0),
+                max_hp INTEGER NOT NULL DEFAULT 7 CHECK (max_hp > 0),
+                armor INTEGER NOT NULL DEFAULT 0 CHECK (armor >= 0),
+                magical_resistance INTEGER NOT NULL DEFAULT 0 CHECK (magical_resistance >= 0),
+                attack_dc INTEGER NOT NULL DEFAULT 12 CHECK (attack_dc > 0),
+                defense_dc INTEGER NOT NULL DEFAULT 12 CHECK (defense_dc > 0),
+                damage TEXT NOT NULL DEFAULT '1d4',
+                attack_profile TEXT NOT NULL DEFAULT 'Basic attack',
+                special_ability TEXT,
+                typical_behaviour TEXT NOT NULL DEFAULT 'Unknown',
+                main_hand_item_id TEXT,
+                off_hand_item_id TEXT,
+                armor_item_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS world_enemies (
+                entity_id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                current_hp INTEGER NOT NULL CHECK (current_hp >= 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'dead', 'fled')),
+                FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES enemy_templates(id)
+            );
+            CREATE INDEX IF NOT EXISTS world_enemies_by_template
+                ON world_enemies(template_id);
             CREATE TABLE IF NOT EXISTS container_templates (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -4156,6 +4192,385 @@ class Database:
                 "UPDATE game_state SET lock_state = ? WHERE id = 1", (state.value,)
             )
         return state
+
+    def list_enemy_templates(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, description, race, difficulty_level,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                       damage, attack_profile, special_ability, typical_behaviour,
+                       main_hand_item_id, off_hand_item_id, armor_item_id
+                FROM enemy_templates
+                ORDER BY name COLLATE NOCASE, id
+                """
+            ).fetchall()
+        return tuple(self._enemy_template_from_row(row) for row in rows)
+
+    def get_enemy_template(self, template_id: str):
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, name, description, race, difficulty_level,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                       damage, attack_profile, special_ability, typical_behaviour,
+                       main_hand_item_id, off_hand_item_id, armor_item_id
+                FROM enemy_templates
+                WHERE id = ?
+                """,
+                (template_id,),
+            ).fetchone()
+        return self._enemy_template_from_row(row) if row is not None else None
+
+    def create_enemy_template(self, template):
+        clean_id = self._clean_identifier(
+            template.template_id, "Enemy template ID"
+        )
+        clean_name = self._clean_name(
+            template.name, "Enemy template name"
+        )
+        with self._connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO enemy_templates (
+                        id, name, description, race, difficulty_level,
+                        strength, dexterity, arcana, vitality, insight, personality,
+                        max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                        damage, attack_profile, special_ability, typical_behaviour,
+                        main_hand_item_id, off_hand_item_id, armor_item_id
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        clean_id,
+                        clean_name,
+                        template.description,
+                        template.race,
+                        template.difficulty_level,
+                        template.strength,
+                        template.dexterity,
+                        template.arcana,
+                        template.vitality,
+                        template.insight,
+                        template.personality,
+                        template.max_hp,
+                        template.armor,
+                        template.magical_resistance,
+                        template.attack_dc,
+                        template.defense_dc,
+                        template.damage,
+                        template.attack_profile,
+                        template.special_ability,
+                        template.typical_behaviour,
+                        template.main_hand_item_id,
+                        template.off_hand_item_id,
+                        template.armor_item_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Enemy template '{clean_id}' already exists."
+                ) from error
+
+        created = self.get_enemy_template(clean_id)
+        assert created is not None
+        return created
+
+    def update_enemy_template(self, template_id: str, template):
+        clean_id = self._clean_identifier(
+            template_id, "Enemy template ID"
+        )
+        clean_name = self._clean_name(
+            template.name, "Enemy template name"
+        )
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE enemy_templates
+                SET name = ?, description = ?, race = ?, difficulty_level = ?,
+                    strength = ?, dexterity = ?, arcana = ?, vitality = ?,
+                    insight = ?, personality = ?, max_hp = ?, armor = ?,
+                    magical_resistance = ?, attack_dc = ?, defense_dc = ?,
+                    damage = ?, attack_profile = ?, special_ability = ?,
+                    typical_behaviour = ?, main_hand_item_id = ?,
+                    off_hand_item_id = ?, armor_item_id = ?
+                WHERE id = ?
+                """,
+                (
+                    clean_name,
+                    template.description,
+                    template.race,
+                    template.difficulty_level,
+                    template.strength,
+                    template.dexterity,
+                    template.arcana,
+                    template.vitality,
+                    template.insight,
+                    template.personality,
+                    template.max_hp,
+                    template.armor,
+                    template.magical_resistance,
+                    template.attack_dc,
+                    template.defense_dc,
+                    template.damage,
+                    template.attack_profile,
+                    template.special_ability,
+                    template.typical_behaviour,
+                    template.main_hand_item_id,
+                    template.off_hand_item_id,
+                    template.armor_item_id,
+                    clean_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Enemy template '{clean_id}' does not exist."
+                )
+
+            connection.execute(
+                """
+                UPDATE world_enemies
+                SET current_hp = MIN(current_hp, ?)
+                WHERE template_id = ?
+                """,
+                (template.max_hp, clean_id),
+            )
+
+        updated = self.get_enemy_template(clean_id)
+        assert updated is not None
+        return updated
+
+    def remove_enemy_template(self, template_id: str) -> None:
+        clean_id = self._clean_identifier(
+            template_id, "Enemy template ID"
+        )
+        with self._connect() as connection:
+            try:
+                cursor = connection.execute(
+                    "DELETE FROM enemy_templates WHERE id = ?",
+                    (clean_id,),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    "Enemy templates cannot be removed while placed "
+                    "enemies use them."
+                ) from error
+
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Enemy template '{clean_id}' does not exist."
+                )
+
+    def create_enemy_instance(
+        self,
+        room_id: str,
+        template_id: str,
+        *,
+        instance_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+    ):
+        template = self.get_enemy_template(template_id)
+        if template is None:
+            raise NotFoundError(
+                f"Enemy template '{template_id}' does not exist."
+            )
+
+        clean_id = self._clean_identifier(
+            instance_id or f"{template.template_id}_{uuid4().hex[:12]}",
+            "Enemy ID",
+        )
+        clean_name = self._clean_name(
+            name or template.name, "Enemy name"
+        )
+        resolved_description = (
+            template.description if description is None else description
+        )
+
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO world_entities (
+                        id, room_id, kind, name, description
+                    ) VALUES (?, ?, 'enemy', ?, ?)
+                    """,
+                    (
+                        clean_id,
+                        room_id,
+                        clean_name,
+                        resolved_description,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO world_enemies (
+                        entity_id, template_id, current_hp, status
+                    ) VALUES (?, ?, ?, 'active')
+                    """,
+                    (
+                        clean_id,
+                        template.template_id,
+                        template.max_hp,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Enemy '{clean_id}' already exists."
+                ) from error
+
+        created = self.get_enemy_instance(clean_id)
+        assert created is not None
+        return created
+
+    def get_enemy_instance(self, enemy_id: str):
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT entity.id, entity.room_id, enemy.template_id,
+                       entity.name, entity.description,
+                       enemy.current_hp, enemy.status
+                FROM world_entities AS entity
+                JOIN world_enemies AS enemy
+                  ON enemy.entity_id = entity.id
+                WHERE entity.id = ? AND entity.kind = 'enemy'
+                """,
+                (enemy_id,),
+            ).fetchone()
+
+        return (
+            self._enemy_instance_from_row(row)
+            if row is not None
+            else None
+        )
+
+    def list_room_enemy_instances(self, room_id: str):
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            rows = connection.execute(
+                """
+                SELECT entity.id, entity.room_id, enemy.template_id,
+                       entity.name, entity.description,
+                       enemy.current_hp, enemy.status
+                FROM world_entities AS entity
+                JOIN world_enemies AS enemy
+                  ON enemy.entity_id = entity.id
+                WHERE entity.room_id = ? AND entity.kind = 'enemy'
+                ORDER BY entity.name COLLATE NOCASE, entity.id
+                """,
+                (room_id,),
+            ).fetchall()
+
+        return tuple(
+            self._enemy_instance_from_row(row)
+            for row in rows
+        )
+
+    def update_enemy_instance(self, enemy):
+        template = self.get_enemy_template(enemy.template_id)
+        if template is None:
+            raise NotFoundError(
+                f"Enemy template '{enemy.template_id}' does not exist."
+            )
+
+        if enemy.current_hp < 0 or enemy.current_hp > template.max_hp:
+            raise ValueError(
+                f"Enemy HP must be between 0 and {template.max_hp}."
+            )
+
+        clean_name = self._clean_name(enemy.name, "Enemy name")
+
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT 1 FROM world_entities
+                WHERE id = ? AND kind = 'enemy'
+                """,
+                (enemy.id,),
+            ).fetchone()
+
+            if existing is None:
+                raise NotFoundError(
+                    f"Enemy '{enemy.id}' does not exist."
+                )
+
+            connection.execute(
+                """
+                UPDATE world_entities
+                SET name = ?, description = ?
+                WHERE id = ?
+                """,
+                (
+                    clean_name,
+                    enemy.description,
+                    enemy.id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE world_enemies
+                SET current_hp = ?, status = ?
+                WHERE entity_id = ?
+                """,
+                (
+                    enemy.current_hp,
+                    enemy.status.value,
+                    enemy.id,
+                ),
+            )
+
+        updated = self.get_enemy_instance(enemy.id)
+        assert updated is not None
+        return updated
+
+    @staticmethod
+    def _enemy_template_from_row(row):
+        from .enemies import EnemyTemplate
+
+        return EnemyTemplate(
+            template_id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            race=row["race"],
+            difficulty_level=row["difficulty_level"],
+            strength=row["strength"],
+            dexterity=row["dexterity"],
+            arcana=row["arcana"],
+            vitality=row["vitality"],
+            insight=row["insight"],
+            personality=row["personality"],
+            max_hp=row["max_hp"],
+            armor=row["armor"],
+            magical_resistance=row["magical_resistance"],
+            attack_dc=row["attack_dc"],
+            defense_dc=row["defense_dc"],
+            damage=row["damage"],
+            attack_profile=row["attack_profile"],
+            special_ability=row["special_ability"],
+            typical_behaviour=row["typical_behaviour"],
+            main_hand_item_id=row["main_hand_item_id"],
+            off_hand_item_id=row["off_hand_item_id"],
+            armor_item_id=row["armor_item_id"],
+        )
+
+    @staticmethod
+    def _enemy_instance_from_row(row):
+        from .enemies import EnemyInstance, EnemyStatus
+
+        return EnemyInstance(
+            id=row["id"],
+            room_id=row["room_id"],
+            template_id=row["template_id"],
+            name=row["name"],
+            current_hp=row["current_hp"],
+            status=EnemyStatus(row["status"]),
+            description=row["description"],
+        )
 
     def create_world_entity(
         self,

@@ -1,12 +1,14 @@
 """Deterministic application service for world state and item transfers."""
 
 from .database import Database
+from .enemies import EnemyInstance, EnemyStatus, EnemyTemplate
 from .inventory import (
     DEFAULT_ITEM_CATALOG_PATH,
     InventoryState,
     ItemCatalog,
     ItemInstance,
     ItemTemplate,
+    ItemType,
 )
 from .models import Character
 from .dungeon import (
@@ -669,6 +671,176 @@ class WorldService:
                 )
                 migrated += stack.quantity
         return migrated
+
+    def list_enemy_templates(self) -> tuple[EnemyTemplate, ...]:
+        return self.database.list_enemy_templates()
+
+    def get_enemy_template(
+        self, template_id: str
+    ) -> EnemyTemplate | None:
+        return self.database.get_enemy_template(template_id)
+
+    def create_enemy_template(
+        self, template: EnemyTemplate
+    ) -> EnemyTemplate:
+        self._validate_enemy_equipment_template(template)
+        return self.database.create_enemy_template(template)
+
+    def update_enemy_template(
+        self,
+        template_id: str,
+        template: EnemyTemplate,
+    ) -> EnemyTemplate:
+        self._validate_enemy_equipment_template(template)
+        return self.database.update_enemy_template(
+            template_id, template
+        )
+
+    def remove_enemy_template(self, template_id: str) -> None:
+        self.database.remove_enemy_template(template_id)
+
+    def place_enemy(
+        self,
+        room_id: str,
+        template_id: str,
+        *,
+        instance_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> EnemyInstance:
+        template = self.database.get_enemy_template(template_id)
+        if template is None:
+            from .world import NotFoundError
+
+            raise NotFoundError(
+                f"Enemy template '{template_id}' does not exist."
+            )
+
+        self._validate_enemy_equipment_template(template)
+        enemy = self.database.create_enemy_instance(
+            room_id,
+            template_id,
+            instance_id=instance_id,
+            name=name,
+            description=description,
+        )
+
+        try:
+            equipment_ids = dict.fromkeys(
+                item_id
+                for item_id in (
+                    template.main_hand_item_id,
+                    template.off_hand_item_id,
+                    template.armor_item_id,
+                )
+                if item_id is not None
+            )
+            for item_id in equipment_ids:
+                self.place_catalog_item(
+                    InventoryHolder.entity(enemy.id),
+                    item_id,
+                )
+        except Exception:
+            self.database.remove_world_entity(enemy.id)
+            raise
+
+        return enemy
+
+    def get_enemy(
+        self, enemy_id: str
+    ) -> EnemyInstance | None:
+        return self.database.get_enemy_instance(enemy_id)
+
+    def list_room_enemies(
+        self, room_id: str
+    ) -> tuple[EnemyInstance, ...]:
+        return self.database.list_room_enemy_instances(room_id)
+
+    def update_enemy(
+        self,
+        enemy_id: str,
+        *,
+        name: str,
+        description: str | None,
+        current_hp: int,
+        status: EnemyStatus | str | None = None,
+    ) -> EnemyInstance:
+        from .world import NotFoundError
+
+        current = self.database.get_enemy_instance(enemy_id)
+        if current is None:
+            raise NotFoundError(
+                f"Enemy '{enemy_id}' does not exist."
+            )
+
+        if status is None:
+            parsed_status = (
+                EnemyStatus.DEAD
+                if current_hp == 0
+                else current.status
+            )
+        else:
+            try:
+                parsed_status = (
+                    status
+                    if isinstance(status, EnemyStatus)
+                    else EnemyStatus(status)
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "Enemy status must be active, dead, or fled."
+                ) from error
+
+        return self.database.update_enemy_instance(
+            EnemyInstance(
+                id=current.id,
+                room_id=current.room_id,
+                template_id=current.template_id,
+                name=name,
+                current_hp=current_hp,
+                status=parsed_status,
+                description=description,
+            )
+        )
+
+    def _validate_enemy_equipment_template(
+        self,
+        template: EnemyTemplate,
+    ) -> None:
+        equipment = (
+            (
+                "main hand",
+                template.main_hand_item_id,
+                ItemType.WEAPON,
+            ),
+            (
+                "off hand",
+                template.off_hand_item_id,
+                ItemType.WEAPON,
+            ),
+            (
+                "armor",
+                template.armor_item_id,
+                ItemType.ARMOR,
+            ),
+        )
+
+        for label, item_id, expected_type in equipment:
+            if item_id is None:
+                continue
+
+            try:
+                item = self.catalog.get(item_id)
+            except ValueError as error:
+                raise ValueError(
+                    f"Enemy {label} item '{item_id}' does not exist."
+                ) from error
+
+            if item.item_type is not expected_type:
+                raise ValueError(
+                    f"Enemy {label} item '{item_id}' must be "
+                    f"{expected_type.value}."
+                )
 
     def create_entity(
         self,

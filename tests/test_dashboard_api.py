@@ -370,6 +370,147 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(deleted, {"deleted": "oak_table"})
         self.assertEqual(vault_feature, placed[1])
 
+    def test_enemy_templates_create_independent_persistent_room_instances(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "crypt", "name": "Crypt"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {
+                "id": "hall",
+                "name": "Hall",
+                "x": 0,
+                "y": 0,
+            },
+        )
+
+        item_status, _ = self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "rusty_sword",
+                "name": "Rusty Sword",
+                "item_type": "weapon",
+                "damage": 3,
+            },
+        )
+
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "skeleton_warrior",
+                "name": "Skeleton Warrior",
+                "race": "Undead",
+                "difficulty_level": 2,
+                "strength": 3,
+                "dexterity": 1,
+                "vitality": 3,
+                "max_hp": 10,
+                "armor": 1,
+                "attack_dc": 14,
+                "defense_dc": 11,
+                "damage": "1d6",
+                "attack_profile": "Heavy sword swing",
+                "special_ability": "Ignores ordinary fear.",
+                "typical_behaviour": "Slow and relentless.",
+                "main_hand_item_id": "rusty_sword",
+            },
+        )
+
+        first_status, first = self.api.handle(
+            "POST",
+            "/api/rooms/hall/enemies",
+            {"template_id": template["id"]},
+        )
+        second_status, second = self.api.handle(
+            "POST",
+            "/api/rooms/hall/enemies",
+            {"template_id": template["id"]},
+        )
+        graph_status, graph = self.api.handle(
+            "GET",
+            "/api/areas/crypt/graph",
+        )
+
+        self.assertEqual(item_status, 201)
+        self.assertEqual(template_status, 201)
+        self.assertEqual(first_status, 201)
+        self.assertEqual(second_status, 201)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(
+            (first["current_hp"], first["max_hp"]),
+            (10, 10),
+        )
+        self.assertEqual(
+            (second["current_hp"], second["max_hp"]),
+            (10, 10),
+        )
+        self.assertEqual(graph_status, 200)
+        self.assertEqual(
+            {
+                enemy["id"]
+                for enemy in graph["nodes"][0]["enemies"]
+            },
+            {first["id"], second["id"]},
+        )
+        self.assertEqual(
+            [
+                stack.item.id
+                for stack in self.world.inventory(
+                    InventoryHolder.entity(first["id"])
+                )
+            ],
+            ["rusty_sword"],
+        )
+
+        update_status, updated = self.api.handle(
+            "PATCH",
+            f"/api/enemies/{first['id']}",
+            {"current_hp": 3},
+        )
+        _, untouched = self.api.handle(
+            "GET",
+            f"/api/enemies/{second['id']}",
+        )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["current_hp"], 3)
+        self.assertEqual(untouched["current_hp"], 10)
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(first["id"])
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.current_hp, 3)
+
+        delete_in_use_status, _ = self.api.handle(
+            "DELETE",
+            "/api/enemy-templates/skeleton_warrior",
+        )
+        self.assertEqual(delete_in_use_status, 400)
+
+        self.api.handle(
+            "DELETE",
+            f"/api/enemies/{first['id']}",
+        )
+        self.api.handle(
+            "DELETE",
+            f"/api/enemies/{second['id']}",
+        )
+        delete_status, deleted = self.api.handle(
+            "DELETE",
+            "/api/enemy-templates/skeleton_warrior",
+        )
+        self.assertEqual(delete_status, 200)
+        self.assertEqual(
+            deleted,
+            {"deleted": "skeleton_warrior"},
+        )
+
     def test_room_image_can_be_uploaded_replaced_persisted_and_removed(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
         self.api.handle(

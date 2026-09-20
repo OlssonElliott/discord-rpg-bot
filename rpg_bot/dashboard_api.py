@@ -9,6 +9,7 @@ from urllib.parse import quote
 from .combat import CombatScene
 from .combat_service import CombatService
 from .dungeon import ConnectionType, TrapDamageType, TrapState
+from .enemies import EnemyInstance, EnemyTemplate
 from .inventory import ItemTemplate, ItemType, WeaponGrip
 from .room_images import InvalidRoomImageError, RoomImageStore
 from .world import (
@@ -239,6 +240,69 @@ def _container_data(container: object, contents: tuple[object, ...]) -> JsonObje
         "item_count": sum(item["quantity"] for item in item_data),
         "contents": item_data,
     }
+
+
+def _enemy_template_data(
+    template: EnemyTemplate,
+) -> JsonObject:
+    return {
+        "id": template.template_id,
+        "name": template.name,
+        "description": template.description or "",
+        "race": template.race,
+        "difficulty_level": template.difficulty_level,
+        "strength": template.strength,
+        "dexterity": template.dexterity,
+        "arcana": template.arcana,
+        "vitality": template.vitality,
+        "insight": template.insight,
+        "personality": template.personality,
+        "max_hp": template.max_hp,
+        "armor": template.armor,
+        "magical_resistance": template.magical_resistance,
+        "attack_dc": template.attack_dc,
+        "defense_dc": template.defense_dc,
+        "damage": template.damage,
+        "attack_profile": template.attack_profile,
+        "special_ability": template.special_ability,
+        "typical_behaviour": template.typical_behaviour,
+        "main_hand_item_id": template.main_hand_item_id,
+        "off_hand_item_id": template.off_hand_item_id,
+        "armor_item_id": template.armor_item_id,
+    }
+
+
+def _enemy_data(
+    enemy: EnemyInstance,
+    template: EnemyTemplate,
+) -> JsonObject:
+    return {
+        "id": enemy.id,
+        "room_id": enemy.room_id,
+        "template_id": enemy.template_id,
+        "template_name": template.name,
+        "name": enemy.name,
+        "description": enemy.description or "",
+        "current_hp": enemy.current_hp,
+        "max_hp": template.max_hp,
+        "status": enemy.status.value,
+    }
+
+
+def _legacy_enemy_data(entity: object) -> JsonObject:
+    return {
+        "id": entity.id,
+        "room_id": entity.room_id,
+        "template_id": None,
+        "template_name": None,
+        "name": entity.name,
+        "description": entity.description or "",
+        "current_hp": None,
+        "max_hp": None,
+        "status": "active",
+    }
+
+
 class DashboardAPI:
     """Translate HTTP-shaped requests into deterministic service calls."""
 
@@ -511,6 +575,59 @@ class DashboardAPI:
             )
             return 200, _container_template_data(template)
 
+        if method == "GET" and path == "/api/enemy-templates":
+            return 200, [
+                _enemy_template_data(template)
+                for template in self.world.list_enemy_templates()
+            ]
+
+        if method == "POST" and path == "/api/enemy-templates":
+            template = self.world.create_enemy_template(
+                self._enemy_template_from_body(body)
+            )
+            return 201, _enemy_template_data(template)
+
+        match = re.fullmatch(
+            r"/api/enemy-templates/([^/]+)", path
+        )
+        if match and method == "GET":
+            template = self.world.get_enemy_template(
+                match.group(1)
+            )
+            if template is None:
+                return 404, {
+                    "error": (
+                        f"Enemy template '{match.group(1)}' "
+                        "does not exist."
+                    )
+                }
+            return 200, _enemy_template_data(template)
+
+        if match and method == "PUT":
+            current = self.world.get_enemy_template(
+                match.group(1)
+            )
+            if current is None:
+                return 404, {
+                    "error": (
+                        f"Enemy template '{match.group(1)}' "
+                        "does not exist."
+                    )
+                }
+            template = self.world.update_enemy_template(
+                current.template_id,
+                self._enemy_template_from_body(
+                    body,
+                    template_id=current.template_id,
+                    current=current,
+                ),
+            )
+            return 200, _enemy_template_data(template)
+
+        if match and method == "DELETE":
+            self.world.remove_enemy_template(match.group(1))
+            return 200, {"deleted": match.group(1)}
+
         if method == "GET" and path == "/api/room-feature-templates":
             return 200, [
                 _room_feature_template_data(template)
@@ -617,6 +734,34 @@ class DashboardAPI:
                     for container in containers
                 ]
                 node["counts"]["containers"] = len(containers)
+
+                room = self.world.get_room(room_id)
+                enemy_instances = {
+                    enemy.id: enemy
+                    for enemy in self.world.list_room_enemies(room_id)
+                }
+                enemy_data: list[JsonObject] = []
+                if room is not None:
+                    for entity in room.enemies:
+                        enemy = enemy_instances.get(entity.id)
+                        if enemy is None:
+                            enemy_data.append(
+                                _legacy_enemy_data(entity)
+                            )
+                            continue
+                        template = self.world.get_enemy_template(
+                            enemy.template_id
+                        )
+                        if template is None:
+                            enemy_data.append(
+                                _legacy_enemy_data(entity)
+                            )
+                            continue
+                        enemy_data.append(
+                            _enemy_data(enemy, template)
+                        )
+                node["enemies"] = enemy_data
+
                 room_features = self.world.list_room_features(room_id)
                 node["room_features"] = [
                     _room_feature_data(feature) for feature in room_features
@@ -921,6 +1066,88 @@ class DashboardAPI:
                 InventoryHolder.entity(container_id), item_id
             )
             return 200, {"deleted": item_id}
+
+        match = re.fullmatch(
+            r"/api/rooms/([^/]+)/enemies", path
+        )
+        if match and method == "POST":
+            enemy = self.world.place_enemy(
+                match.group(1),
+                self._text(body, "template_id"),
+                instance_id=self._optional_text(body, "id"),
+                name=self._optional_text(body, "name"),
+                description=self._optional_text(
+                    body, "description"
+                ),
+            )
+            template = self.world.get_enemy_template(
+                enemy.template_id
+            )
+            assert template is not None
+            return 201, _enemy_data(enemy, template)
+
+        match = re.fullmatch(r"/api/enemies/([^/]+)", path)
+        if match and method == "GET":
+            enemy = self.world.get_enemy(match.group(1))
+            if enemy is None:
+                return 404, {
+                    "error": (
+                        f"Enemy '{match.group(1)}' does not exist."
+                    )
+                }
+            template = self.world.get_enemy_template(
+                enemy.template_id
+            )
+            assert template is not None
+            return 200, _enemy_data(enemy, template)
+
+        if match and method == "PATCH":
+            current = self.world.get_enemy(match.group(1))
+            if current is None:
+                return 404, {
+                    "error": (
+                        f"Enemy '{match.group(1)}' does not exist."
+                    )
+                }
+            enemy = self.world.update_enemy(
+                current.id,
+                name=(
+                    self._text(body, "name")
+                    if "name" in body
+                    else current.name
+                ),
+                description=(
+                    self._optional_text(body, "description")
+                    if "description" in body
+                    else current.description
+                ),
+                current_hp=self._integer(
+                    body,
+                    "current_hp",
+                    default=current.current_hp,
+                ),
+                status=(
+                    self._optional_text(body, "status")
+                    if "status" in body
+                    else None
+                ),
+            )
+            template = self.world.get_enemy_template(
+                enemy.template_id
+            )
+            assert template is not None
+            return 200, _enemy_data(enemy, template)
+
+        if match and method == "DELETE":
+            current = self.world.get_enemy(match.group(1))
+            if current is None:
+                return 404, {
+                    "error": (
+                        f"Enemy '{match.group(1)}' does not exist."
+                    )
+                }
+            self.world.remove_entity(current.id)
+            return 200, {"deleted": current.id}
 
         match = re.fullmatch(r"/api/rooms/([^/]+)/entities", path)
         if match and method == "POST":
@@ -1404,6 +1631,177 @@ class DashboardAPI:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"'{field}' must be an integer.")
         return value
+
+    @classmethod
+    def _enemy_template_from_body(
+        cls,
+        body: JsonObject,
+        *,
+        template_id: str | None = None,
+        current: EnemyTemplate | None = None,
+    ) -> EnemyTemplate:
+        def text_value(
+            field: str,
+            default: str,
+        ) -> str:
+            if field in body:
+                return cls._text(body, field)
+            return default
+
+        def optional_value(
+            field: str,
+            default: str | None,
+        ) -> str | None:
+            if field in body:
+                return cls._optional_text(body, field)
+            return default
+
+        return EnemyTemplate(
+            template_id=(
+                template_id or cls._text(body, "id")
+            ),
+            name=(
+                cls._text(body, "name")
+                if current is None or "name" in body
+                else current.name
+            ),
+            description=optional_value(
+                "description",
+                (
+                    current.description
+                    if current is not None
+                    else None
+                ),
+            ),
+            race=text_value(
+                "race",
+                current.race if current is not None else "Unknown",
+            ),
+            difficulty_level=cls._integer(
+                body,
+                "difficulty_level",
+                default=(
+                    current.difficulty_level
+                    if current is not None
+                    else 1
+                ),
+            ),
+            strength=cls._integer(
+                body,
+                "strength",
+                default=current.strength if current is not None else 0,
+            ),
+            dexterity=cls._integer(
+                body,
+                "dexterity",
+                default=current.dexterity if current is not None else 0,
+            ),
+            arcana=cls._integer(
+                body,
+                "arcana",
+                default=current.arcana if current is not None else 0,
+            ),
+            vitality=cls._integer(
+                body,
+                "vitality",
+                default=current.vitality if current is not None else 0,
+            ),
+            insight=cls._integer(
+                body,
+                "insight",
+                default=current.insight if current is not None else 0,
+            ),
+            personality=cls._integer(
+                body,
+                "personality",
+                default=(
+                    current.personality
+                    if current is not None
+                    else 0
+                ),
+            ),
+            max_hp=cls._integer(
+                body,
+                "max_hp",
+                default=current.max_hp if current is not None else 7,
+            ),
+            armor=cls._integer(
+                body,
+                "armor",
+                default=current.armor if current is not None else 0,
+            ),
+            magical_resistance=cls._integer(
+                body,
+                "magical_resistance",
+                default=(
+                    current.magical_resistance
+                    if current is not None
+                    else 0
+                ),
+            ),
+            attack_dc=cls._integer(
+                body,
+                "attack_dc",
+                default=current.attack_dc if current is not None else 12,
+            ),
+            defense_dc=cls._integer(
+                body,
+                "defense_dc",
+                default=current.defense_dc if current is not None else 12,
+            ),
+            damage=text_value(
+                "damage",
+                current.damage if current is not None else "1d4",
+            ),
+            attack_profile=text_value(
+                "attack_profile",
+                (
+                    current.attack_profile
+                    if current is not None
+                    else "Basic attack"
+                ),
+            ),
+            special_ability=optional_value(
+                "special_ability",
+                (
+                    current.special_ability
+                    if current is not None
+                    else None
+                ),
+            ),
+            typical_behaviour=text_value(
+                "typical_behaviour",
+                (
+                    current.typical_behaviour
+                    if current is not None
+                    else "Unknown"
+                ),
+            ),
+            main_hand_item_id=optional_value(
+                "main_hand_item_id",
+                (
+                    current.main_hand_item_id
+                    if current is not None
+                    else None
+                ),
+            ),
+            off_hand_item_id=optional_value(
+                "off_hand_item_id",
+                (
+                    current.off_hand_item_id
+                    if current is not None
+                    else None
+                ),
+            ),
+            armor_item_id=optional_value(
+                "armor_item_id",
+                (
+                    current.armor_item_id
+                    if current is not None
+                    else None
+                ),
+            ),
+        )
 
     @classmethod
     def _item_record(cls, body: JsonObject) -> dict[str, object]:
