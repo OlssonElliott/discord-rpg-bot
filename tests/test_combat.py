@@ -106,6 +106,17 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(door.source_connection_id, connection.id)
         self.assertIn("Side Room", door.description or "")
         self.assertEqual((door.x, door.y), (0.82, 0.5))
+        for feature in (
+            landmark
+            for landmark in scene.landmarks
+            if landmark.source_feature_id is not None
+        ):
+            assert feature.x is not None
+            assert feature.y is not None
+            self.assertFalse(
+                abs(feature.x - door.x) < 0.20
+                and abs(feature.y - door.y) < 0.14
+            )
         self.assertEqual(len(scene.routes), 1)
         self.assertEqual(
             {
@@ -198,6 +209,46 @@ class CombatServiceTests(unittest.TestCase):
             sorted(door.y for door in east_doors if door.y is not None),
             [0.44, 0.56],
         )
+
+    def test_custom_landmark_and_connection_can_be_removed(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        scene = self.service.add_landmark(
+            44,
+            "Broken balcony",
+            "A raised ledge overlooking the room.",
+        )
+        custom = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.feature_type == "custom"
+        )
+        self.assertEqual(custom.name, "Broken balcony")
+        self.assertIsNotNone(custom.x)
+        self.assertIsNotNone(custom.y)
+
+        scene = self.service.connect_landmarks(
+            44,
+            "room:center",
+            custom.id,
+            LandmarkDistance.CLOSE,
+        )
+        self.assertEqual(len(scene.routes), 1)
+
+        scene = self.service.disconnect_landmarks(
+            44,
+            "room:center",
+            custom.id,
+        )
+        self.assertEqual(scene.routes, ())
+
+        scene = self.service.remove_landmark(44, custom.id)
+        self.assertIsNone(scene.landmark(custom.id))
+
+    def test_source_landmark_cannot_be_removed_from_combat_scene(self) -> None:
+        self.service.start(44, self.hall.id)
+
+        with self.assertRaises(CombatError):
+            self.service.remove_landmark(44, "feature:stone_pillar")
 
     def test_feature_snapshot_does_not_change_mid_combat(self) -> None:
         self.service.start(44, self.hall.id)

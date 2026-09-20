@@ -244,6 +244,61 @@ class CombatRepository:
             assert ended is not None
             return self._load_scene(connection, ended)
 
+    def add_landmark(
+        self,
+        scene_id: int,
+        landmark: CombatLandmark,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if connection.execute(
+                "SELECT 1 FROM combat_scenes WHERE id = ? AND status = 'active'",
+                (scene_id,),
+            ).fetchone() is None:
+                raise ValueError("The combat scene is not active.")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO combat_landmarks (
+                        scene_id, id, name, description, source_feature_id,
+                        source_connection_id, feature_type, synthetic, x, y
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scene_id,
+                        landmark.id,
+                        landmark.name,
+                        landmark.description,
+                        landmark.source_feature_id,
+                        landmark.source_connection_id,
+                        landmark.feature_type,
+                        int(landmark.synthetic),
+                        landmark.x,
+                        landmark.y,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Combat landmark '{landmark.id}' already exists."
+                ) from error
+
+    def delete_landmark(
+        self,
+        scene_id: int,
+        landmark_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                DELETE FROM combat_landmarks
+                WHERE scene_id = ? AND id = ?
+                """,
+                (scene_id, landmark_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Unknown combat landmark '{landmark_id}'.")
+
     def set_landmark_position(
         self,
         scene_id: int,
@@ -311,6 +366,33 @@ class CombatRepository:
                     int(blocked),
                 ),
             )
+
+    def delete_route(
+        self,
+        scene_id: int,
+        source_landmark_id: str,
+        destination_landmark_id: str,
+    ) -> None:
+        source_landmark_id, destination_landmark_id = sorted(
+            (source_landmark_id, destination_landmark_id)
+        )
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                DELETE FROM combat_routes
+                WHERE scene_id = ?
+                  AND source_landmark_id = ?
+                  AND destination_landmark_id = ?
+                """,
+                (
+                    scene_id,
+                    source_landmark_id,
+                    destination_landmark_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("That combat connection does not exist.")
 
     def set_combatant_position(
         self,

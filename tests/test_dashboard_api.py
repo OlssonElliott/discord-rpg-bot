@@ -207,6 +207,48 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(routed["scene"]["routes"][0]["obstacle"], "Fallen rubble")
 
+        delete_route_status, disconnected = self.api.handle(
+            "DELETE",
+            "/api/combat/routes",
+            {
+                "source_landmark_id": "feature:pillar",
+                "destination_landmark_id": "feature:table",
+            },
+        )
+        self.assertEqual(delete_route_status, 200)
+        self.assertEqual(disconnected["scene"]["routes"], [])
+
+        add_landmark_status, with_landmark = self.api.handle(
+            "POST",
+            "/api/combat/landmarks",
+            {
+                "name": "Broken balcony",
+                "description": "A raised ledge.",
+            },
+        )
+        self.assertEqual(add_landmark_status, 201)
+        custom = next(
+            landmark
+            for landmark in with_landmark["scene"]["landmarks"]
+            if landmark["feature_type"] == "custom"
+        )
+        self.assertEqual(custom["name"], "Broken balcony")
+        self.assertIsNotNone(custom["x"])
+        self.assertIsNotNone(custom["y"])
+
+        remove_landmark_status, without_landmark = self.api.handle(
+            "DELETE",
+            f"/api/combat/landmarks/{custom['id']}",
+        )
+        self.assertEqual(remove_landmark_status, 200)
+        self.assertNotIn(
+            custom["id"],
+            {
+                landmark["id"]
+                for landmark in without_landmark["scene"]["landmarks"]
+            },
+        )
+
         status, moved = self.api.handle(
             "PATCH",
             "/api/combat/combatants/enemy/bandit",

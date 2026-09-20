@@ -1,7 +1,9 @@
 """Application service for landmark-based combat scene state."""
 
+from dataclasses import replace
 import math
 import re
+from uuid import uuid4
 
 from .combat import (
     CombatLandmark,
@@ -25,6 +27,24 @@ class CombatService:
     """UI-independent combat scene orchestration."""
 
     CENTER_LANDMARK_ID = "room:center"
+    _LANDMARK_LAYOUT_SLOTS = (
+        (0.12, 0.18),
+        (0.80, 0.18),
+        (0.12, 0.82),
+        (0.80, 0.82),
+        (0.12, 0.34),
+        (0.32, 0.18),
+        (0.60, 0.18),
+        (0.80, 0.34),
+        (0.12, 0.66),
+        (0.32, 0.82),
+        (0.60, 0.82),
+        (0.80, 0.66),
+        (0.32, 0.34),
+        (0.60, 0.34),
+        (0.32, 0.66),
+        (0.60, 0.66),
+    )
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -119,6 +139,20 @@ class CombatService:
             )
             door_landmark_ids.append(landmark_id)
 
+        occupied_landmarks = [
+            landmark
+            for landmark in landmarks
+            if landmark.x is not None and landmark.y is not None
+        ]
+        positioned_landmarks: list[CombatLandmark] = []
+        for landmark in landmarks:
+            if landmark.x is None or landmark.y is None:
+                x, y = self._next_open_position(occupied_landmarks)
+                landmark = replace(landmark, x=x, y=y)
+                occupied_landmarks.append(landmark)
+            positioned_landmarks.append(landmark)
+        landmarks = positioned_landmarks
+
         combatants = [
             CombatantState(
                 CombatantKind.CHARACTER,
@@ -196,6 +230,42 @@ class CombatService:
             return 0.5 + offset, 0.82
         return 0.08, 0.5 + offset
 
+    @classmethod
+    def _next_open_position(
+        cls,
+        landmarks: list[CombatLandmark] | tuple[CombatLandmark, ...],
+    ) -> tuple[float, float]:
+        occupied = [
+            (landmark.x, landmark.y)
+            for landmark in landmarks
+            if landmark.x is not None and landmark.y is not None
+        ]
+
+        def is_free(candidate: tuple[float, float]) -> bool:
+            x, y = candidate
+            return all(
+                abs(x - occupied_x) >= 0.20 or abs(y - occupied_y) >= 0.14
+                for occupied_x, occupied_y in occupied
+            )
+
+        for candidate in cls._LANDMARK_LAYOUT_SLOTS:
+            if is_free(candidate):
+                return candidate
+
+        # Very crowded scenes still get a deterministic position instead of
+        # failing to start. The normal slots above cover ordinary room layouts.
+        return max(
+            cls._LANDMARK_LAYOUT_SLOTS,
+            key=lambda candidate: min(
+                (
+                    abs(candidate[0] - occupied_x) / 0.20
+                    + abs(candidate[1] - occupied_y) / 0.14
+                    for occupied_x, occupied_y in occupied
+                ),
+                default=float("inf"),
+            ),
+        )
+
     def current(self, guild_id: int) -> CombatScene | None:
         return self.repository.get_active_scene(guild_id)
 
@@ -204,6 +274,72 @@ class CombatService:
         if scene is None:
             raise CombatError("There is no active combat scene.")
         return scene
+
+    def add_landmark(
+        self,
+        guild_id: int,
+        name: str,
+        description: str | None = None,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        name = name.strip()
+        if not name:
+            raise CombatError("Landmark name is required.")
+        x, y = self._next_open_position(scene.landmarks)
+        landmark = CombatLandmark(
+            id=f"custom:{uuid4().hex}",
+            name=name,
+            description=description.strip() if description and description.strip() else None,
+            feature_type="custom",
+            x=x,
+            y=y,
+        )
+        try:
+            self.repository.add_landmark(scene.id, landmark)
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def disconnect_landmarks(
+        self,
+        guild_id: int,
+        source_landmark_id: str,
+        destination_landmark_id: str,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        try:
+            self.repository.delete_route(
+                scene.id,
+                source_landmark_id,
+                destination_landmark_id,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def remove_landmark(
+        self,
+        guild_id: int,
+        landmark_id: str,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        landmark = scene.landmark(landmark_id)
+        if landmark is None:
+            raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
+        if landmark.feature_type != "custom":
+            raise CombatError("Only manually added combat landmarks can be removed.")
+        if any(
+            combatant.landmark_id == landmark_id
+            for combatant in scene.combatants
+        ):
+            raise CombatError(
+                "Move combatants away from this landmark before removing it."
+            )
+        try:
+            self.repository.delete_landmark(scene.id, landmark_id)
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
 
     def set_landmark_position(
         self,

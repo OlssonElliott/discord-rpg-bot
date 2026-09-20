@@ -317,6 +317,14 @@ class DashboardAPI:
                 self.combat.end(guild_id)
                 return 200, _combat_state_data(None, self.world)
 
+        if path == "/api/combat/landmarks" and method == "POST":
+            scene = self.combat.add_landmark(
+                self._combat_guild_id(),
+                self._text(body, "name"),
+                self._optional_text(body, "description"),
+            )
+            return 201, _combat_state_data(scene, self.world)
+
         match = re.fullmatch(r"/api/combat/landmarks/([^/]+)", path)
         if match and method == "PATCH":
             scene = self.combat.set_landmark_position(
@@ -324,6 +332,12 @@ class DashboardAPI:
                 match.group(1),
                 self._number(body, "x"),
                 self._number(body, "y"),
+            )
+            return 200, _combat_state_data(scene, self.world)
+        if match and method == "DELETE":
+            scene = self.combat.remove_landmark(
+                self._combat_guild_id(),
+                match.group(1),
             )
             return 200, _combat_state_data(scene, self.world)
 
@@ -335,6 +349,13 @@ class DashboardAPI:
                 self._text(body, "distance"),
                 obstacle=self._optional_text(body, "obstacle"),
                 blocked=self._boolean(body, "blocked", default=False),
+            )
+            return 200, _combat_state_data(scene, self.world)
+        if path == "/api/combat/routes" and method == "DELETE":
+            scene = self.combat.disconnect_landmarks(
+                self._combat_guild_id(),
+                self._text(body, "source_landmark_id"),
+                self._text(body, "destination_landmark_id"),
             )
             return 200, _combat_state_data(scene, self.world)
 

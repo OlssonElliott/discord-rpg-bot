@@ -137,16 +137,6 @@ button, input, textarea { font: inherit; }
 .combat-stage__heading h2, .combat-control-panel__heading h2 { margin: 3px 0 2px; font-size: 1.18rem; }
 .combat-stage__heading span { color: #7f8c9c; font-size: .75rem; }
 .combat-board { position: relative; height: calc(100% - 72px); min-height: 430px; overflow: hidden; border: 1px solid #313c4d; border-radius: 12px; background: radial-gradient(circle at 50% 45%, #222b38 0, #111925 56%, #0a1018 100%); box-shadow: inset 0 0 80px #0007; }
-.combat-route-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.combat-route-line { stroke: #73849a; stroke-width: 2; stroke-dasharray: 5 6; }
-.combat-route-line--blocked { stroke: #aa5656; stroke-dasharray: 3 5; }
-.combat-landmark { position: absolute; z-index: 2; width: 154px; min-height: 68px; padding: 9px 10px; cursor: grab; border: 1px solid #4b596d; border-radius: 9px; background: #111b2beF; box-shadow: 0 12px 28px #0008; transform: translate(-50%, -50%); user-select: none; }
-.combat-landmark:active { cursor: grabbing; }
-.combat-landmark--synthetic { border-style: dashed; border-color: #826640; background: #211b13e8; }
-.combat-landmark__title { display: flex; align-items: center; gap: 6px; color: #eef1f5; font-size: .77rem; }
-.combat-landmark__title svg { color: #d39a4a; }
-.combat-landmark__type { display: block; margin-top: 3px; color: #748297; font-size: .62rem; text-transform: uppercase; }
-.combat-landmark__occupants { display: grid; gap: 3px; margin-top: 7px; }
 .combat-token { display: flex; align-items: center; gap: 4px; padding: 3px 5px; color: #cfd7e1; font-size: .65rem; border-radius: 5px; background: #26364a; }
 .combat-token--enemy { color: #ffd0cc; background: #4a292d; }
 .combat-token small { margin-left: auto; color: #92a0b1; font-size: .57rem; }
@@ -170,7 +160,15 @@ button, input, textarea { font: inherit; }
 .combat-control-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid #26344a; }
 .combat-control-section h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 13px; font-size: .79rem; text-transform: uppercase; }
 .combat-control-section h3 svg { color: #d39a4a; }
-.combat-connection-help { margin: -3px 0 12px; color: #7f8c9c; font-size: .7rem; line-height: 1.45; }
+.combat-selection-section { display: grid; gap: 10px; }
+.combat-selection-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.combat-selection-title h3 { margin-bottom: 0; }
+.combat-selection-name { color: #eef1f5; font-size: .95rem; }
+.combat-selection-description, .combat-selection-meta { margin: 0; color: #8997a8; font-size: .73rem; line-height: 1.5; }
+.combat-selection-meta { color: #718096; }
+.combat-route-card { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; padding: 10px; color: #dce2e9; font-size: .72rem; text-align: center; border: 1px solid #2c3a50; border-radius: 7px; background: #111b2a; }
+.combat-route-card span { color: #d39a4a; }
+.combat-connection-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 4px; }
 .combat-control-section label { display: block; margin: 9px 0 5px; color: #8e9bae; font-size: .72rem; }
 .combat-control-section select, .combat-control-section input { background: #111b2a; }
 .combatant-editor-list { display: grid; gap: 9px; }
@@ -181,7 +179,8 @@ button, input, textarea { font: inherit; }
 .combat-checkbox { display: flex !important; align-items: center; gap: 7px; margin: 11px 0 !important; }
 .combat-checkbox input { width: 15px; height: 15px; }
 .combat-route-list { display: grid; gap: 5px; margin-top: 13px; }
-.combat-route-list p { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 0; padding: 6px 0; color: #abb6c4; font-size: .7rem; border-bottom: 1px solid #1e2b3e; }
+.combat-route-list button { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; width: 100%; margin: 0; padding: 7px 6px; color: #abb6c4; font-size: .7rem; text-align: left; border: 1px solid transparent; border-bottom-color: #1e2b3e; border-radius: 5px; }
+.combat-route-list button:hover, .combat-route-list button.selected { color: #e7edf4; border-color: #3c4c62; background: #172337; }
 .combat-route-list small { flex-basis: 100%; color: #7f8c9c; }
 .combat-route-list svg { color: #d86662; }
 .combat-end { width: 100%; margin-top: 24px; }

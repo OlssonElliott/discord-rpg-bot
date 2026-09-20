@@ -286,6 +286,7 @@ export function DungeonEditor() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [addRoomOpen, setAddRoomOpen] = useState(false);
+  const [addCombatLandmarkOpen, setAddCombatLandmarkOpen] = useState(false);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -763,6 +764,15 @@ export function DungeonEditor() {
             <Plus /> Add location
           </Button>
         )}
+        {workspaceMode === 'combat' && combatScene && (
+          <Button
+            className="add-location"
+            onClick={() => setAddCombatLandmarkOpen(true)}
+            disabled={combatBusy}
+          >
+            <Plus /> Add landmark
+          </Button>
+        )}
       </header>
 
       {error && <div className="error-banner"><CircleAlert size={15} />{error}<button onClick={() => setError('')}>Dismiss</button></div>}
@@ -804,7 +814,23 @@ export function DungeonEditor() {
                 blocked,
               }),
             },
-            'Combat route saved',
+            'Combat connection saved',
+          )}
+          onDeleteLandmark={(landmarkId) => updateCombat(
+            `/combat/landmarks/${landmarkId}`,
+            { method: 'DELETE' },
+            'Landmark removed',
+          )}
+          onDeleteConnection={(sourceId, destinationId) => updateCombat(
+            '/combat/routes',
+            {
+              method: 'DELETE',
+              body: JSON.stringify({
+                source_landmark_id: sourceId,
+                destination_landmark_id: destinationId,
+              }),
+            },
+            'Combat connection removed',
           )}
         />
       ) : (
@@ -957,6 +983,18 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
+      <CombatLandmarkDialog
+        open={addCombatLandmarkOpen}
+        onOpenChange={setAddCombatLandmarkOpen}
+        onCreate={(name, description) => updateCombat(
+          '/combat/landmarks',
+          {
+            method: 'POST',
+            body: JSON.stringify({ name, description }),
+          },
+          'Landmark added',
+        )}
+      />
       <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDisarmDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
@@ -1466,6 +1504,45 @@ function RoomDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenCha
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   return <EditorDialog open={open} onOpenChange={onOpenChange} title="Add location" description="Coordinates are assigned automatically; drag the node afterward." name={name} setName={setName} details={description} setDetails={setDescription} action="Add location" onSubmit={() => onCreate(name, description)} />;
+}
+
+function CombatLandmarkDialog({
+  open,
+  onOpenChange,
+  onCreate,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (name: string, description: string) => Promise<boolean>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  useEffect(() => {
+    if (!open) {
+      setName('');
+      setDescription('');
+    }
+  }, [open]);
+
+  return (
+    <EditorDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add landmark"
+      description="Add a combat-only landmark. It starts unconnected in a free part of the room."
+      name={name}
+      setName={setName}
+      details={description}
+      setDetails={setDescription}
+      action="Add landmark"
+      onSubmit={async () => {
+        if (await onCreate(name, description)) {
+          onOpenChange(false);
+        }
+      }}
+    />
+  );
 }
 
 function RoomFeatureDialog({
