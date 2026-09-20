@@ -886,6 +886,30 @@ class CombatRepository:
                     f"Unknown combatant '{kind.value}:{source_id}'."
                 )
 
+    def set_movement_remaining(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        remaining: int,
+    ) -> None:
+        if remaining < 0:
+            raise ValueError("Movement remaining cannot be negative.")
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET movement_remaining = ?
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (remaining, scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
     @staticmethod
     def _load_scene(
         connection: sqlite3.Connection,

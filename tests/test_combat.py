@@ -12,6 +12,7 @@ from rpg_bot.combat_service import CombatError, CombatService
 from rpg_bot.database import Database
 from rpg_bot.dungeon import ConnectionType
 from rpg_bot.inventory import EquipmentSlot
+from rpg_bot.models import CharacterCombatStatus
 from rpg_bot.world import EntityKind
 from rpg_bot.world_service import WorldService
 
@@ -859,6 +860,277 @@ class CombatServiceTests(unittest.TestCase):
                 for entry in scene.log_entries
             )
         )
+
+    def test_enemy_attack_can_reduce_character_below_zero_hp(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.database.set_hp(7, 2)
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[1, 4],
+        ):
+            scene, result = self.service.attack_character(
+                44,
+                str(self.olof.character_id),
+            )
+
+        self.assertEqual(result.target_hp, -2)
+        self.assertTrue(result.target_down)
+        self.assertFalse(result.target_dead)
+        self.assertEqual(result.target_status, "downed")
+        state = self.database.get_character_combat_state(
+            self.olof.character_id
+        )
+        self.assertEqual(state.status, CharacterCombatStatus.DOWNED)
+        self.assertTrue(
+            any(
+                "downed at -2 HP" in entry.message
+                and "Death Save DC is 11" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_reaching_negative_max_hp_kills_character_immediately(self) -> None:
+        fragile = self.database.create_character(
+            21,
+            "Fragile",
+            3,
+        )
+        assert fragile.character_id is not None
+        self.world.place_character(fragile.character_id, self.hall.id)
+        self.database.set_hp(21, 1)
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[1, 4],
+        ):
+            scene, result = self.service.attack_character(
+                44,
+                str(fragile.character_id),
+            )
+
+        self.assertEqual(result.target_hp, -3)
+        self.assertTrue(result.target_dead)
+        self.assertEqual(result.target_status, "dead")
+        state = self.database.get_character_combat_state(
+            fragile.character_id
+        )
+        self.assertEqual(state.status, CharacterCombatStatus.DEAD)
+        self.assertFalse(
+            any(
+                combatant.source_id == str(fragile.character_id)
+                for combatant in scene.combatants
+            )
+        )
+        room = self.world.get_room(self.hall.id)
+        assert room is not None
+        self.assertTrue(
+            any(
+                character.character_id == fragile.character_id
+                for character in room.characters
+            )
+        )
+
+    def test_death_save_uses_negative_hp_and_vitality_then_stabilizes(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.database.set_hp(7, -4)
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            return_value=12,
+        ):
+            scene, result = self.service.roll_death_save(
+                44,
+                str(self.olof.character_id),
+            )
+
+        self.assertEqual(result.dc, 12)
+        self.assertEqual(result.roll, 12)
+        self.assertEqual(result.modifier, 0)
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, "stable")
+        state = self.database.get_character_combat_state(
+            self.olof.character_id
+        )
+        self.assertEqual(state.status, CharacterCombatStatus.STABLE)
+        combatant = next(
+            item
+            for item in scene.combatants
+            if item.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(combatant.movement_remaining, 0)
+        self.assertTrue(combatant.standard_action_spent)
+
+    def test_down_character_automatically_rolls_death_save_when_turn_begins(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        bandit = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.kind is CombatantKind.ENEMY
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            bandit.source_id,
+        )
+        self.database.set_hp(7, -2)
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            return_value=12,
+        ):
+            advanced = self.service.next_turn(44)
+
+        state = self.database.get_character_combat_state(
+            self.olof.character_id
+        )
+        self.assertEqual(state.status, CharacterCombatStatus.STABLE)
+        self.assertEqual(
+            advanced.current_turn_source_id,
+            str(self.olof.character_id),
+        )
+        self.assertIn(
+            "death_save_success",
+            [entry.event_type for entry in advanced.log_entries],
+        )
+
+    def test_three_failed_death_saves_kill_and_remove_character_from_combat(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.database.set_hp(7, -1)
+
+        last_scene = None
+        for _ in range(3):
+            self.service.jump_turn(
+                44,
+                CombatantKind.CHARACTER,
+                str(self.olof.character_id),
+            )
+            with patch(
+                "rpg_bot.combat_service.random.randint",
+                return_value=1,
+            ):
+                last_scene, result = self.service.roll_death_save(
+                    44,
+                    str(self.olof.character_id),
+                )
+
+        assert last_scene is not None
+        self.assertEqual(result.failed_death_saves, 3)
+        self.assertEqual(result.status, "dead")
+        state = self.database.get_character_combat_state(
+            self.olof.character_id
+        )
+        self.assertEqual(state.status, CharacterCombatStatus.DEAD)
+        self.assertFalse(
+            any(
+                combatant.source_id == str(self.olof.character_id)
+                for combatant in last_scene.combatants
+            )
+        )
+
+    def test_healing_from_negative_hp_sets_recovering_and_short_rest_clears_it(self) -> None:
+        self.database.set_hp(7, -2)
+
+        healed = self.database.heal(7, 5)
+        state = self.database.get_character_combat_state(
+            self.olof.character_id
+        )
+
+        self.assertEqual(healed.hp, 3)
+        self.assertEqual(state.status, CharacterCombatStatus.RECOVERING)
+        rested = self.database.finish_short_rest(self.olof.character_id)
+        self.assertEqual(rested.status, CharacterCombatStatus.ACTIVE)
+
+    def test_recovering_character_attacks_with_disadvantage(self) -> None:
+        skeleton = self.world.place_enemy(
+            self.hall.id,
+            "core_skeleton_warrior",
+        )
+        weapon = self.world.catalog.get("rusty_sword")
+        weapon_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            weapon.template_id,
+            durability=weapon.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            weapon_instance_id,
+            EquipmentSlot.MAIN_HAND,
+        )
+        self.database.set_hp(7, -2)
+        self.database.heal(7, 5)
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[18, 15, 4],
+        ):
+            _, result = self.service.attack_enemy(
+                44,
+                skeleton.id,
+            )
+
+        self.assertEqual(result.attack_roll, 15)
+        self.assertTrue(result.hit)
+        self.assertEqual(result.raw_damage, 4)
+
+    def test_recovering_character_defends_with_disadvantage(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.database.set_hp(7, -2)
+        self.database.heal(7, 5)
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[18, 1, 4],
+        ):
+            _, result = self.service.attack_character(
+                44,
+                str(self.olof.character_id),
+            )
+
+        self.assertEqual(result.defense_roll, 1)
+        self.assertFalse(result.defended)
+        self.assertEqual(result.raw_damage, 4)
 
     def test_only_one_active_scene_is_allowed_per_guild(self) -> None:
         self.service.start(44, self.hall.id)

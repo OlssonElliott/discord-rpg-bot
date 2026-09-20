@@ -203,6 +203,7 @@ button, input, textarea { font: inherit; }
 .combatant-editor__name { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: #dce2e9; font-size: .77rem; }
 .combatant-editor__name > .badge:first-of-type { margin-left: auto; }
 .combatant-editor__movement-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #c6a76d; font-size: .64rem; border: 1px solid #4c3e29; border-radius: 6px; background: #1b1711; }
+.combatant-editor__condition-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #d6a9a5; font-size: .64rem; border: 1px solid #5d3d42; border-radius: 6px; background: #211417; }
 .combatant-editor button { grid-column: 2; }
 .combatant-editor__standard-action { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 8px; border: 1px solid #34445b; border-radius: 7px; background: #101a28; }
 .combatant-editor__standard-action > div { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 8px; color: #9facc0; font-size: .66rem; }
@@ -227,6 +228,10 @@ button, input, textarea { font: inherit; }
 .combat-log-entry--attack_resolved { border-left-color: #a96c49; }
 .combat-log-entry--enemy_attack_resolved { border-left-color: #8c5e78; }
 .combat-log-entry--combatant_downed { border-left-color: #b44747; }
+.combat-log-entry--death_save_success,
+.combat-log-entry--combatant_stabilized { border-left-color: #688e72; }
+.combat-log-entry--death_save_failed { border-left-color: #a96c49; }
+.combat-log-entry--combatant_died,
 .combat-log-entry--combatant_defeated { border-left-color: #b44747; }
 .combat-log-entry--combatant_removed { border-left-color: #a95b5b; }
 .combat-log-entry--combatant_joined { border-left-color: #688e72; }

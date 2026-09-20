@@ -381,9 +381,23 @@ function CombatantInspectDialog({
                 <strong>{hpLabel}</strong>
               </div>
               <Badge variant="outline">{label(data.status)}</Badge>
+              {data.failed_death_saves != null && data.failed_death_saves > 0 && (
+                <Badge variant="outline">
+                  Death saves {data.failed_death_saves}/3
+                </Badge>
+              )}
+              {data.death_save_dc != null && (
+                <Badge variant="outline">Death Save DC {data.death_save_dc}</Badge>
+              )}
               {data.stance && <Badge variant="outline">{label(data.stance)}</Badge>}
               {data.race && <Badge variant="outline">{data.race}</Badge>}
             </div>
+
+            {data.status === 'recovering' && (
+              <p className="combat-inspect-description">
+                Recovering: active d20 rolls are made with disadvantage until a Short Rest.
+              </p>
+            )}
 
             {data.description && (
               <p className="combat-inspect-description">{data.description}</p>
@@ -521,8 +535,18 @@ function CombatantEditor({
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
   const targetKind = combatant.kind === 'character' ? 'enemy' : 'character';
+  const incapacitated = (
+    combatant.kind === 'character'
+    && ['downed', 'stable', 'dead'].includes(combatant.character_status || '')
+  );
   const attackTargets = scene.combatants.filter(
-    (candidate) => candidate.kind === targetKind,
+    (candidate) => (
+      candidate.kind === targetKind
+      && (
+        candidate.kind !== 'character'
+        || ['active', 'recovering'].includes(candidate.character_status || '')
+      )
+    ),
   );
   const [attackTargetId, setAttackTargetId] = useState(
     attackTargets[0]?.source_id || '',
@@ -542,19 +566,26 @@ function CombatantEditor({
   ]);
 
   useEffect(() => {
-    if (
-      attackTargetId
-      && scene.combatants.some(
-        (candidate) => (
-          candidate.kind === targetKind
-          && candidate.source_id === attackTargetId
-        ),
-      )
-    ) {
-      return;
-    }
+    const validTarget = scene.combatants.some(
+      (candidate) => (
+        candidate.source_id === attackTargetId
+        && candidate.kind === targetKind
+        && (
+          candidate.kind !== 'character'
+          || ['active', 'recovering'].includes(candidate.character_status || '')
+        )
+      ),
+    );
+    if (attackTargetId && validTarget) return;
+
     const firstTarget = scene.combatants.find(
-      (candidate) => candidate.kind === targetKind,
+      (candidate) => (
+        candidate.kind === targetKind
+        && (
+          candidate.kind !== 'character'
+          || ['active', 'recovering'].includes(candidate.character_status || '')
+        )
+      ),
     );
     setAttackTargetId(firstTarget?.source_id || '');
   }, [attackTargetId, scene.combatants, targetKind]);
@@ -582,11 +613,36 @@ function CombatantEditor({
         {combatant.kind === 'character' ? <Users size={15} /> : <Skull size={15} />}
         <span>{combatant.name}</span>
         {combatant.is_current_turn && <Badge>Current turn</Badge>}
+        {combatant.character_status && (
+          <Badge variant="outline">{label(combatant.character_status)}</Badge>
+        )}
+        {combatant.hp != null && combatant.max_hp != null && (
+          <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
+        )}
         <Badge variant="outline">
           Move {combatant.movement_remaining}/{combatant.movement_budget}
         </Badge>
         <Badge variant="outline">Init {combatant.initiative_score}</Badge>
       </div>
+      {combatant.character_status === 'downed' && (
+        <p className="combatant-editor__condition-state">
+          Death Save DC {combatant.death_save_dc ?? 10}
+          {' · '}
+          Failed {combatant.failed_death_saves ?? 0}/3
+          {' · '}
+          Death save resolves when this turn begins
+        </p>
+      )}
+      {combatant.character_status === 'stable' && (
+        <p className="combatant-editor__condition-state">
+          Stable at {combatant.hp} HP · Cannot act until healed above 0 HP
+        </p>
+      )}
+      {combatant.character_status === 'recovering' && (
+        <p className="combatant-editor__condition-state">
+          Recovering · Disadvantage on active d20 rolls until a Short Rest
+        </p>
+      )}
       {combatant.is_between_landmarks && (
         <p className="combatant-editor__movement-state">
           Between {routeSource?.name || combatant.route_source_landmark_id}
@@ -598,7 +654,7 @@ function CombatantEditor({
       )}
       <NativeSelect
         value={landmarkId}
-        disabled={busy || !combatant.is_current_turn}
+        disabled={busy || !combatant.is_current_turn || incapacitated}
         onChange={(event) => setLandmarkId(event.target.value)}
       >
         {scene.landmarks.map((landmark) => (
@@ -609,7 +665,7 @@ function CombatantEditor({
       </NativeSelect>
       <NativeSelect
         value={relation}
-        disabled={busy || !combatant.is_current_turn}
+        disabled={busy || !combatant.is_current_turn || incapacitated}
         onChange={(event) => setRelation(event.target.value as Relation)}
       >
         <NativeSelectOption value="at">At</NativeSelectOption>
@@ -624,6 +680,7 @@ function CombatantEditor({
         disabled={
           busy
           || !combatant.is_current_turn
+          || incapacitated
           || combatant.movement_remaining <= 0
           || (
             !combatant.is_between_landmarks
@@ -655,6 +712,7 @@ function CombatantEditor({
             disabled={
               busy
               || !combatant.is_current_turn
+              || incapacitated
               || combatant.standard_action_spent
             }
             onChange={(event) => setAttackTargetId(event.target.value)}
@@ -674,6 +732,7 @@ function CombatantEditor({
             disabled={
               busy
               || !combatant.is_current_turn
+              || incapacitated
               || combatant.standard_action_spent
               || !attackTargetId
             }

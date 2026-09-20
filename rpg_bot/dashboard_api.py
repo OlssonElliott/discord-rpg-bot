@@ -165,6 +165,60 @@ def _room_feature_template_data(template: object) -> JsonObject:
     }
 
 
+def _combatant_vitals_data(
+    world: WorldService,
+    kind: str,
+    source_id: str,
+) -> JsonObject:
+    if kind != "character":
+        return {
+            "hp": None,
+            "max_hp": None,
+            "character_status": None,
+            "failed_death_saves": None,
+            "death_save_dc": None,
+        }
+    try:
+        character_id = int(source_id)
+    except ValueError:
+        return {
+            "hp": None,
+            "max_hp": None,
+            "character_status": None,
+            "failed_death_saves": None,
+            "death_save_dc": None,
+        }
+    character = next(
+        (
+            candidate
+            for candidate in world.list_characters()
+            if candidate.character_id == character_id
+        ),
+        None,
+    )
+    if character is None:
+        return {
+            "hp": None,
+            "max_hp": None,
+            "character_status": None,
+            "failed_death_saves": None,
+            "death_save_dc": None,
+        }
+    state = world.database.get_character_combat_state(character_id)
+    death_save_dc = (
+        10 + (abs(character.hp) + 1) // 2
+        if state.status.value == "downed"
+        else None
+    )
+    return {
+        "hp": character.hp,
+        "max_hp": character.max_hp,
+        "character_status": state.status.value,
+        "failed_death_saves": state.failed_death_saves,
+        "death_save_dc": death_save_dc,
+    }
+
+
 def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
     room = world.get_room(scene.room_id)
     return {
@@ -224,6 +278,11 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "route_cost": combatant.route_cost,
                 "is_between_landmarks": combatant.is_between_landmarks,
                 "standard_action_spent": combatant.standard_action_spent,
+                **_combatant_vitals_data(
+                    world,
+                    combatant.kind.value,
+                    combatant.source_id,
+                ),
                 "is_current_turn": (
                     combatant.kind is scene.current_turn_kind
                     and combatant.source_id == scene.current_turn_source_id
@@ -317,6 +376,8 @@ def _enemy_attack_result_data(result: EnemyAttackResult) -> JsonObject:
         "target_hp": result.target_hp,
         "target_max_hp": result.target_max_hp,
         "target_down": result.target_down,
+        "target_status": result.target_status,
+        "target_dead": result.target_dead,
     }
 
 
@@ -489,6 +550,14 @@ def _combatant_inspect_data(
                 }
             )
 
+        combat_state = world.database.get_character_combat_state(
+            character_id
+        )
+        death_save_dc = (
+            10 + (abs(character.hp) + 1) // 2
+            if combat_state.status.value == "downed"
+            else None
+        )
         return {
             "kind": "character",
             "source_id": source_id,
@@ -496,7 +565,9 @@ def _combatant_inspect_data(
             "description": "",
             "hp": character.hp,
             "max_hp": character.max_hp,
-            "status": "active" if character.hp > 0 else "down",
+            "status": combat_state.status.value,
+            "failed_death_saves": combat_state.failed_death_saves,
+            "death_save_dc": death_save_dc,
             "stance": character.stance.value,
             "race": character.race,
             "lineage": character.lineage,
@@ -567,6 +638,8 @@ def _combatant_inspect_data(
                 "hp": enemy.current_hp,
                 "max_hp": template.max_hp,
                 "status": enemy.status.value,
+                "failed_death_saves": None,
+                "death_save_dc": None,
                 "stance": None,
                 "race": template.race,
                 "lineage": None,
@@ -618,6 +691,8 @@ def _combatant_inspect_data(
             "hp": None,
             "max_hp": None,
             "status": "active",
+            "failed_death_saves": None,
+            "death_save_dc": None,
             "stance": None,
             "race": None,
             "lineage": None,

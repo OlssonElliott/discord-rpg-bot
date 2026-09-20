@@ -16,7 +16,7 @@ from rpg_bot.dice_visuals import (
     DEFAULT_DICE_NUMBER_COLOR,
     InvalidDiceColorError,
 )
-from rpg_bot.models import Stance
+from rpg_bot.models import CharacterCombatStatus, Stance
 
 
 class DatabaseTests(unittest.TestCase):
@@ -92,10 +92,22 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("trap_damage_type", columns)
         self.assertIn("trap_damage", columns)
 
-    def test_hp_is_clamped_for_damage_and_healing(self) -> None:
-        self.database.create_character(123, "Olof", 22)
-        self.assertEqual(self.database.damage(123, 50).hp, 0)
-        self.assertEqual(self.database.heal(123, 50).hp, 22)
+    def test_damage_is_clamped_at_negative_max_hp_and_marks_character_dead(self) -> None:
+        character = self.database.create_character(123, "Olof", 22)
+        assert character.character_id is not None
+
+        damaged = self.database.damage(123, 50)
+        state = self.database.get_character_combat_state(
+            character.character_id
+        )
+
+        self.assertEqual(damaged.hp, -22)
+        self.assertEqual(state.status, CharacterCombatStatus.DEAD)
+        with self.assertRaisesRegex(
+            InvalidHitPointsError,
+            "cannot be restored",
+        ):
+            self.database.heal(123, 50)
 
     def test_stance_and_manual_hp_can_be_updated(self) -> None:
         self.database.create_character(123, "Olof", 22)
@@ -359,6 +371,44 @@ class DatabaseTests(unittest.TestCase):
             migrated.get_dice_number_color(42), DEFAULT_DICE_NUMBER_COLOR
         )
         self.assertIsNone(migrated.get_dm_portrait(42))
+
+    def test_existing_modern_character_table_migrates_to_negative_hp(self) -> None:
+        old_path = Path(self.temp_directory.name) / "old-hp-check.db"
+        with closing(sqlite3.connect(old_path)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE characters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    discord_user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    hp INTEGER NOT NULL CHECK (hp >= 0 AND hp <= max_hp),
+                    max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+                    stance TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    is_archived INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO characters (
+                    discord_user_id, name, hp, max_hp, stance
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (42, "Legacy", 8, 10, "steady"),
+            )
+            connection.commit()
+
+        migrated = Database(old_path)
+        migrated.initialize()
+
+        damaged = migrated.damage(42, 15)
+        assert damaged.character_id is not None
+        state = migrated.get_character_combat_state(
+            damaged.character_id
+        )
+        self.assertEqual(damaged.hp, -7)
+        self.assertEqual(state.status, CharacterCombatStatus.DOWNED)
 
     def test_existing_character_table_gains_creation_columns(self) -> None:
         old_path = Path(self.temp_directory.name) / "old-characters.db"

@@ -15,6 +15,7 @@ from .combat import (
     CombatantKind,
     CombatantState,
     DamageRoll,
+    DeathSaveResult,
     EnemyAttackResult,
     LandmarkDistance,
     LandmarkRelation,
@@ -24,6 +25,7 @@ from .database import Database
 from .dungeon import ConnectionType
 from .enemies import EnemyStatus
 from .inventory import DamagePart, EquipmentSlot, ItemTemplate, ItemType
+from .models import CharacterCombatStatus
 from .world_service import WorldService
 
 
@@ -165,6 +167,14 @@ class CombatService:
         for character in room.characters:
             if character.character_id is None:
                 continue
+            character_state = self.database.get_character_combat_state(
+                character.character_id
+            )
+            if character_state.status in {
+                CharacterCombatStatus.STABLE,
+                CharacterCombatStatus.DEAD,
+            }:
+                continue
             initiative_roll, initiative_score = self._roll_initiative(
                 self._character_insight_modifier(character.character_id)
             )
@@ -242,7 +252,7 @@ class CombatService:
                     actor_source_id=current_combatant.source_id,
                     actor_name=current_combatant.name,
                 )
-            return self._require_current(guild_id)
+            return self._resolve_current_death_save(guild_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
 
@@ -353,6 +363,65 @@ class CombatService:
             1,
             3 + (template.strength if template is not None else 0),
         )
+
+    def _character_by_source_id(self, source_id: str):
+        try:
+            character_id = int(source_id)
+        except ValueError as error:
+            raise CombatError(
+                f"Character combatant '{source_id}' is invalid."
+            ) from error
+        character = next(
+            (
+                candidate
+                for candidate in self.database.list_all_characters()
+                if candidate.character_id == character_id
+            ),
+            None,
+        )
+        if character is None:
+            raise CombatError(
+                f"Character {character_id} does not exist."
+            )
+        return character
+
+    def _combatant_can_take_turn(
+        self,
+        combatant: CombatantState,
+    ) -> bool:
+        if combatant.kind is CombatantKind.ENEMY:
+            return True
+        try:
+            character_id = int(combatant.source_id)
+        except ValueError:
+            return False
+        state = self.database.get_character_combat_state(character_id)
+        return state.status not in {
+            CharacterCombatStatus.STABLE,
+            CharacterCombatStatus.DEAD,
+        }
+
+    def _available_turn_combatants(
+        self,
+        scene: CombatScene,
+    ) -> list[CombatantState]:
+        return [
+            combatant
+            for combatant in scene.initiative_order()
+            if not combatant.acted_this_round
+            and self._combatant_can_take_turn(combatant)
+        ]
+
+    @staticmethod
+    def _roll_d20(
+        *,
+        disadvantage: bool = False,
+    ) -> tuple[tuple[int, ...], int]:
+        rolls = tuple(
+            random.randint(1, 20)
+            for _ in range(2 if disadvantage else 1)
+        )
+        return rolls, min(rolls) if disadvantage else rolls[0]
 
     def _equipped_attack_weapon(
         self,
@@ -748,15 +817,19 @@ class CombatService:
         scene = self._require_current(guild_id)
         if scene.current_combatant() is not None or not scene.combatants:
             return scene
-        available = [
-            combatant
-            for combatant in scene.initiative_order()
-            if not combatant.acted_this_round
-        ]
+        available = self._available_turn_combatants(scene)
         if not available:
             self.repository.set_all_combatants_acted(scene.id, False)
             scene = self._require_current(guild_id)
-            available = list(scene.initiative_order())
+            available = self._available_turn_combatants(scene)
+        if not available:
+            self.repository.set_turn(
+                scene.id,
+                scene.round_number,
+                None,
+                None,
+            )
+            return self._require_current(guild_id)
         first = available[0]
         try:
             self.repository.reset_combatant_movement(
@@ -786,7 +859,168 @@ class CombatService:
             )
         except ValueError as error:
             raise CombatError(str(error)) from error
-        return self._require_current(guild_id)
+        return self._resolve_current_death_save(guild_id)
+
+    def _resolve_current_death_save(
+        self,
+        guild_id: int,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        current = scene.current_combatant()
+        if current is None or current.kind is not CombatantKind.CHARACTER:
+            return scene
+
+        character = self._character_by_source_id(current.source_id)
+        assert character.character_id is not None
+        state = self.database.get_character_combat_state(
+            character.character_id
+        )
+        if state.status is not CharacterCombatStatus.DOWNED:
+            return scene
+
+        resolved, _ = self.roll_death_save(
+            guild_id,
+            current.source_id,
+        )
+        return resolved
+
+    def roll_death_save(
+        self,
+        guild_id: int,
+        character_source_id: str,
+    ) -> tuple[CombatScene, DeathSaveResult]:
+        scene = self._require_current(guild_id)
+        current = scene.current_combatant()
+        if (
+            current is None
+            or current.kind is not CombatantKind.CHARACTER
+            or current.source_id != character_source_id
+        ):
+            raise CombatError(
+                "Death saves can only be rolled for the current character."
+            )
+
+        character = self._character_by_source_id(character_source_id)
+        assert character.character_id is not None
+        state = self.database.get_character_combat_state(
+            character.character_id
+        )
+        if state.status is not CharacterCombatStatus.DOWNED:
+            raise CombatError(f"{character.name} is not downed.")
+        if current.standard_action_spent:
+            raise CombatError(
+                f"{character.name}'s death save is already resolved this turn."
+            )
+
+        dc = 10 + math.ceil(abs(character.hp) / 2)
+        vitality = self.database.get_character_attribute(
+            character.character_id,
+            "vitality",
+        )
+        modifier = (vitality - 10) // 2
+        roll = random.randint(1, 20)
+        total = roll + modifier
+        success = roll == 20 or (
+            roll != 1
+            and total >= dc
+        )
+        updated_state = self.database.record_death_save(
+            character.character_id,
+            success=success,
+        )
+
+        result = DeathSaveResult(
+            character_source_id=current.source_id,
+            character_name=character.name,
+            hp=character.hp,
+            dc=dc,
+            roll=roll,
+            modifier=modifier,
+            total=total,
+            success=success,
+            failed_death_saves=updated_state.failed_death_saves,
+            status=updated_state.status.value,
+        )
+
+        try:
+            self.repository.set_standard_action_spent(
+                scene.id,
+                current.kind,
+                current.source_id,
+                True,
+            )
+            self.repository.set_movement_remaining(
+                scene.id,
+                current.kind,
+                current.source_id,
+                0,
+            )
+            if success:
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "death_save_success",
+                    (
+                        f"{character.name} rolled a death save: "
+                        f"{roll}{modifier:+d} = {total} vs DC {dc}, success. "
+                        f"{character.name} is stable."
+                    ),
+                    actor_kind=current.kind,
+                    actor_source_id=current.source_id,
+                    actor_name=current.name,
+                )
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "combatant_stabilized",
+                    f"{character.name} stabilized at {character.hp} HP.",
+                    actor_kind=current.kind,
+                    actor_source_id=current.source_id,
+                    actor_name=current.name,
+                )
+            else:
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "death_save_failed",
+                    (
+                        f"{character.name} rolled a death save: "
+                        f"{roll}{modifier:+d} = {total} vs DC {dc}, failed. "
+                        f"Failed death saves: "
+                        f"{updated_state.failed_death_saves}/3."
+                    ),
+                    actor_kind=current.kind,
+                    actor_source_id=current.source_id,
+                    actor_name=current.name,
+                )
+
+            if updated_state.status is CharacterCombatStatus.DEAD:
+                self.repository.remove_combatant(
+                    scene.id,
+                    current.kind,
+                    current.source_id,
+                )
+                self.repository.set_turn(
+                    scene.id,
+                    scene.round_number,
+                    None,
+                    None,
+                )
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "combatant_died",
+                    f"{character.name} died after three failed death saves.",
+                    actor_kind=current.kind,
+                    actor_source_id=current.source_id,
+                    actor_name=current.name,
+                )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+
+        if updated_state.status is CharacterCombatStatus.DEAD:
+            return self._ensure_turn(guild_id), result
+        return self._require_current(guild_id), result
 
     def current(self, guild_id: int) -> CombatScene | None:
         return self.repository.get_active_scene(guild_id)
@@ -935,17 +1169,25 @@ class CombatService:
                     )
                     return self._require_current(guild_id)
 
-                available = [
-                    combatant
-                    for combatant in remaining_scene.initiative_order()
-                    if not combatant.acted_this_round
-                ]
+                available = self._available_turn_combatants(
+                    remaining_scene
+                )
                 next_round = scene.round_number
                 if not available:
                     self.repository.set_all_combatants_acted(scene.id, False)
                     next_round += 1
                     remaining_scene = self._require_current(guild_id)
-                    available = list(remaining_scene.initiative_order())
+                    available = self._available_turn_combatants(
+                        remaining_scene
+                    )
+                if not available:
+                    self.repository.set_turn(
+                        scene.id,
+                        next_round,
+                        None,
+                        None,
+                    )
+                    return self._require_current(guild_id)
 
                 next_combatant = available[0]
                 self.repository.reset_combatant_movement(
@@ -975,7 +1217,10 @@ class CombatService:
                 )
         except ValueError as error:
             raise CombatError(str(error)) from error
-        return self._ensure_turn(guild_id)
+        ensured = self._ensure_turn(guild_id)
+        if ensured.current_combatant() is None:
+            return ensured
+        return self._resolve_current_death_save(guild_id)
 
     def next_turn(self, guild_id: int) -> CombatScene:
         scene = self._require_current(guild_id)
@@ -993,17 +1238,21 @@ class CombatService:
                 True,
             )
             updated = self._require_current(guild_id)
-            available = [
-                combatant
-                for combatant in updated.initiative_order()
-                if not combatant.acted_this_round
-            ]
+            available = self._available_turn_combatants(updated)
             next_round = scene.round_number
             if not available:
                 self.repository.set_all_combatants_acted(scene.id, False)
                 next_round += 1
                 updated = self._require_current(guild_id)
-                available = list(updated.initiative_order())
+                available = self._available_turn_combatants(updated)
+            if not available:
+                self.repository.set_turn(
+                    scene.id,
+                    next_round,
+                    None,
+                    None,
+                )
+                return self._require_current(guild_id)
 
             target = available[0]
             self.repository.reset_combatant_movement(
@@ -1033,7 +1282,7 @@ class CombatService:
             )
         except ValueError as error:
             raise CombatError(str(error)) from error
-        return self._require_current(guild_id)
+        return self._resolve_current_death_save(guild_id)
 
     def previous_turn(self, guild_id: int) -> CombatScene:
         scene = self._require_current(guild_id)
@@ -1045,8 +1294,19 @@ class CombatService:
         ordered = scene.initiative_order()
         current_index = self._turn_index(scene)
         assert current_index is not None
-        previous_index = (current_index - 1) % len(ordered)
-        target = ordered[previous_index]
+        target = next(
+            (
+                ordered[(current_index - offset) % len(ordered)]
+                for offset in range(1, len(ordered) + 1)
+                if self._combatant_can_take_turn(
+                    ordered[(current_index - offset) % len(ordered)]
+                )
+            ),
+            None,
+        )
+        if target is None:
+            return scene
+        previous_index = ordered.index(target)
         previous_round = scene.round_number
         try:
             if current_index == 0 and scene.round_number > 1:
@@ -1106,6 +1366,10 @@ class CombatService:
                 if combatant.kind is parsed_kind
                 and combatant.source_id == source_id
             )
+            if not self._combatant_can_take_turn(target):
+                raise CombatError(
+                    f"{target.name} cannot take a turn in their current state."
+                )
             self.repository.reset_combatant_movement(
                 scene.id,
                 parsed_kind,
@@ -1379,12 +1643,20 @@ class CombatService:
                 f"Enemy template '{enemy.template_id}' does not exist."
             )
 
-        try:
-            character_id = int(attacker.source_id)
-        except ValueError as error:
+        character = self._character_by_source_id(attacker.source_id)
+        assert character.character_id is not None
+        character_id = character.character_id
+        character_state = self.database.get_character_combat_state(
+            character_id
+        )
+        if character_state.status not in {
+            CharacterCombatStatus.ACTIVE,
+            CharacterCombatStatus.RECOVERING,
+        }:
             raise CombatError(
-                f"Character combatant '{attacker.source_id}' is invalid."
-            ) from error
+                f"{attacker.name} cannot attack while "
+                f"{character_state.status.value}."
+            )
 
         weapon = self._equipped_attack_weapon(character_id)
         weapon_name = weapon.name if weapon is not None else "Unarmed"
@@ -1394,7 +1666,12 @@ class CombatService:
             attack_attribute,
         )
         attack_modifier = (attribute_score - 10) // 2
-        attack_roll = random.randint(1, 20)
+        recovering = (
+            character_state.status is CharacterCombatStatus.RECOVERING
+        )
+        attack_rolls, attack_roll = self._roll_d20(
+            disadvantage=recovering,
+        )
         attack_total = attack_roll + attack_modifier
         critical = attack_roll == 20
         hit = critical or (
@@ -1495,9 +1772,15 @@ class CombatService:
             if hit:
                 critical_text = " critical" if critical else ""
                 reduction_label = reduction_type.replace("_", " ")
+                roll_text = (
+                    f"{'/'.join(str(value) for value in attack_rolls)} "
+                    f"-> {attack_roll}"
+                    if recovering
+                    else str(attack_roll)
+                )
                 message = (
                     f"{attacker.name} attacked {target.name} with "
-                    f"{weapon_name}: {attack_roll}"
+                    f"{weapon_name}: {roll_text}"
                     f"{attack_modifier:+d} = {attack_total} vs "
                     f"Defense {template.defense_dc},"
                     f"{critical_text} hit for {final_damage} damage "
@@ -1506,9 +1789,15 @@ class CombatService:
                     f"{target.name} has {target_hp}/{template.max_hp} HP."
                 )
             else:
+                roll_text = (
+                    f"{'/'.join(str(value) for value in attack_rolls)} "
+                    f"-> {attack_roll}"
+                    if recovering
+                    else str(attack_roll)
+                )
                 message = (
                     f"{attacker.name} attacked {target.name} with "
-                    f"{weapon_name}: {attack_roll}"
+                    f"{weapon_name}: {roll_text}"
                     f"{attack_modifier:+d} = {attack_total} vs "
                     f"Defense {template.defense_dc}, miss."
                 )
@@ -1594,27 +1883,20 @@ class CombatService:
                 f"Enemy template '{enemy.template_id}' does not exist."
             )
 
-        try:
-            character_id = int(target.source_id)
-        except ValueError as error:
-            raise CombatError(
-                f"Character combatant '{target.source_id}' is invalid."
-            ) from error
-
-        character = next(
-            (
-                candidate
-                for candidate in self.database.list_all_characters()
-                if candidate.character_id == character_id
-            ),
-            None,
+        character = self._character_by_source_id(target.source_id)
+        assert character.character_id is not None
+        character_id = character.character_id
+        character_state = self.database.get_character_combat_state(
+            character_id
         )
-        if character is None:
+        if character_state.status not in {
+            CharacterCombatStatus.ACTIVE,
+            CharacterCombatStatus.RECOVERING,
+        }:
             raise CombatError(
-                f"Character {character_id} does not exist."
+                f"{character.name} cannot defend while "
+                f"{character_state.status.value}."
             )
-        if character.hp <= 0:
-            raise CombatError(f"{character.name} is already down.")
 
         (
             defense_method,
@@ -1622,7 +1904,12 @@ class CombatService:
             defense_modifier,
         ) = self._automatic_defense(character_id)
 
-        defense_roll = random.randint(1, 20)
+        recovering = (
+            character_state.status is CharacterCombatStatus.RECOVERING
+        )
+        defense_rolls, defense_roll = self._roll_d20(
+            disadvantage=recovering,
+        )
         defense_total = defense_roll + defense_modifier
         critical_defense = defense_roll == 20
         defended = critical_defense or (
@@ -1652,7 +1939,15 @@ class CombatService:
                 )
                 target_hp = updated_character.hp
 
-        target_down = target_hp == 0
+        updated_character_state = self.database.get_character_combat_state(
+            character_id
+        )
+        target_down = (
+            updated_character_state.status is CharacterCombatStatus.DOWNED
+        )
+        target_dead = (
+            updated_character_state.status is CharacterCombatStatus.DEAD
+        )
 
         result = EnemyAttackResult(
             attacker_source_id=attacker.source_id,
@@ -1676,6 +1971,8 @@ class CombatService:
             target_hp=target_hp,
             target_max_hp=character.max_hp,
             target_down=target_down,
+            target_status=updated_character_state.status.value,
+            target_dead=target_dead,
         )
 
         try:
@@ -1687,12 +1984,18 @@ class CombatService:
             )
 
             defense_label = defense_method.replace("_", " ")
+            defense_roll_text = (
+                f"{'/'.join(str(value) for value in defense_rolls)} "
+                f"-> {defense_roll}"
+                if recovering
+                else str(defense_roll)
+            )
             if defended:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
                     f"{template.attack_profile}. "
                     f"{target.name} automatically used {defense_label}: "
-                    f"{defense_roll}{defense_modifier:+d} = "
+                    f"{defense_roll_text}{defense_modifier:+d} = "
                     f"{defense_total} vs Attack DC {template.attack_dc}, "
                     f"defended."
                 )
@@ -1701,7 +2004,7 @@ class CombatService:
                     f"{attacker.name} attacked {target.name} with "
                     f"{template.attack_profile}. "
                     f"{target.name} automatically used {defense_label}: "
-                    f"{defense_roll}{defense_modifier:+d} = "
+                    f"{defense_roll_text}{defense_modifier:+d} = "
                     f"{defense_total} vs Attack DC {template.attack_dc}, "
                     f"failed. {final_damage} damage "
                     f"({raw_damage} raw, {armor_reduction} armor reduction). "
@@ -1719,11 +2022,33 @@ class CombatService:
             )
 
             if target_down:
+                death_save_dc = 10 + math.ceil(abs(target_hp) / 2)
                 self.repository.append_log(
                     scene.id,
                     scene.round_number,
                     "combatant_downed",
-                    f"{target.name} was reduced to 0 HP.",
+                    (
+                        f"{target.name} was downed at {target_hp} HP. "
+                        f"Death Save DC is {death_save_dc}."
+                    ),
+                    actor_kind=target.kind,
+                    actor_source_id=target.source_id,
+                    actor_name=target.name,
+                )
+            elif target_dead:
+                self.repository.remove_combatant(
+                    scene.id,
+                    target.kind,
+                    target.source_id,
+                )
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "combatant_died",
+                    (
+                        f"{target.name} reached {target_hp} HP "
+                        f"(-{character.max_hp} Max HP) and died instantly."
+                    ),
                     actor_kind=target.kind,
                     actor_source_id=target.source_id,
                     actor_name=target.name,
@@ -1804,6 +2129,21 @@ class CombatService:
                 for item in scene.combatants
                 if item.kind is parsed_kind and item.source_id == source_id
             )
+
+            if parsed_kind is CombatantKind.CHARACTER:
+                character = self._character_by_source_id(source_id)
+                assert character.character_id is not None
+                state = self.database.get_character_combat_state(
+                    character.character_id
+                )
+                if state.status not in {
+                    CharacterCombatStatus.ACTIVE,
+                    CharacterCombatStatus.RECOVERING,
+                }:
+                    raise CombatError(
+                        f"{combatant.name} cannot move while "
+                        f"{state.status.value}."
+                    )
 
             if (
                 scene.current_turn_kind is not parsed_kind

@@ -152,6 +152,22 @@ class EnemyAttackResult:
     target_hp: int = 0
     target_max_hp: int = 0
     target_down: bool = False
+    target_status: str = "active"
+    target_dead: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DeathSaveResult:
+    character_source_id: str
+    character_name: str
+    hp: int
+    dc: int
+    roll: int
+    modifier: int
+    total: int
+    success: bool
+    failed_death_saves: int
+    status: str
 
 
 @dataclass(frozen=True, slots=True)

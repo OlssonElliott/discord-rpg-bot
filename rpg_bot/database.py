@@ -14,7 +14,13 @@ from .dice_visuals import (
     DEFAULT_DICE_NUMBER_COLOR,
     normalize_dice_color,
 )
-from .models import Character, CharacterSheetViewState, Stance
+from .models import (
+    Character,
+    CharacterCombatState,
+    CharacterCombatStatus,
+    CharacterSheetViewState,
+    Stance,
+)
 from .dungeon import (
     CharacterLocation,
     CharacterRoomKnowledge,
@@ -430,14 +436,17 @@ class Database:
             )
 
     @staticmethod
-    def _create_character_tables(connection: sqlite3.Connection) -> None:
+    def _create_characters_table(
+        connection: sqlite3.Connection,
+        table_name: str = "characters",
+    ) -> None:
         connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS characters (
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 discord_user_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
-                hp INTEGER NOT NULL CHECK (hp >= 0 AND hp <= max_hp),
+                hp INTEGER NOT NULL CHECK (hp >= -max_hp AND hp <= max_hp),
                 max_hp INTEGER NOT NULL CHECK (max_hp > 0),
                 stance TEXT NOT NULL CHECK (
                     stance IN ('steady', 'bad_stance', 'prone')
@@ -459,6 +468,10 @@ class Database:
             )
             """
         )
+
+    @classmethod
+    def _create_character_tables(cls, connection: sqlite3.Connection) -> None:
+        cls._create_characters_table(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS character_skills (
@@ -468,6 +481,86 @@ class Database:
                 PRIMARY KEY (character_id, skill),
                 FOREIGN KEY (character_id) REFERENCES characters(id)
             )
+            """
+        )
+
+    @classmethod
+    def _migrate_character_hp_constraint(
+        cls,
+        connection: sqlite3.Connection,
+    ) -> None:
+        row = connection.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'characters'
+            """
+        ).fetchone()
+        table_sql = (row["sql"] if row is not None else "") or ""
+        normalized_sql = "".join(table_sql.casefold().split())
+        if "hp>=-max_hp" in normalized_sql:
+            return
+
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.execute("DROP TABLE IF EXISTS characters_new")
+            cls._create_characters_table(connection, "characters_new")
+            connection.execute(
+                """
+                INSERT INTO characters_new (
+                    id, discord_user_id, name, hp, max_hp, stance,
+                    lineage, race, age, gender,
+                    strength, dexterity, arcana, vitality, insight, personality,
+                    portrait_key, current_room_id, is_active, is_archived
+                )
+                SELECT
+                    id, discord_user_id, name, hp, max_hp, stance,
+                    lineage, race, age, gender,
+                    strength, dexterity, arcana, vitality, insight, personality,
+                    portrait_key, current_room_id, is_active, is_archived
+                FROM characters
+                """
+            )
+            connection.execute("DROP TABLE characters")
+            connection.execute(
+                "ALTER TABLE characters_new RENAME TO characters"
+            )
+            connection.commit()
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
+
+    @staticmethod
+    def _initialize_character_combat_states(
+        connection: sqlite3.Connection,
+    ) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS character_combat_states (
+                character_id INTEGER PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (
+                    status IN ('active', 'downed', 'stable', 'recovering', 'dead')
+                ),
+                failed_death_saves INTEGER NOT NULL DEFAULT 0 CHECK (
+                    failed_death_saves BETWEEN 0 AND 3
+                ),
+                FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO character_combat_states (
+                character_id, status, failed_death_saves
+            )
+            SELECT
+                id,
+                CASE
+                    WHEN hp <= -max_hp THEN 'dead'
+                    WHEN hp <= 0 THEN 'downed'
+                    ELSE 'active'
+                END,
+                0
+            FROM characters
             """
         )
 
@@ -556,8 +649,10 @@ class Database:
                     connection.execute(
                         "ALTER TABLE characters ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0"
                     )
+                cls._migrate_character_hp_constraint(connection)
                 cls._create_character_tables(connection)
 
+        cls._initialize_character_combat_states(connection)
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_character_per_user
@@ -1923,6 +2018,14 @@ class Database:
                     ),
                 )
                 character_id = cursor.lastrowid
+                connection.execute(
+                    """
+                    INSERT INTO character_combat_states (
+                        character_id, status, failed_death_saves
+                    ) VALUES (?, 'active', 0)
+                    """,
+                    (character_id,),
+                )
                 if previous is not None:
                     self._transfer_private_views(
                         connection, previous["id"], character_id
@@ -3759,7 +3862,11 @@ class Database:
         trap_damage_type = None
         with self._connect() as connection:
             character = connection.execute(
-                "SELECT current_room_id, hp FROM characters WHERE id = ? AND is_archived = 0",
+                """
+                SELECT current_room_id, hp, max_hp
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
                 (character_id,),
             ).fetchone()
             if character is None:
@@ -3813,17 +3920,18 @@ class Database:
             ):
                 configured_damage = max(0, int(locked["trap_damage"] or 0))
                 trap_triggered = True
-                trap_damage = min(int(character["hp"]), configured_damage)
                 trap_damage_type = (
                     TrapDamageType(locked["trap_damage_type"])
                     if locked["trap_damage_type"]
                     else None
                 )
                 if configured_damage:
-                    connection.execute(
-                        "UPDATE characters SET hp = MAX(0, hp - ?) WHERE id = ?",
-                        (configured_damage, character_id),
+                    new_hp, _, _ = self._apply_character_damage(
+                        connection,
+                        character_id,
+                        configured_damage,
                     )
+                    trap_damage = int(character["hp"]) - new_hp
                 connection.execute(
                     "UPDATE room_connections SET trap_state = ? WHERE id = ?",
                     (TrapState.TRIGGERED.value, locked["id"]),
@@ -5158,10 +5266,136 @@ class Database:
             )
         return normalized_color
 
+    @staticmethod
+    def _ensure_character_combat_state_row(
+        connection: sqlite3.Connection,
+        character_id: int,
+    ) -> sqlite3.Row:
+        character = connection.execute(
+            """
+            SELECT id, hp, max_hp FROM characters
+            WHERE id = ? AND is_archived = 0
+            """,
+            (character_id,),
+        ).fetchone()
+        if character is None:
+            raise CharacterNotFoundError(
+                f"Character {character_id} does not exist."
+            )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO character_combat_states (
+                character_id, status, failed_death_saves
+            ) VALUES (
+                ?,
+                CASE
+                    WHEN ? <= -? THEN 'dead'
+                    WHEN ? <= 0 THEN 'downed'
+                    ELSE 'active'
+                END,
+                0
+            )
+            """,
+            (
+                character_id,
+                character["hp"],
+                character["max_hp"],
+                character["hp"],
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT character_id, status, failed_death_saves
+            FROM character_combat_states
+            WHERE character_id = ?
+            """,
+            (character_id,),
+        ).fetchone()
+        assert row is not None
+        return row
+
+    @staticmethod
+    def _combat_state_from_row(row: sqlite3.Row) -> CharacterCombatState:
+        return CharacterCombatState(
+            character_id=int(row["character_id"]),
+            status=CharacterCombatStatus(row["status"]),
+            failed_death_saves=int(row["failed_death_saves"]),
+        )
+
+    def get_character_combat_state(
+        self,
+        character_id: int,
+    ) -> CharacterCombatState:
+        with self._connect() as connection:
+            row = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            return self._combat_state_from_row(row)
+
+    @classmethod
+    def _apply_character_damage(
+        cls,
+        connection: sqlite3.Connection,
+        character_id: int,
+        amount: int,
+    ) -> tuple[int, int, CharacterCombatStatus]:
+        character = connection.execute(
+            """
+            SELECT hp, max_hp FROM characters
+            WHERE id = ? AND is_archived = 0
+            """,
+            (character_id,),
+        ).fetchone()
+        if character is None:
+            raise CharacterNotFoundError(
+                f"Character {character_id} does not exist."
+            )
+        state = cls._ensure_character_combat_state_row(
+            connection,
+            character_id,
+        )
+        old_hp = int(character["hp"])
+        max_hp = int(character["max_hp"])
+        new_hp = max(-max_hp, old_hp - amount)
+
+        if new_hp <= -max_hp:
+            new_status = CharacterCombatStatus.DEAD
+        elif new_hp <= 0:
+            new_status = CharacterCombatStatus.DOWNED
+        elif state["status"] == CharacterCombatStatus.RECOVERING.value:
+            new_status = CharacterCombatStatus.RECOVERING
+        else:
+            new_status = CharacterCombatStatus.ACTIVE
+
+        failed_death_saves = int(state["failed_death_saves"])
+        if old_hp > 0 and new_hp <= 0:
+            failed_death_saves = 0
+
+        connection.execute(
+            "UPDATE characters SET hp = ? WHERE id = ?",
+            (new_hp, character_id),
+        )
+        connection.execute(
+            """
+            UPDATE character_combat_states
+            SET status = ?, failed_death_saves = ?
+            WHERE character_id = ?
+            """,
+            (
+                new_status.value,
+                failed_death_saves,
+                character_id,
+            ),
+        )
+        return new_hp, max_hp, new_status
+
     def damage(self, discord_user_id: int, amount: int) -> Character:
         if amount <= 0:
             raise InvalidHitPointsError("Damage must be greater than 0.")
-        return self._update_hp(discord_user_id, "MAX(0, hp - ?)", amount)
+        character = self._require_character(discord_user_id)
+        assert character.character_id is not None
+        return self.damage_character_by_id(character.character_id, amount)
 
     def damage_character_by_id(
         self,
@@ -5171,18 +5405,11 @@ class Database:
         if amount <= 0:
             raise InvalidHitPointsError("Damage must be greater than 0.")
         with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE characters
-                SET hp = MAX(0, hp - ?)
-                WHERE id = ? AND is_archived = 0
-                """,
-                (amount, character_id),
+            self._apply_character_damage(
+                connection,
+                character_id,
+                amount,
             )
-            if cursor.rowcount == 0:
-                raise CharacterNotFoundError(
-                    f"Character {character_id} does not exist."
-                )
             row = connection.execute(
                 """
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
@@ -5200,21 +5427,176 @@ class Database:
     def heal(self, discord_user_id: int, amount: int) -> Character:
         if amount <= 0:
             raise InvalidHitPointsError("Healing must be greater than 0.")
-        return self._update_hp(discord_user_id, "MIN(max_hp, hp + ?)", amount)
+        character = self._require_character(discord_user_id)
+        assert character.character_id is not None
+        return self.heal_character_by_id(character.character_id, amount)
+
+    def heal_character_by_id(
+        self,
+        character_id: int,
+        amount: int,
+    ) -> Character:
+        if amount <= 0:
+            raise InvalidHitPointsError("Healing must be greater than 0.")
+        with self._connect() as connection:
+            character = connection.execute(
+                """
+                SELECT hp, max_hp FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            if character is None:
+                raise CharacterNotFoundError(
+                    f"Character {character_id} does not exist."
+                )
+            state = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            if state["status"] == CharacterCombatStatus.DEAD.value:
+                raise InvalidHitPointsError(
+                    "Dead characters cannot be restored by normal healing."
+                )
+
+            old_hp = int(character["hp"])
+            max_hp = int(character["max_hp"])
+            new_hp = min(max_hp, old_hp + amount)
+            if old_hp <= 0 < new_hp:
+                new_status = CharacterCombatStatus.RECOVERING
+                failed_death_saves = 0
+            else:
+                new_status = CharacterCombatStatus(state["status"])
+                failed_death_saves = int(state["failed_death_saves"])
+
+            connection.execute(
+                "UPDATE characters SET hp = ? WHERE id = ?",
+                (new_hp, character_id),
+            )
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = ?
+                WHERE character_id = ?
+                """,
+                (
+                    new_status.value,
+                    failed_death_saves,
+                    character_id,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT id, discord_user_id, name, hp, max_hp, stance,
+                       lineage, race, age, gender,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       is_active, is_archived, portrait_key, current_room_id
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            assert row is not None
+            return self._to_character_with_skills(connection, row)
+
+    def record_death_save(
+        self,
+        character_id: int,
+        *,
+        success: bool,
+    ) -> CharacterCombatState:
+        with self._connect() as connection:
+            state = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            if state["status"] != CharacterCombatStatus.DOWNED.value:
+                raise InvalidHitPointsError(
+                    "Only a downed character can make a death save."
+                )
+            if success:
+                status = CharacterCombatStatus.STABLE
+                failures = 0
+            else:
+                failures = min(3, int(state["failed_death_saves"]) + 1)
+                status = (
+                    CharacterCombatStatus.DEAD
+                    if failures >= 3
+                    else CharacterCombatStatus.DOWNED
+                )
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = ?
+                WHERE character_id = ?
+                """,
+                (status.value, failures, character_id),
+            )
+            return CharacterCombatState(
+                character_id,
+                status,
+                failures,
+            )
+
+    def finish_short_rest(
+        self,
+        character_id: int,
+    ) -> CharacterCombatState:
+        with self._connect() as connection:
+            state = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            status = CharacterCombatStatus(state["status"])
+            if status is CharacterCombatStatus.RECOVERING:
+                status = CharacterCombatStatus.ACTIVE
+                connection.execute(
+                    """
+                    UPDATE character_combat_states
+                    SET status = 'active'
+                    WHERE character_id = ?
+                    """,
+                    (character_id,),
+                )
+            return CharacterCombatState(
+                character_id,
+                status,
+                int(state["failed_death_saves"]),
+            )
 
     def set_hp(self, discord_user_id: int, hp: int) -> Character:
         character = self._require_character(discord_user_id)
-        if not 0 <= hp <= character.max_hp:
+        if not -character.max_hp <= hp <= character.max_hp:
             raise InvalidHitPointsError(
-                f"HP must be between 0 and {character.max_hp} for {character.name}."
+                f"HP must be between {-character.max_hp} and "
+                f"{character.max_hp} for {character.name}."
             )
+        assert character.character_id is not None
         with self._connect() as connection:
+            self._ensure_character_combat_state_row(
+                connection,
+                character.character_id,
+            )
+            if hp <= -character.max_hp:
+                status = CharacterCombatStatus.DEAD
+            elif hp <= 0:
+                status = CharacterCombatStatus.DOWNED
+            else:
+                status = CharacterCombatStatus.ACTIVE
             connection.execute(
                 """
                 UPDATE characters SET hp = ?
                 WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
                 """,
                 (hp, discord_user_id),
+            )
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = 0
+                WHERE character_id = ?
+                """,
+                (status.value, character.character_id),
             )
         return self._require_character(discord_user_id)
 
@@ -5228,19 +5610,6 @@ class Database:
                 """,
                 (stance.value, discord_user_id),
             )
-        return self._require_character(discord_user_id)
-
-    def _update_hp(self, discord_user_id: int, sql_expression: str, amount: int) -> Character:
-        with self._connect() as connection:
-            cursor = connection.execute(
-                f"""
-                UPDATE characters SET hp = {sql_expression}
-                WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
-                """,
-                (amount, discord_user_id),
-            )
-            if cursor.rowcount == 0:
-                raise CharacterNotFoundError("That Discord user does not have a character.")
         return self._require_character(discord_user_id)
 
     def _require_character(self, discord_user_id: int) -> Character:

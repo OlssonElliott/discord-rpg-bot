@@ -134,6 +134,11 @@ export type CombatantData = {
   route_cost: number;
   is_between_landmarks: boolean;
   standard_action_spent: boolean;
+  hp: number | null;
+  max_hp: number | null;
+  character_status: 'active' | 'downed' | 'stable' | 'recovering' | 'dead' | null;
+  failed_death_saves: number | null;
+  death_save_dc: number | null;
   is_current_turn: boolean;
 };
 
@@ -183,6 +188,8 @@ export type CombatantInspectData = {
   hp: number | null;
   max_hp: number | null;
   status: string;
+  failed_death_saves: number | null;
+  death_save_dc: number | null;
   stance: string | null;
   race: string | null;
   lineage: string | null;
@@ -263,6 +270,8 @@ export type CombatEnemyAttackResultData = {
   target_hp: number;
   target_max_hp: number;
   target_down: boolean;
+  target_status: 'active' | 'downed' | 'stable' | 'recovering' | 'dead';
+  target_dead: boolean;
 };
 
 export type CombatStateData = {
