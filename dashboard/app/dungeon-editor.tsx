@@ -769,14 +769,14 @@ export function DungeonEditor() {
             <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
               <Box /> Item library
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setEnemyLibraryOpen(true)}>
-              <Skull /> Enemy library
-            </Button>
             <Button variant="outline" size="sm" onClick={() => setFeatureLibraryOpen(true)}>
               <Sparkles /> Feature library
             </Button>
           </>
         )}
+        <Button variant="outline" size="sm" onClick={() => setEnemyLibraryOpen(true)}>
+          <Skull /> Enemy library
+        </Button>
         <div className="header-status"><span /> {notice || 'Saved'}</div>
         {workspaceMode === 'locations' && (
           <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
@@ -800,6 +800,7 @@ export function DungeonEditor() {
         <CombatWorkspace
           scene={combatScene}
           rooms={graph?.nodes ?? []}
+          enemyTemplates={enemyTemplates}
           preferredRoomId={selectedRoomId}
           busy={combatBusy}
           onStart={startCombat}
@@ -820,6 +821,23 @@ export function DungeonEditor() {
               body: JSON.stringify({ landmark_id: landmarkId, relation }),
             },
             `${combatant.name} moved`,
+          )}
+          onAddEnemy={(templateId, landmarkId, quantity) => updateCombat(
+            '/combat/enemies',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                template_id: templateId,
+                landmark_id: landmarkId,
+                quantity,
+              }),
+            },
+            `${quantity} enem${quantity === 1 ? 'y' : 'ies'} added`,
+          )}
+          onRemoveEnemy={(enemyId) => updateCombat(
+            `/combat/combatants/enemy/${enemyId}`,
+            { method: 'DELETE' },
+            'Enemy removed from combat',
           )}
           onConnectLandmarks={(sourceId, destinationId, distance, obstacle, blocked) => updateCombat(
             '/combat/routes',
@@ -2496,6 +2514,21 @@ function EnemyLibraryDialog({
   const armorItems = catalogItems.filter(
     (item) => item.item_type === 'armor',
   );
+  const [search, setSearch] = useState('');
+  const [raceFilter, setRaceFilter] = useState('all');
+  const races = Array.from(
+    new Set(templates.map((template) => template.race).filter(Boolean)),
+  ).sort((left, right) => left.localeCompare(right));
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredTemplates = templates.filter((template) => (
+    (raceFilter === 'all' || template.race === raceFilter)
+    && (
+      !normalizedSearch
+      || template.name.toLocaleLowerCase().includes(normalizedSearch)
+      || template.race.toLocaleLowerCase().includes(normalizedSearch)
+      || template.typical_behaviour.toLocaleLowerCase().includes(normalizedSearch)
+    )
+  ));
 
   function update<K extends keyof EnemyTemplateDraft>(
     key: K,
@@ -2556,17 +2589,17 @@ function EnemyLibraryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="enemy-library-dialog sm:max-w-[860px]">
         <DialogHeader>
           <DialogTitle>Enemy library</DialogTitle>
           <DialogDescription>
-            Define reusable enemy types here. Placed copies keep independent HP and world state.
+            Define reusable enemy types here. Click an existing type to edit or delete it. Placed copies keep independent HP and world state.
           </DialogDescription>
         </DialogHeader>
 
         <div className="catalog-heading">
           <div className="catalog-count">
-            {templates.length} enemy types available
+            {filteredTemplates.length} of {templates.length} enemy types
           </div>
           <button
             type="button"
@@ -2576,11 +2609,38 @@ function EnemyLibraryDialog({
           </button>
         </div>
 
+        <div className="catalog-grid enemy-library-filters">
+          <label className="dialog-label" htmlFor="enemy-library-search">
+            Search
+            <Input
+              id="enemy-library-search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Name, race or behaviour…"
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-library-race">
+            Race
+            <NativeSelect
+              id="enemy-library-race"
+              value={raceFilter}
+              onChange={(event) => setRaceFilter(event.target.value)}
+            >
+              <NativeSelectOption value="all">All races</NativeSelectOption>
+              {races.map((race) => (
+                <NativeSelectOption key={race} value={race}>
+                  {race}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+        </div>
+
         <div
           className="catalog-list"
           aria-label="Existing enemy types"
         >
-          {templates.map((template) => (
+          {filteredTemplates.map((template) => (
             <button
               type="button"
               className={
@@ -2848,7 +2908,7 @@ function EnemyLibraryDialog({
           </label>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="enemy-library-footer">
           {editingTemplate && (
             <Button
               variant="destructive"

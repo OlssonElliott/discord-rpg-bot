@@ -653,6 +653,9 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS world_enemies_by_template
                 ON world_enemies(template_id);
+            CREATE TABLE IF NOT EXISTS world_seed_state (
+                key TEXT PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS container_templates (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -748,6 +751,95 @@ class Database:
             CREATE INDEX IF NOT EXISTS characters_by_room ON characters(current_room_id);
             """
         )
+        enemy_seed_key = "basic_enemy_templates_v1"
+        if connection.execute(
+            "SELECT 1 FROM world_seed_state WHERE key = ?",
+            (enemy_seed_key,),
+        ).fetchone() is None:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO enemy_templates (
+                    id, name, description, race, difficulty_level,
+                    strength, dexterity, arcana, vitality, insight, personality,
+                    max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                    damage, attack_profile, special_ability, typical_behaviour
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    (
+                        "core_goblin_raider",
+                        "Goblin Raider",
+                        "A wiry goblin skirmisher accustomed to ambushes and dirty fighting.",
+                        "Goblin",
+                        1, 1, 3, 0, 1, 1, 0, 6, 0, 0, 12, 13,
+                        "1d4",
+                        "Jagged blade or shortbow",
+                        "Pack opportunist",
+                        "Circles isolated targets, attacks from advantage, and retreats when pressured.",
+                    ),
+                    (
+                        "core_bandit",
+                        "Bandit",
+                        "A common outlaw with practical weapons and little discipline.",
+                        "Human",
+                        1, 2, 2, 0, 2, 1, 1, 9, 1, 0, 12, 12,
+                        "1d6",
+                        "Sword or club",
+                        None,
+                        "Fights directly while an advantage remains and may flee when badly hurt.",
+                    ),
+                    (
+                        "core_skeleton_warrior",
+                        "Skeleton Warrior",
+                        "An animated warrior held together by old armor and darker forces.",
+                        "Undead",
+                        2, 3, 1, 0, 3, 0, 0, 10, 1, 1, 13, 11,
+                        "1d6",
+                        "Heavy weapon swing",
+                        "Fearless",
+                        "Advances without hesitation and keeps pressure on the nearest living target.",
+                    ),
+                    (
+                        "core_bone_hound",
+                        "Bone Hound",
+                        "A fast skeletal predator that hunts by sound and movement.",
+                        "Undead Beast",
+                        2, 2, 4, 0, 2, 2, 0, 8, 0, 1, 13, 13,
+                        "1d6",
+                        "Bite and maul",
+                        "Relentless pursuit",
+                        "Rushes vulnerable targets and stays close once it has engaged.",
+                    ),
+                    (
+                        "core_cultist",
+                        "Cultist",
+                        "A fanatical occultist carrying crude weapons and unstable magic.",
+                        "Human",
+                        2, 1, 2, 4, 1, 2, 2, 7, 0, 2, 13, 11,
+                        "1d4",
+                        "Ritual blade or dark bolt",
+                        "Dark invocation",
+                        "Keeps distance when possible and supports stronger allies with occult pressure.",
+                    ),
+                    (
+                        "core_swamp_troll",
+                        "Swamp Troll",
+                        "A massive troll accustomed to fighting through wounds that would stop lesser creatures.",
+                        "Troll",
+                        4, 6, 1, 0, 6, 1, 0, 28, 2, 1, 15, 10,
+                        "2d6",
+                        "Crushing claw or heavy club",
+                        "Regeneration",
+                        "Pushes into the center of a fight and focuses on the nearest threatening target.",
+                    ),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO world_seed_state (key) VALUES (?)",
+                (enemy_seed_key,),
+            )
         room_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(rooms)")
         }

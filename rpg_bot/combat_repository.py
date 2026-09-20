@@ -212,6 +212,70 @@ class CombatRepository:
             ).fetchone()
             return self._load_scene(connection, row) if row is not None else None
 
+    def add_combatant(
+        self,
+        scene_id: int,
+        combatant: CombatantState,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if connection.execute(
+                "SELECT 1 FROM combat_scenes WHERE id = ? AND status = 'active'",
+                (scene_id,),
+            ).fetchone() is None:
+                raise ValueError("The combat scene is not active.")
+            if connection.execute(
+                """
+                SELECT 1 FROM combat_landmarks
+                WHERE scene_id = ? AND id = ?
+                """,
+                (scene_id, combatant.landmark_id),
+            ).fetchone() is None:
+                raise ValueError(
+                    f"Unknown combat landmark '{combatant.landmark_id}'."
+                )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO combatants (
+                        scene_id, kind, source_id, name, landmark_id, relation
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scene_id,
+                        combatant.kind.value,
+                        combatant.source_id,
+                        combatant.name,
+                        combatant.landmark_id,
+                        combatant.relation.value,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Combatant '{combatant.kind.value}:{combatant.source_id}' "
+                    "is already in this scene."
+                ) from error
+
+    def remove_combatant(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                DELETE FROM combatants
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
     def end_scene(self, guild_id: int) -> CombatScene | None:
         with self._connect() as connection:
             self._ensure_schema(connection)

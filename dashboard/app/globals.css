@@ -176,6 +176,10 @@ button, input, textarea { font: inherit; }
 .combatant-editor__name { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: #dce2e9; font-size: .77rem; }
 .combatant-editor__name .badge { margin-left: auto; }
 .combatant-editor button { grid-column: 2; }
+.combatant-editor .combatant-editor__remove { grid-column: 1 / -1; color: #d9908c; }
+.combat-enemy-adder { display: grid; gap: 10px; padding: 11px; border: 1px solid #26344a; border-radius: 8px; background: #111927; }
+.combat-enemy-adder label { display: grid; gap: 5px; margin: 0; }
+.combat-enemy-adder button { width: 100%; }
 .combat-checkbox { display: flex !important; align-items: center; gap: 7px; margin: 11px 0 !important; }
 .combat-checkbox input { width: 15px; height: 15px; }
 .combat-route-list { display: grid; gap: 5px; margin-top: 13px; }
@@ -209,6 +213,10 @@ button, input, textarea { font: inherit; }
 .catalog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .readable-content-input { min-height: 12rem; resize: vertical; }
 .catalog-check { display: flex; align-items: center; gap: 8px; color: #aab5c3; font-size: .8rem; }
+.enemy-library-dialog { width: min(860px, calc(100vw - 32px)); max-height: 85vh; overflow-y: auto; }
+.enemy-library-dialog .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.enemy-library-dialog .enemy-library-filters { grid-template-columns: 2fr 1fr; }
+.enemy-library-footer { position: sticky; bottom: 0; z-index: 4; margin: 4px -16px -16px; padding: 12px 16px 16px; border-top: 1px solid #26344a; background: #111a29; }
 
 @media (max-width: 820px) {
   .editor-header { padding: 0 12px; }
@@ -217,6 +225,8 @@ button, input, textarea { font: inherit; }
   .workspace-tabs button { padding: 6px; }
   .workspace-tabs button svg + * { display: none; }
   .area-select { width: auto; min-width: 0; margin-left: 0; }
+  .enemy-library-dialog .catalog-grid,
+  .enemy-library-dialog .enemy-library-filters { grid-template-columns: 1fr; }
   .editor-body, .combat-workspace { grid-template-columns: 1fr; }
   .inspector { position: absolute; right: 10px; bottom: 10px; z-index: 10; width: min(340px, calc(100vw - 20px)); max-height: 48vh; border: 1px solid #26344a; border-radius: 10px; box-shadow: 0 18px 50px #0009; }
   .combat-control-panel { position: absolute; right: 10px; bottom: 10px; z-index: 10; width: min(390px, calc(100vw - 20px)); max-height: 52vh; border: 1px solid #26344a; border-radius: 10px; box-shadow: 0 18px 50px #0009; }

@@ -275,6 +275,80 @@ class CombatService:
             raise CombatError("There is no active combat scene.")
         return scene
 
+    def add_enemies(
+        self,
+        guild_id: int,
+        template_id: str,
+        *,
+        landmark_id: str | None = None,
+        quantity: int = 1,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if (
+            isinstance(quantity, bool)
+            or not isinstance(quantity, int)
+            or not 1 <= quantity <= 20
+        ):
+            raise CombatError("Enemy quantity must be an integer from 1 to 20.")
+
+        template = self.world.get_enemy_template(template_id)
+        if template is None:
+            raise CombatError(
+                f"Enemy template '{template_id}' does not exist."
+            )
+
+        destination_id = landmark_id or self.CENTER_LANDMARK_ID
+        if scene.landmark(destination_id) is None:
+            raise CombatError(
+                f"Unknown combat landmark '{destination_id}'."
+            )
+
+        for _ in range(quantity):
+            enemy = self.world.place_enemy(
+                scene.room_id,
+                template.template_id,
+            )
+            try:
+                self.repository.add_combatant(
+                    scene.id,
+                    CombatantState(
+                        CombatantKind.ENEMY,
+                        enemy.id,
+                        enemy.name,
+                        destination_id,
+                        LandmarkRelation.AT,
+                    ),
+                )
+            except ValueError as error:
+                self.world.remove_entity(enemy.id)
+                raise CombatError(str(error)) from error
+
+        return self._require_current(guild_id)
+
+    def remove_enemy(
+        self,
+        guild_id: int,
+        enemy_id: str,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if not any(
+            combatant.kind is CombatantKind.ENEMY
+            and combatant.source_id == enemy_id
+            for combatant in scene.combatants
+        ):
+            raise CombatError(
+                f"Enemy '{enemy_id}' is not in the active combat scene."
+            )
+        try:
+            self.repository.remove_combatant(
+                scene.id,
+                CombatantKind.ENEMY,
+                enemy_id,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
     def add_landmark(
         self,
         guild_id: int,

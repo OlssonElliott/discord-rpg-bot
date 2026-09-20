@@ -423,6 +423,15 @@ class DashboardAPI:
             )
             return 200, _combat_state_data(scene, self.world)
 
+        if path == "/api/combat/enemies" and method == "POST":
+            scene = self.combat.add_enemies(
+                self._combat_guild_id(),
+                self._text(body, "template_id"),
+                landmark_id=self._optional_text(body, "landmark_id"),
+                quantity=self._integer(body, "quantity", default=1),
+            )
+            return 201, _combat_state_data(scene, self.world)
+
         match = re.fullmatch(
             r"/api/combat/combatants/(character|enemy)/([^/]+)",
             path,
@@ -435,6 +444,17 @@ class DashboardAPI:
                 source_id,
                 self._text(body, "landmark_id"),
                 self._text(body, "relation"),
+            )
+            return 200, _combat_state_data(scene, self.world)
+        if match and method == "DELETE":
+            kind, source_id = match.groups()
+            if kind != "enemy":
+                raise ValueError(
+                    "Characters cannot be removed from combat through this endpoint."
+                )
+            scene = self.combat.remove_enemy(
+                self._combat_guild_id(),
+                source_id,
             )
             return 200, _combat_state_data(scene, self.world)
 

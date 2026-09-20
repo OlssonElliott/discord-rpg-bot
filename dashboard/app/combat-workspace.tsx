@@ -36,6 +36,7 @@ import type {
   CombatLandmarkData,
   CombatSceneData,
   CombatantData,
+  EnemyTemplateData,
   RoomData,
 } from './api';
 
@@ -45,6 +46,7 @@ type Distance = 'close' | 'far' | 'distant';
 type CombatWorkspaceProps = {
   scene: CombatSceneData | null;
   rooms: RoomData[];
+  enemyTemplates: EnemyTemplateData[];
   preferredRoomId: string | null;
   busy: boolean;
   onStart: (roomId: string) => Promise<boolean>;
@@ -56,6 +58,12 @@ type CombatWorkspaceProps = {
     landmarkId: string,
     relation: Relation,
   ) => Promise<boolean>;
+  onAddEnemy: (
+    templateId: string,
+    landmarkId: string,
+    quantity: number,
+  ) => Promise<boolean>;
+  onRemoveEnemy: (enemyId: string) => Promise<boolean>;
   onConnectLandmarks: (
     sourceId: string,
     destinationId: string,
@@ -241,6 +249,7 @@ function CombatantEditor({
   scene,
   busy,
   onMove,
+  onRemoveEnemy,
 }: {
   combatant: CombatantData;
   scene: CombatSceneData;
@@ -250,6 +259,7 @@ function CombatantEditor({
     landmarkId: string,
     relation: Relation,
   ) => Promise<boolean>;
+  onRemoveEnemy: (enemyId: string) => Promise<boolean>;
 }) {
   const [landmarkId, setLandmarkId] = useState(combatant.landmark_id);
   const [relation, setRelation] = useState<Relation>(combatant.relation);
@@ -294,6 +304,17 @@ function CombatantEditor({
       >
         Move
       </Button>
+      {combatant.kind === 'enemy' && (
+        <Button
+          className="combatant-editor__remove"
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => void onRemoveEnemy(combatant.source_id)}
+        >
+          <Trash2 /> Remove from combat
+        </Button>
+      )}
     </div>
   );
 }
@@ -301,6 +322,7 @@ function CombatantEditor({
 export function CombatWorkspace({
   scene,
   rooms,
+  enemyTemplates,
   preferredRoomId,
   busy,
   onStart,
@@ -308,6 +330,8 @@ export function CombatWorkspace({
   onRefresh,
   onPositionLandmark,
   onMoveCombatant,
+  onAddEnemy,
+  onRemoveEnemy,
   onConnectLandmarks,
   onDeleteLandmark,
   onDeleteConnection,
@@ -322,6 +346,9 @@ export function CombatWorkspace({
   const [routeDistance, setRouteDistance] = useState<Distance>('close');
   const [routeObstacle, setRouteObstacle] = useState('');
   const [routeBlocked, setRouteBlocked] = useState(false);
+  const [enemyTemplateId, setEnemyTemplateId] = useState('');
+  const [enemyLandmarkId, setEnemyLandmarkId] = useState('room:center');
+  const [enemyQuantity, setEnemyQuantity] = useState(1);
 
   useEffect(() => {
     if (scene) return;
@@ -332,6 +359,20 @@ export function CombatWorkspace({
       setStartRoomId(rooms[0]?.id || '');
     }
   }, [preferredRoomId, rooms, scene, startRoomId]);
+
+  useEffect(() => {
+    if (!scene) {
+      setEnemyLandmarkId('room:center');
+      return;
+    }
+    if (!scene.landmarks.some((landmark) => landmark.id === enemyLandmarkId)) {
+      setEnemyLandmarkId(
+        scene.landmarks.find((landmark) => landmark.id === 'room:center')?.id
+          || scene.landmarks[0]?.id
+          || '',
+      );
+    }
+  }, [enemyLandmarkId, scene]);
 
   useEffect(() => {
     if (!scene) {
@@ -722,6 +763,76 @@ export function CombatWorkspace({
         </section>
 
         <section className="combat-control-section">
+          <h3><Skull size={15} /> Add enemy</h3>
+          <div className="combat-enemy-adder">
+            <label>
+              Enemy type
+              <NativeSelect
+                value={enemyTemplateId}
+                onChange={(event) => setEnemyTemplateId(event.target.value)}
+              >
+                <NativeSelectOption value="">Choose enemy…</NativeSelectOption>
+                {enemyTemplates.map((template) => (
+                  <NativeSelectOption key={template.id} value={template.id}>
+                    {template.name} · difficulty {template.difficulty_level}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <label>
+              Spawn at
+              <NativeSelect
+                value={enemyLandmarkId}
+                onChange={(event) => setEnemyLandmarkId(event.target.value)}
+              >
+                {scene.landmarks.map((landmark) => (
+                  <NativeSelectOption key={landmark.id} value={landmark.id}>
+                    {landmark.name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <label>
+              Quantity
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={enemyQuantity}
+                onChange={(event) => setEnemyQuantity(Number(event.target.value))}
+              />
+            </label>
+            <Button
+              size="sm"
+              disabled={
+                busy
+                || !enemyTemplateId
+                || !enemyLandmarkId
+                || !Number.isInteger(enemyQuantity)
+                || enemyQuantity < 1
+                || enemyQuantity > 20
+              }
+              onClick={async () => {
+                if (await onAddEnemy(
+                  enemyTemplateId,
+                  enemyLandmarkId,
+                  enemyQuantity,
+                )) {
+                  setEnemyQuantity(1);
+                }
+              }}
+            >
+              <Skull /> Add {enemyQuantity > 1 ? `${enemyQuantity} enemies` : 'enemy'}
+            </Button>
+            {!enemyTemplates.length && (
+              <p className="muted-row">
+                No enemy types are available. Create one in the Enemy library.
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section className="combat-control-section">
           <h3><Shield size={15} /> Combatants</h3>
           <div className="combatant-editor-list">
             {scene.combatants.map((combatant) => (
@@ -731,6 +842,7 @@ export function CombatWorkspace({
                 scene={scene}
                 busy={busy}
                 onMove={onMoveCombatant}
+                onRemoveEnemy={onRemoveEnemy}
               />
             ))}
             {!scene.combatants.length && <p className="muted-row">No combatants are in this scene.</p>}

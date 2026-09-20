@@ -258,6 +258,47 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(moved["scene"]["combatants"][0]["landmark_id"], "feature:pillar")
         self.assertEqual(moved["scene"]["combatants"][0]["relation"], "behind")
 
+        add_enemy_status, reinforced = self.api.handle(
+            "POST",
+            "/api/combat/enemies",
+            {
+                "template_id": "core_goblin_raider",
+                "landmark_id": "feature:table",
+                "quantity": 2,
+            },
+        )
+        self.assertEqual(add_enemy_status, 201)
+        goblins = [
+            combatant
+            for combatant in reinforced["scene"]["combatants"]
+            if combatant["name"] == "Goblin Raider"
+        ]
+        self.assertEqual(len(goblins), 2)
+        self.assertEqual(
+            {goblin["landmark_id"] for goblin in goblins},
+            {"feature:table"},
+        )
+        self.assertNotEqual(goblins[0]["source_id"], goblins[1]["source_id"])
+        self.assertIsNotNone(
+            self.world.get_enemy(goblins[0]["source_id"])
+        )
+
+        remove_enemy_status, reduced = self.api.handle(
+            "DELETE",
+            f"/api/combat/combatants/enemy/{goblins[0]['source_id']}",
+        )
+        self.assertEqual(remove_enemy_status, 200)
+        self.assertNotIn(
+            goblins[0]["source_id"],
+            {
+                combatant["source_id"]
+                for combatant in reduced["scene"]["combatants"]
+            },
+        )
+        self.assertIsNotNone(
+            self.world.get_enemy(goblins[0]["source_id"])
+        )
+
         status, ended = self.api.handle("DELETE", "/api/combat")
         self.assertEqual(status, 200)
         self.assertIsNone(ended["scene"])
@@ -510,6 +551,51 @@ class DashboardAPITests(unittest.TestCase):
             deleted,
             {"deleted": "skeleton_warrior"},
         )
+
+    def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:
+        status, templates = self.api.handle(
+            "GET",
+            "/api/enemy-templates",
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(
+            {
+                "core_goblin_raider",
+                "core_bandit",
+                "core_skeleton_warrior",
+                "core_bone_hound",
+                "core_cultist",
+                "core_swamp_troll",
+            }.issubset({template["id"] for template in templates})
+        )
+
+        update_status, updated = self.api.handle(
+            "PUT",
+            "/api/enemy-templates/core_bandit",
+            {
+                "name": "Road Bandit",
+                "max_hp": 11,
+            },
+        )
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["name"], "Road Bandit")
+        self.assertEqual(updated["max_hp"], 11)
+
+        delete_status, _ = self.api.handle(
+            "DELETE",
+            "/api/enemy-templates/core_bone_hound",
+        )
+        self.assertEqual(delete_status, 200)
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        self.assertIsNone(
+            reopened.get_enemy_template("core_bone_hound")
+        )
+        persisted = reopened.get_enemy_template("core_bandit")
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.name, "Road Bandit")
+        self.assertEqual(persisted.max_hp, 11)
 
     def test_room_image_can_be_uploaded_replaced_persisted_and_removed(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
