@@ -8,17 +8,21 @@ import re
 from uuid import uuid4
 
 from .combat import (
+    AttackResult,
     CombatLandmark,
     CombatRoute,
     CombatScene,
     CombatantKind,
     CombatantState,
+    DamageRoll,
     LandmarkDistance,
     LandmarkRelation,
 )
 from .combat_repository import CombatRepository
 from .database import Database
 from .dungeon import ConnectionType
+from .enemies import EnemyStatus
+from .inventory import DamagePart, EquipmentSlot, ItemTemplate, ItemType
 from .world_service import WorldService
 
 
@@ -181,6 +185,12 @@ class CombatService:
             )
 
         for enemy in room.enemies:
+            enemy_instance = self.world.get_enemy(enemy.id)
+            if (
+                enemy_instance is not None
+                and enemy_instance.status is not EnemyStatus.ACTIVE
+            ):
+                continue
             initiative_roll, initiative_score = self._roll_initiative(
                 self._enemy_insight_modifier(enemy.id)
             )
@@ -342,6 +352,90 @@ class CombatService:
             1,
             3 + (template.strength if template is not None else 0),
         )
+
+    def _equipped_attack_weapon(
+        self,
+        character_id: int,
+    ) -> ItemTemplate | None:
+        inventory = self.database.get_character_inventory(character_id)
+        for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+            instance_id = inventory.equipment.get(slot)
+            if instance_id is None:
+                continue
+            instance = next(
+                (
+                    item
+                    for item in inventory.items
+                    if item.instance_id == instance_id
+                ),
+                None,
+            )
+            if instance is None or instance.durability == 0:
+                continue
+            try:
+                template = self.world.catalog.get(instance.template_id)
+            except ValueError:
+                continue
+            if template.item_type is ItemType.WEAPON:
+                return template
+        return None
+
+    @staticmethod
+    def _weapon_attack_attribute(
+        weapon: ItemTemplate | None,
+    ) -> str:
+        if weapon is None:
+            return "strength"
+        tags = {tag.casefold() for tag in weapon.tags}
+        if tags & {"magic", "spell", "focus", "staff"}:
+            return "arcana"
+        if tags & {
+            "bow",
+            "crossbow",
+            "ranged",
+            "finesse",
+            "dagger",
+            "light",
+        }:
+            return "dexterity"
+        return "strength"
+
+    @staticmethod
+    def _same_combat_position(
+        first: CombatantState,
+        second: CombatantState,
+    ) -> bool:
+        if first.is_between_landmarks != second.is_between_landmarks:
+            return False
+        if not first.is_between_landmarks:
+            return first.landmark_id == second.landmark_id
+
+        first_ids = {
+            first.route_source_landmark_id,
+            first.route_destination_landmark_id,
+        }
+        second_ids = {
+            second.route_source_landmark_id,
+            second.route_destination_landmark_id,
+        }
+        if first_ids != second_ids or first.route_cost != second.route_cost:
+            return False
+
+        canonical_start = min(
+            first.route_source_landmark_id or "",
+            first.route_destination_landmark_id or "",
+        )
+        first_progress = (
+            first.route_progress
+            if first.route_source_landmark_id == canonical_start
+            else first.route_cost - first.route_progress
+        )
+        second_progress = (
+            second.route_progress
+            if second.route_source_landmark_id == canonical_start
+            else second.route_cost - second.route_progress
+        )
+        return first_progress == second_progress
 
     @staticmethod
     def _route_between(
@@ -597,6 +691,11 @@ class CombatService:
                 first.kind,
                 first.source_id,
             )
+            self.repository.reset_standard_action(
+                scene.id,
+                first.kind,
+                first.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 scene.round_number,
@@ -781,6 +880,11 @@ class CombatService:
                     next_combatant.kind,
                     next_combatant.source_id,
                 )
+                self.repository.reset_standard_action(
+                    scene.id,
+                    next_combatant.kind,
+                    next_combatant.source_id,
+                )
                 self.repository.set_turn(
                     scene.id,
                     next_round,
@@ -834,6 +938,11 @@ class CombatService:
                 target.kind,
                 target.source_id,
             )
+            self.repository.reset_standard_action(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 next_round,
@@ -881,6 +990,11 @@ class CombatService:
                 target.kind,
                 target.source_id,
             )
+            self.repository.reset_standard_action(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 previous_round,
@@ -920,6 +1034,11 @@ class CombatService:
                 and combatant.source_id == source_id
             )
             self.repository.reset_combatant_movement(
+                scene.id,
+                parsed_kind,
+                source_id,
+            )
+            self.repository.reset_standard_action(
                 scene.id,
                 parsed_kind,
                 source_id,
@@ -1135,6 +1254,221 @@ class CombatService:
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
+
+    def attack_enemy(
+        self,
+        guild_id: int,
+        target_enemy_id: str,
+    ) -> tuple[CombatScene, AttackResult]:
+        scene = self._require_current(guild_id)
+        attacker = scene.current_combatant()
+        if attacker is None:
+            raise CombatError("There is no current combatant.")
+        if attacker.kind is not CombatantKind.CHARACTER:
+            raise CombatError(
+                "Enemy attacks are not implemented in this combat slice yet."
+            )
+        if attacker.standard_action_spent:
+            raise CombatError(
+                f"{attacker.name} has already spent their Standard Action."
+            )
+
+        target = next(
+            (
+                combatant
+                for combatant in scene.combatants
+                if combatant.kind is CombatantKind.ENEMY
+                and combatant.source_id == target_enemy_id
+            ),
+            None,
+        )
+        if target is None:
+            raise CombatError(
+                f"Enemy '{target_enemy_id}' is not in the active combat."
+            )
+        if not self._same_combat_position(attacker, target):
+            raise CombatError(
+                f"{target.name} is not within melee range of {attacker.name}."
+            )
+
+        enemy = self.world.get_enemy(target_enemy_id)
+        if enemy is None:
+            raise CombatError(
+                "This legacy enemy has no combat stats. "
+                "Use a structured enemy type for attacks."
+            )
+        if enemy.status is not EnemyStatus.ACTIVE or enemy.current_hp <= 0:
+            raise CombatError(f"{enemy.name} is no longer an active target.")
+
+        template = self.world.get_enemy_template(enemy.template_id)
+        if template is None:
+            raise CombatError(
+                f"Enemy template '{enemy.template_id}' does not exist."
+            )
+
+        try:
+            character_id = int(attacker.source_id)
+        except ValueError as error:
+            raise CombatError(
+                f"Character combatant '{attacker.source_id}' is invalid."
+            ) from error
+
+        weapon = self._equipped_attack_weapon(character_id)
+        weapon_name = weapon.name if weapon is not None else "Unarmed"
+        attack_attribute = self._weapon_attack_attribute(weapon)
+        attribute_score = self.database.get_character_attribute(
+            character_id,
+            attack_attribute,
+        )
+        attack_modifier = (attribute_score - 10) // 2
+        attack_roll = random.randint(1, 20)
+        attack_total = attack_roll + attack_modifier
+        critical = attack_roll == 20
+        hit = critical or (
+            attack_roll != 1
+            and attack_total >= template.defense_dc
+        )
+
+        damage_rolls: tuple[DamageRoll, ...] = ()
+        raw_damage = 0
+        reduction = 0
+        reduction_type = "armor"
+        final_damage = 0
+        target_hp = enemy.current_hp
+        target_defeated = False
+
+        if hit:
+            damage_parts = (
+                weapon.damage_parts
+                if weapon is not None and weapon.damage_parts
+                else (DamagePart(4, "blunt"),)
+            )
+            damage_rolls = tuple(
+                DamageRoll(
+                    die=max(1, part.amount),
+                    damage_type=part.damage_type,
+                    roll=(
+                        max(1, part.amount)
+                        if critical
+                        else random.randint(1, max(1, part.amount))
+                    ),
+                )
+                for part in damage_parts
+            )
+            raw_damage = sum(part.roll for part in damage_rolls)
+            magical_types = {
+                "arcane",
+                "cold",
+                "fire",
+                "lightning",
+                "magic",
+                "necrotic",
+                "psychic",
+                "radiant",
+            }
+            damage_types = {
+                part.damage_type.casefold()
+                for part in damage_rolls
+            }
+            if damage_types and damage_types <= magical_types:
+                reduction_type = "magical_resistance"
+                reduction = max(0, template.magical_resistance)
+            else:
+                reduction = max(0, template.armor)
+            final_damage = max(1, raw_damage - reduction)
+            target_hp = max(0, enemy.current_hp - final_damage)
+            updated_enemy = self.world.update_enemy(
+                enemy.id,
+                name=enemy.name,
+                description=enemy.description,
+                current_hp=target_hp,
+            )
+            target_hp = updated_enemy.current_hp
+            target_defeated = target_hp == 0
+
+        result = AttackResult(
+            attacker_kind=attacker.kind,
+            attacker_source_id=attacker.source_id,
+            attacker_name=attacker.name,
+            target_kind=target.kind,
+            target_source_id=target.source_id,
+            target_name=target.name,
+            weapon_name=weapon_name,
+            attack_attribute=attack_attribute,
+            attack_roll=attack_roll,
+            attack_modifier=attack_modifier,
+            attack_total=attack_total,
+            defense_dc=template.defense_dc,
+            hit=hit,
+            critical=critical,
+            damage_rolls=damage_rolls,
+            raw_damage=raw_damage,
+            reduction=reduction,
+            reduction_type=reduction_type,
+            final_damage=final_damage,
+            target_hp=target_hp,
+            target_max_hp=template.max_hp,
+            target_defeated=target_defeated,
+        )
+
+        try:
+            self.repository.set_standard_action_spent(
+                scene.id,
+                attacker.kind,
+                attacker.source_id,
+                True,
+            )
+
+            if hit:
+                critical_text = " critical" if critical else ""
+                reduction_label = reduction_type.replace("_", " ")
+                message = (
+                    f"{attacker.name} attacked {target.name} with "
+                    f"{weapon_name}: {attack_roll}"
+                    f"{attack_modifier:+d} = {attack_total} vs "
+                    f"Defense {template.defense_dc},"
+                    f"{critical_text} hit for {final_damage} damage "
+                    f"({raw_damage} raw, {reduction} "
+                    f"{reduction_label} reduction). "
+                    f"{target.name} has {target_hp}/{template.max_hp} HP."
+                )
+            else:
+                message = (
+                    f"{attacker.name} attacked {target.name} with "
+                    f"{weapon_name}: {attack_roll}"
+                    f"{attack_modifier:+d} = {attack_total} vs "
+                    f"Defense {template.defense_dc}, miss."
+                )
+
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "attack_resolved",
+                message,
+                actor_kind=attacker.kind,
+                actor_source_id=attacker.source_id,
+                actor_name=attacker.name,
+            )
+
+            if target_defeated:
+                self.repository.remove_combatant(
+                    scene.id,
+                    CombatantKind.ENEMY,
+                    target.source_id,
+                )
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "combatant_defeated",
+                    f"{target.name} was defeated.",
+                    actor_kind=target.kind,
+                    actor_source_id=target.source_id,
+                    actor_name=target.name,
+                )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+
+        return self._require_current(guild_id), result
 
     def move_combatant(
         self,

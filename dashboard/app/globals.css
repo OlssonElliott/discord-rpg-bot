@@ -204,6 +204,12 @@ button, input, textarea { font: inherit; }
 .combatant-editor__name > .badge:first-of-type { margin-left: auto; }
 .combatant-editor__movement-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #c6a76d; font-size: .64rem; border: 1px solid #4c3e29; border-radius: 6px; background: #1b1711; }
 .combatant-editor button { grid-column: 2; }
+.combatant-editor__standard-action { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 8px; border: 1px solid #34445b; border-radius: 7px; background: #101a28; }
+.combatant-editor__standard-action > div { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 8px; color: #9facc0; font-size: .66rem; }
+.combatant-editor__standard-action select { min-width: 0; }
+.combatant-editor__standard-action button { grid-column: 2; }
+.combat-action-badge--ready { color: #95caa1; border-color: #466c51; }
+.combat-action-badge--spent { color: #8a94a4; border-color: #3c4656; opacity: .75; }
 .combatant-editor__initiative { display: grid; grid-column: 1 / -1; grid-template-columns: 1fr 80px 62px; align-items: center; gap: 6px; margin-top: 3px; }
 .combatant-editor__initiative > span { display: flex; color: #8e9bae; font-size: .68rem; flex-direction: column; }
 .combatant-editor__initiative small { color: #657489; font-size: .58rem; }
@@ -218,6 +224,8 @@ button, input, textarea { font: inherit; }
 .combat-log-entry time { color: #68788d; font-size: .6rem; }
 .combat-log-entry p { margin: 6px 0 0; color: #aab5c3; font-size: .68rem; line-height: 1.4; }
 .combat-log-entry--turn_started { border-left-color: #d39a4a; }
+.combat-log-entry--attack_resolved { border-left-color: #a96c49; }
+.combat-log-entry--combatant_defeated { border-left-color: #b44747; }
 .combat-log-entry--combatant_removed { border-left-color: #a95b5b; }
 .combat-log-entry--combatant_joined { border-left-color: #688e72; }
 .combat-enemy-adder { display: grid; gap: 10px; padding: 11px; border: 1px solid #26344a; border-radius: 8px; background: #111927; }

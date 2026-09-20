@@ -133,6 +133,7 @@ export type CombatantData = {
   route_progress: number;
   route_cost: number;
   is_between_landmarks: boolean;
+  standard_action_spent: boolean;
   is_current_turn: boolean;
 };
 
@@ -211,8 +212,38 @@ export type CombatantInspectData = {
   } | null;
 };
 
+export type CombatAttackResultData = {
+  attacker_kind: 'character' | 'enemy';
+  attacker_source_id: string;
+  attacker_name: string;
+  target_kind: 'character' | 'enemy';
+  target_source_id: string;
+  target_name: string;
+  weapon_name: string;
+  attack_attribute: string;
+  attack_roll: number;
+  attack_modifier: number;
+  attack_total: number;
+  defense_dc: number;
+  hit: boolean;
+  critical: boolean;
+  damage_rolls: {
+    die: number;
+    damage_type: string;
+    roll: number;
+  }[];
+  raw_damage: number;
+  reduction: number;
+  reduction_type: string;
+  final_damage: number;
+  target_hp: number;
+  target_max_hp: number;
+  target_defeated: boolean;
+};
+
 export type CombatStateData = {
   scene: CombatSceneData | null;
+  attack_result?: CombatAttackResultData;
 };
 
 export type ConnectionData = {

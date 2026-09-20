@@ -11,6 +11,7 @@ from rpg_bot.combat import (
 from rpg_bot.combat_service import CombatError, CombatService
 from rpg_bot.database import Database
 from rpg_bot.dungeon import ConnectionType
+from rpg_bot.inventory import EquipmentSlot
 from rpg_bot.world import EntityKind
 from rpg_bot.world_service import WorldService
 
@@ -551,6 +552,183 @@ class CombatServiceTests(unittest.TestCase):
             LandmarkRelation.BEHIND,
         )
         self.assertEqual(olof.movement_remaining, 1)
+
+    def test_player_attack_uses_equipped_weapon_and_spends_standard_action(self) -> None:
+        skeleton = self.world.place_enemy(
+            self.hall.id,
+            "core_skeleton_warrior",
+        )
+        weapon = self.world.catalog.get("rusty_sword")
+        weapon_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            weapon.template_id,
+            durability=weapon.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            weapon_instance_id,
+            EquipmentSlot.MAIN_HAND,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            side_effect=[15, 4],
+        ):
+            scene, result = self.service.attack_enemy(
+                44,
+                skeleton.id,
+            )
+
+        self.assertTrue(result.hit)
+        self.assertFalse(result.critical)
+        self.assertEqual(result.weapon_name, "Rusty Sword")
+        self.assertEqual(result.attack_attribute, "strength")
+        self.assertEqual(result.attack_roll, 15)
+        self.assertEqual(result.raw_damage, 4)
+        self.assertEqual(result.reduction, 1)
+        self.assertEqual(result.final_damage, 3)
+        self.assertEqual(result.target_hp, 7)
+        attacker = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(attacker.standard_action_spent)
+
+        updated_skeleton = self.world.get_enemy(skeleton.id)
+        assert updated_skeleton is not None
+        self.assertEqual(updated_skeleton.current_hp, 7)
+        self.assertTrue(
+            any(
+                "Olof attacked Skeleton Warrior with Rusty Sword"
+                in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "already spent",
+        ):
+            self.service.attack_enemy(44, skeleton.id)
+
+        reopened_database = Database(self.database_path)
+        reopened_database.initialize()
+        reopened = CombatService(reopened_database).current(44)
+        assert reopened is not None
+        reopened_attacker = next(
+            combatant
+            for combatant in reopened.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(reopened_attacker.standard_action_spent)
+
+    def test_attack_requires_same_tactical_position_and_does_not_spend_on_rejection(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "feature:stone_pillar",
+        )
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "not within melee range",
+        ):
+            self.service.attack_enemy(44, goblin.id)
+
+        scene = self.service.current(44)
+        assert scene is not None
+        attacker = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(attacker.standard_action_spent)
+        unchanged_goblin = self.world.get_enemy(goblin.id)
+        assert unchanged_goblin is not None
+        self.assertEqual(unchanged_goblin.current_hp, 6)
+
+    def test_critical_attack_maximizes_damage_and_removes_defeated_enemy(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        weapon = self.world.catalog.get("great_axe")
+        weapon_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            weapon.template_id,
+            durability=weapon.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            weapon_instance_id,
+            EquipmentSlot.MAIN_HAND,
+            clear_off_hand=True,
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with patch(
+            "rpg_bot.combat_service.random.randint",
+            return_value=20,
+        ):
+            scene, result = self.service.attack_enemy(
+                44,
+                goblin.id,
+            )
+
+        self.assertTrue(result.hit)
+        self.assertTrue(result.critical)
+        self.assertEqual(result.raw_damage, 12)
+        self.assertEqual(result.final_damage, 12)
+        self.assertTrue(result.target_defeated)
+        self.assertEqual(result.target_hp, 0)
+        self.assertFalse(
+            any(
+                combatant.source_id == goblin.id
+                for combatant in scene.combatants
+            )
+        )
+
+        defeated = self.world.get_enemy(goblin.id)
+        assert defeated is not None
+        self.assertEqual(defeated.current_hp, 0)
+        self.assertEqual(defeated.status.value, "dead")
+        self.assertIn(
+            "combatant_defeated",
+            [entry.event_type for entry in scene.log_entries],
+        )
+
+        self.service.end(44)
+        restarted = self.service.start(44, self.hall.id)
+        self.assertFalse(
+            any(
+                combatant.source_id == goblin.id
+                for combatant in restarted.combatants
+            )
+        )
 
     def test_only_one_active_scene_is_allowed_per_guild(self) -> None:
         self.service.start(44, self.hall.id)

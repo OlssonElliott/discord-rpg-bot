@@ -838,6 +838,14 @@ export function DungeonEditor() {
             { method: 'DELETE' },
             'Enemy removed from combat',
           )}
+          onAttack={(targetEnemyId) => updateCombat(
+            '/combat/actions/attack',
+            {
+              method: 'POST',
+              body: JSON.stringify({ target_enemy_id: targetEnemyId }),
+            },
+            'Attack resolved',
+          )}
           onNextTurn={() => updateCombat(
             '/combat/turn/next',
             { method: 'POST' },

@@ -6,7 +6,7 @@ import re
 from typing import Any
 from urllib.parse import quote
 
-from .combat import CombatScene
+from .combat import AttackResult, CombatScene
 from .combat_service import CombatService
 from .dungeon import ConnectionType, TrapDamageType, TrapState
 from .enemies import EnemyInstance, EnemyTemplate
@@ -223,6 +223,7 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "route_progress": combatant.route_progress,
                 "route_cost": combatant.route_cost,
                 "is_between_landmarks": combatant.is_between_landmarks,
+                "standard_action_spent": combatant.standard_action_spent,
                 "is_current_turn": (
                     combatant.kind is scene.current_turn_kind
                     and combatant.source_id == scene.current_turn_source_id
@@ -256,6 +257,40 @@ def _combat_state_data(
 ) -> JsonObject:
     return {
         "scene": _combat_scene_data(scene, world) if scene is not None else None
+    }
+
+
+def _attack_result_data(result: AttackResult) -> JsonObject:
+    return {
+        "attacker_kind": result.attacker_kind.value,
+        "attacker_source_id": result.attacker_source_id,
+        "attacker_name": result.attacker_name,
+        "target_kind": result.target_kind.value,
+        "target_source_id": result.target_source_id,
+        "target_name": result.target_name,
+        "weapon_name": result.weapon_name,
+        "attack_attribute": result.attack_attribute,
+        "attack_roll": result.attack_roll,
+        "attack_modifier": result.attack_modifier,
+        "attack_total": result.attack_total,
+        "defense_dc": result.defense_dc,
+        "hit": result.hit,
+        "critical": result.critical,
+        "damage_rolls": [
+            {
+                "die": part.die,
+                "damage_type": part.damage_type,
+                "roll": part.roll,
+            }
+            for part in result.damage_rolls
+        ],
+        "raw_damage": result.raw_damage,
+        "reduction": result.reduction,
+        "reduction_type": result.reduction_type,
+        "final_damage": result.final_damage,
+        "target_hp": result.target_hp,
+        "target_max_hp": result.target_max_hp,
+        "target_defeated": result.target_defeated,
     }
 
 
@@ -764,6 +799,15 @@ class DashboardAPI:
                     )
                 }
             return 200, data
+
+        if path == "/api/combat/actions/attack" and method == "POST":
+            scene, result = self.combat.attack_enemy(
+                self._combat_guild_id(),
+                self._text(body, "target_enemy_id"),
+            )
+            payload = _combat_state_data(scene, self.world)
+            payload["attack_result"] = _attack_result_data(result)
+            return 200, payload
 
         movement_match = re.fullmatch(
             r"/api/combat/movement/(character|enemy)/([^/]+)",

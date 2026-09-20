@@ -101,6 +101,8 @@ class CombatRepository:
                 route_destination_landmark_id TEXT,
                 route_progress INTEGER NOT NULL DEFAULT 0 CHECK (route_progress >= 0),
                 route_cost INTEGER NOT NULL DEFAULT 0 CHECK (route_cost >= 0),
+                standard_action_spent INTEGER NOT NULL DEFAULT 0
+                    CHECK (standard_action_spent IN (0, 1)),
                 PRIMARY KEY (scene_id, kind, source_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, landmark_id)
@@ -191,6 +193,10 @@ class CombatRepository:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN route_cost INTEGER NOT NULL DEFAULT 0"
             )
+        if "standard_action_spent" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN standard_action_spent INTEGER NOT NULL DEFAULT 0"
+            )
 
     def start_scene(
         self,
@@ -268,8 +274,8 @@ class CombatRepository:
                     initiative_roll, initiative_score, acted_this_round,
                     movement_budget, movement_remaining,
                     route_source_landmark_id, route_destination_landmark_id,
-                    route_progress, route_cost
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    route_progress, route_cost, standard_action_spent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -288,6 +294,7 @@ class CombatRepository:
                         combatant.route_destination_landmark_id,
                         combatant.route_progress,
                         combatant.route_cost,
+                        int(combatant.standard_action_spent),
                     )
                     for combatant in combatants
                 ],
@@ -362,8 +369,8 @@ class CombatRepository:
                         initiative_roll, initiative_score, acted_this_round,
                         movement_budget, movement_remaining,
                         route_source_landmark_id, route_destination_landmark_id,
-                        route_progress, route_cost
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        route_progress, route_cost, standard_action_spent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -381,6 +388,7 @@ class CombatRepository:
                         combatant.route_destination_landmark_id,
                         combatant.route_progress,
                         combatant.route_cost,
+                        int(combatant.standard_action_spent),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -497,6 +505,41 @@ class CombatRepository:
                 raise ValueError(
                     f"Unknown combatant '{kind.value}:{source_id}'."
                 )
+
+    def set_standard_action_spent(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        spent: bool,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET standard_action_spent = ?
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (int(spent), scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
+    def reset_standard_action(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+    ) -> None:
+        self.set_standard_action_spent(
+            scene_id,
+            kind,
+            source_id,
+            False,
+        )
 
     def set_all_combatants_acted(
         self,
@@ -875,7 +918,7 @@ class CombatRepository:
                    initiative_roll, initiative_score, acted_this_round,
                    movement_budget, movement_remaining,
                    route_source_landmark_id, route_destination_landmark_id,
-                   route_progress, route_cost
+                   route_progress, route_cost, standard_action_spent
             FROM combatants
             WHERE scene_id = ?
             ORDER BY initiative_score DESC, initiative_roll DESC,
@@ -939,6 +982,7 @@ class CombatRepository:
                     item["route_destination_landmark_id"],
                     item["route_progress"],
                     item["route_cost"],
+                    bool(item["standard_action_spent"]),
                 )
                 for item in combatant_rows
             ),

@@ -74,6 +74,7 @@ class CombatantState:
     route_destination_landmark_id: str | None = None
     route_progress: int = 0
     route_cost: int = 0
+    standard_action_spent: bool = False
 
     @property
     def is_between_landmarks(self) -> bool:
@@ -93,6 +94,39 @@ class CombatantState:
             self.name.casefold(),
             self.source_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DamageRoll:
+    die: int
+    damage_type: str
+    roll: int
+
+
+@dataclass(frozen=True, slots=True)
+class AttackResult:
+    attacker_kind: CombatantKind
+    attacker_source_id: str
+    attacker_name: str
+    target_kind: CombatantKind
+    target_source_id: str
+    target_name: str
+    weapon_name: str
+    attack_attribute: str
+    attack_roll: int
+    attack_modifier: int
+    attack_total: int
+    defense_dc: int
+    hit: bool
+    critical: bool
+    damage_rolls: tuple[DamageRoll, ...] = ()
+    raw_damage: int = 0
+    reduction: int = 0
+    reduction_type: str = "armor"
+    final_damage: int = 0
+    target_hp: int = 0
+    target_max_hp: int = 0
+    target_defeated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

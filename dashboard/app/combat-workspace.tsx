@@ -77,6 +77,7 @@ type CombatWorkspaceProps = {
     quantity: number,
   ) => Promise<boolean>;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
+  onAttack: (targetEnemyId: string) => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
   onSetInitiative: (
@@ -488,6 +489,7 @@ function CombatantEditor({
   onMove,
   onInspect,
   onRemoveEnemy,
+  onAttack,
   onSetInitiative,
 }: {
   combatant: CombatantData;
@@ -501,6 +503,7 @@ function CombatantEditor({
   ) => Promise<boolean>;
   onInspect: (combatant: CombatantData) => void;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
+  onAttack: (targetEnemyId: string) => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
     initiativeScore: number,
@@ -511,6 +514,12 @@ function CombatantEditor({
   );
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
+  const enemyTargets = scene.combatants.filter(
+    (candidate) => candidate.kind === 'enemy',
+  );
+  const [attackTargetId, setAttackTargetId] = useState(
+    enemyTargets[0]?.source_id || '',
+  );
 
   useEffect(() => {
     setLandmarkId(
@@ -524,6 +533,24 @@ function CombatantEditor({
     combatant.relation,
     combatant.route_destination_landmark_id,
   ]);
+
+  useEffect(() => {
+    if (
+      attackTargetId
+      && scene.combatants.some(
+        (candidate) => (
+          candidate.kind === 'enemy'
+          && candidate.source_id === attackTargetId
+        ),
+      )
+    ) {
+      return;
+    }
+    const firstEnemy = scene.combatants.find(
+      (candidate) => candidate.kind === 'enemy',
+    );
+    setAttackTargetId(firstEnemy?.source_id || '');
+  }, [attackTargetId, scene.combatants]);
 
   const routeSource = combatant.route_source_landmark_id
     ? scene.landmarks.find(
@@ -601,6 +628,55 @@ function CombatantEditor({
       >
         Move toward
       </Button>
+      {combatant.kind === 'character' && (
+        <div className="combatant-editor__standard-action">
+          <div>
+            <span>Standard Action</span>
+            <Badge
+              variant="outline"
+              className={
+                combatant.standard_action_spent
+                  ? 'combat-action-badge--spent'
+                  : 'combat-action-badge--ready'
+              }
+            >
+              {combatant.standard_action_spent ? 'Spent' : 'Ready'}
+            </Badge>
+          </div>
+          <NativeSelect
+            aria-label="Attack target"
+            value={attackTargetId}
+            disabled={
+              busy
+              || !combatant.is_current_turn
+              || combatant.standard_action_spent
+            }
+            onChange={(event) => setAttackTargetId(event.target.value)}
+          >
+            <NativeSelectOption value="">Choose target…</NativeSelectOption>
+            {enemyTargets.map((target) => (
+              <NativeSelectOption
+                key={target.source_id}
+                value={target.source_id}
+              >
+                {target.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <Button
+            size="sm"
+            disabled={
+              busy
+              || !combatant.is_current_turn
+              || combatant.standard_action_spent
+              || !attackTargetId
+            }
+            onClick={() => void onAttack(attackTargetId)}
+          >
+            <Swords /> Attack
+          </Button>
+        </div>
+      )}
       <div className="combatant-editor__initiative">
         <span>
           Initiative
@@ -661,6 +737,7 @@ export function CombatWorkspace({
   onMoveCombatant,
   onAddEnemy,
   onRemoveEnemy,
+  onAttack,
   onNextTurn,
   onPreviousTurn,
   onSetInitiative,
@@ -1369,6 +1446,7 @@ export function CombatWorkspace({
                 onMove={onMoveCombatant}
                 onInspect={(selected) => void inspectCombatant(selected)}
                 onRemoveEnemy={onRemoveEnemy}
+                onAttack={onAttack}
                 onSetInitiative={onSetInitiative}
               />
             ))}
