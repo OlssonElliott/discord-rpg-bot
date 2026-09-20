@@ -8,6 +8,7 @@ import sqlite3
 
 from .combat import (
     CombatLandmark,
+    CombatLogEntry,
     CombatRoute,
     CombatScene,
     CombatStatus,
@@ -93,11 +94,29 @@ class CombatRepository:
                 ),
                 initiative_roll INTEGER NOT NULL DEFAULT 0,
                 initiative_score INTEGER NOT NULL DEFAULT 0,
+                acted_this_round INTEGER NOT NULL DEFAULT 0 CHECK (acted_this_round IN (0, 1)),
                 PRIMARY KEY (scene_id, kind, source_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, landmark_id)
                     REFERENCES combat_landmarks(scene_id, id) ON DELETE RESTRICT
             );
+
+            CREATE TABLE IF NOT EXISTS combat_log_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scene_id INTEGER NOT NULL,
+                round_number INTEGER NOT NULL CHECK (round_number >= 1),
+                event_type TEXT NOT NULL,
+                actor_kind TEXT CHECK (
+                    actor_kind IS NULL OR actor_kind IN ('character', 'enemy')
+                ),
+                actor_source_id TEXT,
+                actor_name TEXT,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS combat_log_by_scene
+                ON combat_log_entries(scene_id, id);
             """
         )
         landmark_columns = {
@@ -137,6 +156,10 @@ class CombatRepository:
         if "initiative_score" not in combatant_columns:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN initiative_score INTEGER NOT NULL DEFAULT 0"
+            )
+        if "acted_this_round" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN acted_this_round INTEGER NOT NULL DEFAULT 0"
             )
 
     def start_scene(
@@ -212,8 +235,8 @@ class CombatRepository:
                 """
                 INSERT INTO combatants (
                     scene_id, kind, source_id, name, landmark_id, relation,
-                    initiative_roll, initiative_score
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    initiative_roll, initiative_score, acted_this_round
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -225,6 +248,7 @@ class CombatRepository:
                         combatant.relation.value,
                         combatant.initiative_roll,
                         combatant.initiative_score,
+                        int(combatant.acted_this_round),
                     )
                     for combatant in combatants
                 ],
@@ -296,8 +320,8 @@ class CombatRepository:
                     """
                     INSERT INTO combatants (
                         scene_id, kind, source_id, name, landmark_id, relation,
-                        initiative_roll, initiative_score
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        initiative_roll, initiative_score, acted_this_round
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -308,6 +332,7 @@ class CombatRepository:
                         combatant.relation.value,
                         combatant.initiative_roll,
                         combatant.initiative_score,
+                        int(combatant.acted_this_round),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -402,6 +427,91 @@ class CombatRepository:
                 raise ValueError(
                     f"Unknown combatant '{kind.value}:{source_id}'."
                 )
+
+    def set_combatant_acted(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        acted: bool,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET acted_this_round = ?
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (int(acted), scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
+    def set_all_combatants_acted(
+        self,
+        scene_id: int,
+        acted: bool,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                UPDATE combatants
+                SET acted_this_round = ?
+                WHERE scene_id = ?
+                """,
+                (int(acted), scene_id),
+            )
+
+    def append_log(
+        self,
+        scene_id: int,
+        round_number: int,
+        event_type: str,
+        message: str,
+        *,
+        actor_kind: CombatantKind | None = None,
+        actor_source_id: str | None = None,
+        actor_name: str | None = None,
+    ) -> None:
+        event_type = event_type.strip()
+        message = message.strip()
+        if not event_type:
+            raise ValueError("Combat log event type is required.")
+        if not message:
+            raise ValueError("Combat log message is required.")
+        if round_number < 1:
+            raise ValueError("Combat log round must be at least 1.")
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if connection.execute(
+                "SELECT 1 FROM combat_scenes WHERE id = ?",
+                (scene_id,),
+            ).fetchone() is None:
+                raise ValueError("Combat scene does not exist.")
+            connection.execute(
+                """
+                INSERT INTO combat_log_entries (
+                    scene_id, round_number, event_type,
+                    actor_kind, actor_source_id, actor_name,
+                    message, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scene_id,
+                    round_number,
+                    event_type,
+                    actor_kind.value if actor_kind is not None else None,
+                    actor_source_id,
+                    actor_name,
+                    message,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
 
     def end_scene(self, guild_id: int) -> CombatScene | None:
         with self._connect() as connection:
@@ -651,11 +761,22 @@ class CombatRepository:
         combatant_rows = connection.execute(
             """
             SELECT kind, source_id, name, landmark_id, relation,
-                   initiative_roll, initiative_score
+                   initiative_roll, initiative_score, acted_this_round
             FROM combatants
             WHERE scene_id = ?
             ORDER BY initiative_score DESC, initiative_roll DESC,
                      kind, name COLLATE NOCASE, source_id
+            """,
+            (scene_id,),
+        ).fetchall()
+        log_rows = connection.execute(
+            """
+            SELECT id, round_number, event_type, actor_kind,
+                   actor_source_id, actor_name, message, created_at
+            FROM combat_log_entries
+            WHERE scene_id = ?
+            ORDER BY id DESC
+            LIMIT 100
             """,
             (scene_id,),
         ).fetchall()
@@ -697,6 +818,7 @@ class CombatRepository:
                     LandmarkRelation(item["relation"]),
                     item["initiative_roll"],
                     item["initiative_score"],
+                    bool(item["acted_this_round"]),
                 )
                 for item in combatant_rows
             ),
@@ -707,6 +829,23 @@ class CombatRepository:
                 else None
             ),
             row["current_turn_source_id"],
+            tuple(
+                CombatLogEntry(
+                    id=item["id"],
+                    round_number=item["round_number"],
+                    event_type=item["event_type"],
+                    message=item["message"],
+                    created_at=item["created_at"],
+                    actor_kind=(
+                        CombatantKind(item["actor_kind"])
+                        if item["actor_kind"] is not None
+                        else None
+                    ),
+                    actor_source_id=item["actor_source_id"],
+                    actor_name=item["actor_name"],
+                )
+                for item in reversed(log_rows)
+            ),
         )
 
     @contextmanager

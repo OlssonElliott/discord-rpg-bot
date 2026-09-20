@@ -20,9 +20,11 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  Eye,
   Flag,
   RefreshCw,
   Route,
+  ScrollText,
   Shield,
   Skull,
   Swords,
@@ -32,14 +34,23 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import type {
+import {
+  api,
+  type CombatantInspectData,
   CombatLandmarkData,
-  CombatSceneData,
-  CombatantData,
-  EnemyTemplateData,
-  RoomData,
+  type CombatSceneData,
+  type CombatantData,
+  type EnemyTemplateData,
+  type RoomData,
 } from './api';
 
 type Relation = CombatantData['relation'];
@@ -68,7 +79,6 @@ type CombatWorkspaceProps = {
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
-  onJumpTurn: (combatant: CombatantData) => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
     initiativeScore: number,
@@ -125,6 +135,10 @@ type CardinalHandle = 'top' | 'right' | 'bottom' | 'left';
 
 function routeKey(sourceId: string, destinationId: string) {
   return [sourceId, destinationId].sort().join('::');
+}
+
+function combatantKey(combatant: CombatantData) {
+  return `${combatant.kind}:${combatant.source_id}`;
 }
 
 function connectionHandles(
@@ -290,22 +304,173 @@ function CollapsibleCombatSection({
   );
 }
 
+function label(value: string) {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function CombatantInspectDialog({
+  open,
+  data,
+  loading,
+  error,
+  onOpenChange,
+}: {
+  open: boolean;
+  data: CombatantInspectData | null;
+  loading: boolean;
+  error: string;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const hpLabel = (
+    data?.hp == null || data.max_hp == null
+      ? 'HP unknown'
+      : `${data.hp} / ${data.max_hp} HP`
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="combat-inspect-dialog sm:max-w-[760px]">
+        <DialogHeader>
+          <DialogTitle>{data?.name || 'Combatant inspector'}</DialogTitle>
+          <DialogDescription>
+            Read-only combat reference for stats, equipment and inventory.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading && <p className="combat-inspect-loading">Loading combatant…</p>}
+        {error && <p className="combat-inspect-error">{error}</p>}
+
+        {data && !loading && (
+          <div className="combat-inspect-content">
+            <div className="combat-inspect-summary">
+              <div>
+                <small>{data.kind}</small>
+                <strong>{hpLabel}</strong>
+              </div>
+              <Badge variant="outline">{label(data.status)}</Badge>
+              {data.stance && <Badge variant="outline">{label(data.stance)}</Badge>}
+              {data.race && <Badge variant="outline">{data.race}</Badge>}
+            </div>
+
+            {data.description && (
+              <p className="combat-inspect-description">{data.description}</p>
+            )}
+
+            <section className="combat-inspect-section">
+              <h3>Attributes</h3>
+              <div className="combat-inspect-stats">
+                {Object.entries(data.attributes).map(([name, value]) => (
+                  <div key={name}>
+                    <small>{label(name)}</small>
+                    <strong>{value}</strong>
+                  </div>
+                ))}
+                {!Object.keys(data.attributes).length && (
+                  <p className="muted-row">No structured attributes available.</p>
+                )}
+              </div>
+            </section>
+
+            {data.enemy && (
+              <section className="combat-inspect-section">
+                <h3>Combat profile</h3>
+                <div className="combat-inspect-stats">
+                  <div><small>Difficulty</small><strong>{data.enemy.difficulty_level}</strong></div>
+                  <div><small>Armor</small><strong>{data.enemy.armor}</strong></div>
+                  <div><small>Magic resistance</small><strong>{data.enemy.magical_resistance}</strong></div>
+                  <div><small>Attack DC</small><strong>{data.enemy.attack_dc}</strong></div>
+                  <div><small>Defense DC</small><strong>{data.enemy.defense_dc}</strong></div>
+                  <div><small>Damage</small><strong>{data.enemy.damage}</strong></div>
+                </div>
+                <dl className="combat-inspect-details">
+                  <div><dt>Attack profile</dt><dd>{data.enemy.attack_profile}</dd></div>
+                  {data.enemy.special_ability && (
+                    <div><dt>Special ability</dt><dd>{data.enemy.special_ability}</dd></div>
+                  )}
+                  <div><dt>Typical behaviour</dt><dd>{data.enemy.typical_behaviour}</dd></div>
+                </dl>
+              </section>
+            )}
+
+            {!!Object.keys(data.skills).length && (
+              <section className="combat-inspect-section">
+                <h3>Skills</h3>
+                <div className="combat-inspect-stats">
+                  {Object.entries(data.skills).map(([name, value]) => (
+                    <div key={name}>
+                      <small>{label(name)}</small>
+                      <strong>{value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="combat-inspect-section">
+              <h3>Equipment</h3>
+              <div className="combat-inspect-list">
+                {data.equipment.map((item) => (
+                  <div key={`${item.slot}:${item.id}`}>
+                    <span>
+                      <small>{label(item.slot || '')}</small>
+                      <strong>{item.name}</strong>
+                    </span>
+                  </div>
+                ))}
+                {!data.equipment.length && <p className="muted-row">Nothing equipped.</p>}
+              </div>
+            </section>
+
+            <section className="combat-inspect-section">
+              <h3>Inventory</h3>
+              <div className="combat-inspect-list">
+                {data.inventory.map((item) => (
+                  <div key={item.id}>
+                    <span>
+                      <strong>{item.name}</strong>
+                      {item.equipped_slot && <small>{label(item.equipped_slot)}</small>}
+                    </span>
+                    <Badge variant="outline">×{item.quantity ?? 1}</Badge>
+                  </div>
+                ))}
+                {!data.inventory.length && <p className="muted-row">Inventory is empty.</p>}
+              </div>
+            </section>
+
+            {data.wallet && (
+              <section className="combat-inspect-wallet">
+                <span>{data.wallet.copper} copper</span>
+                <span>{data.wallet.silver} silver</span>
+                <span>{data.wallet.gold} gold</span>
+              </section>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CombatantEditor({
   combatant,
   scene,
   busy,
+  selected,
   onMove,
+  onInspect,
   onRemoveEnemy,
   onSetInitiative,
 }: {
   combatant: CombatantData;
   scene: CombatSceneData;
   busy: boolean;
+  selected: boolean;
   onMove: (
     combatant: CombatantData,
     landmarkId: string,
     relation: Relation,
   ) => Promise<boolean>;
+  onInspect: (combatant: CombatantData) => void;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
@@ -331,6 +496,7 @@ function CombatantEditor({
       className={[
         'combatant-editor',
         combatant.is_current_turn ? 'combatant-editor--current' : '',
+        selected ? 'combatant-editor--selected' : '',
       ].filter(Boolean).join(' ')}
     >
       <div className="combatant-editor__name">
@@ -390,17 +556,26 @@ function CombatantEditor({
           Set
         </Button>
       </div>
-      {combatant.kind === 'enemy' && (
+      <div className="combatant-editor__actions">
         <Button
-          className="combatant-editor__remove"
           size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void onRemoveEnemy(combatant.source_id)}
+          variant="outline"
+          onClick={() => onInspect(combatant)}
         >
-          <Trash2 /> Remove from combat
+          <Eye /> Inspect
         </Button>
-      )}
+        {combatant.kind === 'enemy' && (
+          <Button
+            className="combatant-editor__remove"
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void onRemoveEnemy(combatant.source_id)}
+          >
+            <Trash2 /> Remove
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -420,7 +595,6 @@ export function CombatWorkspace({
   onRemoveEnemy,
   onNextTurn,
   onPreviousTurn,
-  onJumpTurn,
   onSetInitiative,
   onConnectLandmarks,
   onDeleteLandmark,
@@ -443,6 +617,12 @@ export function CombatWorkspace({
   const [connectionsOpen, setConnectionsOpen] = useState(true);
   const [addEnemyOpen, setAddEnemyOpen] = useState(false);
   const [combatantsOpen, setCombatantsOpen] = useState(true);
+  const [combatLogOpen, setCombatLogOpen] = useState(false);
+  const [selectedCombatantKey, setSelectedCombatantKey] = useState<string | null>(null);
+  const [inspectOpen, setInspectOpen] = useState(false);
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [inspectError, setInspectError] = useState('');
+  const [inspectData, setInspectData] = useState<CombatantInspectData | null>(null);
 
   useEffect(() => {
     if (scene) return;
@@ -474,6 +654,8 @@ export function CombatWorkspace({
       setEdges([]);
       setSelectedLandmarkId(null);
       setSelectedRouteId(null);
+      setSelectedCombatantKey(null);
+      setInspectOpen(false);
       return;
     }
     const nextNodes = combatNodes(scene, selectedLandmarkId);
@@ -496,8 +678,17 @@ export function CombatWorkspace({
     ) {
       setSelectedRouteId(null);
     }
+    if (
+      selectedCombatantKey
+      && !scene.combatants.some(
+        (combatant) => combatantKey(combatant) === selectedCombatantKey,
+      )
+    ) {
+      setSelectedCombatantKey(null);
+    }
   }, [
     scene,
+    selectedCombatantKey,
     selectedLandmarkId,
     selectedRouteId,
     setEdges,
@@ -581,6 +772,29 @@ export function CombatWorkspace({
     [onPositionLandmark],
   );
 
+  const inspectCombatant = useCallback(async (combatant: CombatantData) => {
+    setSelectedCombatantKey(combatantKey(combatant));
+    setCombatantsOpen(true);
+    setInspectOpen(true);
+    setInspectLoading(true);
+    setInspectError('');
+    setInspectData(null);
+    try {
+      const data = await api<CombatantInspectData>(
+        `/combat/combatants/${combatant.kind}/${encodeURIComponent(combatant.source_id)}/inspect`,
+      );
+      setInspectData(data);
+    } catch (requestError) {
+      setInspectError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Could not inspect this combatant.',
+      );
+    } finally {
+      setInspectLoading(false);
+    }
+  }, []);
+
   if (!scene) {
     return (
       <section className="combat-empty-workspace">
@@ -645,18 +859,21 @@ export function CombatWorkspace({
     )
     : null;
   const orderedCombatants = scene.combatants;
-  const currentInitiativeIndex = orderedCombatants.findIndex(
+  const currentCombatant = orderedCombatants.find(
     (combatant) => combatant.is_current_turn,
+  ) ?? null;
+  const pendingCombatants = orderedCombatants.filter(
+    (combatant) => (
+      !combatant.is_current_turn
+      && !combatant.acted_this_round
+    ),
   );
-  const currentCombatant = currentInitiativeIndex >= 0
-    ? orderedCombatants[currentInitiativeIndex]
-    : null;
-  const upcomingCombatants = currentInitiativeIndex >= 0
-    ? [
-      ...orderedCombatants.slice(currentInitiativeIndex),
-      ...orderedCombatants.slice(0, currentInitiativeIndex),
-    ]
-    : orderedCombatants;
+  const actedCombatants = orderedCombatants.filter(
+    (combatant) => combatant.acted_this_round,
+  );
+  const upcomingCombatants = currentCombatant
+    ? [currentCombatant, ...pendingCombatants, ...actedCombatants]
+    : [...pendingCombatants, ...actedCombatants];
 
   return (
     <section className="combat-workspace">
@@ -711,16 +928,26 @@ export function CombatWorkspace({
                   combatant.is_current_turn
                     ? 'combat-initiative__entry--current'
                     : '',
+                  combatant.acted_this_round
+                    ? 'combat-initiative__entry--acted'
+                    : '',
+                  selectedCombatantKey === combatantKey(combatant)
+                    ? 'combat-initiative__entry--selected'
+                    : '',
                 ].filter(Boolean).join(' ')}
-                disabled={busy}
-                onClick={() => void onJumpTurn(combatant)}
+                onClick={() => {
+                  setSelectedCombatantKey(combatantKey(combatant));
+                  setCombatantsOpen(true);
+                }}
               >
                 <small>
                   {combatant.is_current_turn
                     ? 'NOW'
-                    : index === 1
-                      ? 'NEXT'
-                      : `+${index}`}
+                    : combatant.acted_this_round
+                      ? 'DONE'
+                      : index === 1
+                        ? 'NEXT'
+                        : 'UPCOMING'}
                 </small>
                 <span>{combatant.name}</span>
                 <strong>{combatant.initiative_score}</strong>
@@ -1035,11 +1262,13 @@ export function CombatWorkspace({
           <div className="combatant-editor-list">
             {scene.combatants.map((combatant) => (
               <CombatantEditor
-                key={`${combatant.kind}:${combatant.source_id}`}
+                key={combatantKey(combatant)}
                 combatant={combatant}
                 scene={scene}
                 busy={busy}
+                selected={selectedCombatantKey === combatantKey(combatant)}
                 onMove={onMoveCombatant}
+                onInspect={(selected) => void inspectCombatant(selected)}
                 onRemoveEnemy={onRemoveEnemy}
                 onSetInitiative={onSetInitiative}
               />
@@ -1050,15 +1279,57 @@ export function CombatWorkspace({
           </div>
         </CollapsibleCombatSection>
 
+        <CollapsibleCombatSection
+          open={combatLogOpen}
+          onToggle={() => setCombatLogOpen((open) => !open)}
+          title={<><ScrollText size={15} /> Combat log</>}
+          summary={String(scene.log_entries.length)}
+        >
+          <div className="combat-log-list">
+            {[...scene.log_entries].reverse().map((entry) => (
+              <article
+                key={entry.id}
+                className={`combat-log-entry combat-log-entry--${entry.event_type}`}
+              >
+                <div>
+                  <Badge variant="outline">R{entry.round_number}</Badge>
+                  <time dateTime={entry.created_at}>
+                    {new Date(entry.created_at).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </time>
+                </div>
+                <p>{entry.message}</p>
+              </article>
+            ))}
+            {!scene.log_entries.length && (
+              <p className="muted-row">No combat events recorded yet.</p>
+            )}
+          </div>
+        </CollapsibleCombatSection>
+
         <Button
           className="combat-end"
           variant="destructive"
           disabled={busy}
-          onClick={() => void onEnd()}
+          onClick={() => {
+            if (window.confirm('End this combat encounter?')) {
+              void onEnd();
+            }
+          }}
         >
           End combat
         </Button>
       </aside>
+
+      <CombatantInspectDialog
+        open={inspectOpen}
+        data={inspectData}
+        loading={inspectLoading}
+        error={inspectError}
+        onOpenChange={setInspectOpen}
+      />
     </section>
   );
 }

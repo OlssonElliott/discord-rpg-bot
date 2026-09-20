@@ -347,6 +347,7 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(goblin.initiative_roll, 20)
         self.assertEqual(goblin.initiative_score, 21)
+        self.assertTrue(goblin.acted_this_round)
         self.assertEqual(
             scene.current_turn_source_id,
             str(self.olof.character_id),
@@ -355,10 +356,17 @@ class CombatServiceTests(unittest.TestCase):
         scene = self.service.next_turn(44)
         self.assertEqual(scene.current_turn_source_id, "bandit")
         self.assertEqual(scene.round_number, 1)
+        by_id = {item.source_id: item for item in scene.combatants}
+        self.assertTrue(by_id[str(self.olof.character_id)].acted_this_round)
+        self.assertTrue(by_id[goblin.source_id].acted_this_round)
+        self.assertFalse(by_id["bandit"].acted_this_round)
 
         scene = self.service.next_turn(44)
         self.assertEqual(scene.current_turn_source_id, goblin.source_id)
         self.assertEqual(scene.round_number, 2)
+        self.assertFalse(
+            any(item.acted_this_round for item in scene.combatants)
+        )
 
         scene = self.service.previous_turn(44)
         self.assertEqual(scene.current_turn_source_id, "bandit")
@@ -396,6 +404,39 @@ class CombatServiceTests(unittest.TestCase):
             str(self.olof.character_id),
         )
         self.assertEqual(reopened.initiative_order()[0].initiative_score, 30)
+
+    def test_combat_log_records_and_persists_core_events(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        self.assertEqual(
+            [entry.event_type for entry in scene.log_entries[:2]],
+            ["combat_started", "turn_started"],
+        )
+
+        self.service.move_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            "feature:stone_pillar",
+            LandmarkRelation.BEHIND,
+        )
+        scene = self.service.next_turn(44)
+
+        event_types = [entry.event_type for entry in scene.log_entries]
+        self.assertIn("combatant_moved", event_types)
+        self.assertGreaterEqual(event_types.count("turn_started"), 2)
+        self.assertIn(
+            "Olof moved behind Stone Pillar.",
+            [entry.message for entry in scene.log_entries],
+        )
+
+        reopened_database = Database(self.database_path)
+        reopened_database.initialize()
+        reopened = CombatService(reopened_database).current(44)
+        assert reopened is not None
+        self.assertEqual(
+            [entry.message for entry in reopened.log_entries],
+            [entry.message for entry in scene.log_entries],
+        )
 
     def test_only_one_active_scene_is_allowed_per_guild(self) -> None:
         self.service.start(44, self.hall.id)

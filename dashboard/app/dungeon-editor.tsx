@@ -68,7 +68,6 @@ import {
   type CharacterSummary,
   type CombatSceneData,
   type CombatStateData,
-  type CombatantData,
   type ConnectionData,
   type EnemyTemplateData,
   type RoomData,
@@ -848,17 +847,6 @@ export function DungeonEditor() {
             '/combat/turn/previous',
             { method: 'POST' },
             'Turn moved back',
-          )}
-          onJumpTurn={(combatant) => updateCombat(
-            '/combat/turn',
-            {
-              method: 'PUT',
-              body: JSON.stringify({
-                kind: combatant.kind,
-                source_id: combatant.source_id,
-              }),
-            },
-            `${combatant.name}'s turn`,
           )}
           onSetInitiative={(combatant, initiativeScore) => updateCombat(
             `/combat/initiative/${combatant.kind}/${combatant.source_id}`,

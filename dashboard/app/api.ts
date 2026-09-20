@@ -124,7 +124,19 @@ export type CombatantData = {
   relation: 'at' | 'beside' | 'behind' | 'on' | 'inside';
   initiative_roll: number;
   initiative_score: number;
+  acted_this_round: boolean;
   is_current_turn: boolean;
+};
+
+export type CombatLogEntryData = {
+  id: number;
+  round_number: number;
+  event_type: string;
+  message: string;
+  created_at: string;
+  actor_kind: 'character' | 'enemy' | null;
+  actor_source_id: string | null;
+  actor_name: string | null;
 };
 
 export type CombatSceneData = {
@@ -140,6 +152,55 @@ export type CombatSceneData = {
   landmarks: CombatLandmarkData[];
   routes: CombatRouteData[];
   combatants: CombatantData[];
+  log_entries: CombatLogEntryData[];
+};
+
+export type CombatInspectItemData = {
+  id: string;
+  template_id: string;
+  name: string;
+  description: string;
+  quantity?: number;
+  durability?: number | null;
+  equipped_slot?: string | null;
+  slot?: string;
+};
+
+export type CombatantInspectData = {
+  kind: 'character' | 'enemy';
+  source_id: string;
+  name: string;
+  description: string;
+  hp: number | null;
+  max_hp: number | null;
+  status: string;
+  stance: string | null;
+  race: string | null;
+  lineage: string | null;
+  age: string | null;
+  gender: string | null;
+  attributes: Record<string, number>;
+  skills: Record<string, number>;
+  inventory: CombatInspectItemData[];
+  equipment: CombatInspectItemData[];
+  wallet: {
+    copper: number;
+    silver: number;
+    gold: number;
+  } | null;
+  enemy: {
+    template_id: string;
+    template_name: string;
+    difficulty_level: number;
+    armor: number;
+    magical_resistance: number;
+    attack_dc: number;
+    defense_dc: number;
+    damage: string;
+    attack_profile: string;
+    special_ability: string | null;
+    typical_behaviour: string;
+  } | null;
 };
 
 export type CombatStateData = {

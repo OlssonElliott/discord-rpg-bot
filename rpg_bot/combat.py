@@ -59,6 +59,7 @@ class CombatantState:
     relation: LandmarkRelation = LandmarkRelation.AT
     initiative_roll: int = 0
     initiative_score: int = 0
+    acted_this_round: bool = False
 
     @property
     def initiative_key(self) -> tuple[int, int, str, str, str]:
@@ -69,6 +70,18 @@ class CombatantState:
             self.name.casefold(),
             self.source_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CombatLogEntry:
+    id: int
+    round_number: int
+    event_type: str
+    message: str
+    created_at: str
+    actor_kind: CombatantKind | None = None
+    actor_source_id: str | None = None
+    actor_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +96,7 @@ class CombatScene:
     round_number: int = 1
     current_turn_kind: CombatantKind | None = None
     current_turn_source_id: str | None = None
+    log_entries: tuple[CombatLogEntry, ...] = ()
 
     def landmark(self, landmark_id: str) -> CombatLandmark | None:
         return next(

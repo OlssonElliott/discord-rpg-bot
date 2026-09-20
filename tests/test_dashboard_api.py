@@ -179,6 +179,19 @@ class DashboardAPITests(unittest.TestCase):
             [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
             [("enemy", "Bandit")],
         )
+        self.assertEqual(
+            [entry["event_type"] for entry in scene["log_entries"][:2]],
+            ["combat_started", "turn_started"],
+        )
+
+        inspect_legacy_status, legacy_bandit = self.api.handle(
+            "GET",
+            "/api/combat/combatants/enemy/bandit/inspect",
+        )
+        self.assertEqual(inspect_legacy_status, 200)
+        self.assertEqual(legacy_bandit["name"], "Bandit")
+        self.assertIsNone(legacy_bandit["hp"])
+        self.assertEqual(legacy_bandit["attributes"], {})
 
         status, positioned = self.api.handle(
             "PATCH",
@@ -283,6 +296,20 @@ class DashboardAPITests(unittest.TestCase):
             self.world.get_enemy(goblins[0]["source_id"])
         )
 
+        inspect_status, inspected = self.api.handle(
+            "GET",
+            f"/api/combat/combatants/enemy/{goblins[1]['source_id']}/inspect",
+        )
+        self.assertEqual(inspect_status, 200)
+        self.assertEqual(inspected["name"], "Goblin Raider")
+        self.assertEqual(inspected["hp"], inspected["max_hp"])
+        self.assertEqual(inspected["attributes"]["insight"], 1)
+        self.assertEqual(inspected["enemy"]["template_name"], "Goblin Raider")
+        self.assertEqual(
+            inspected["enemy"]["attack_profile"],
+            "Jagged blade or shortbow",
+        )
+
         remove_enemy_status, reduced = self.api.handle(
             "DELETE",
             f"/api/combat/combatants/enemy/{goblins[0]['source_id']}",
@@ -357,6 +384,46 @@ class DashboardAPITests(unittest.TestCase):
         status, ended = self.api.handle("DELETE", "/api/combat")
         self.assertEqual(status, 200)
         self.assertIsNone(ended["scene"])
+
+    def test_character_combatant_can_be_inspected(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
+        self.api.handle(
+            "POST",
+            "/api/areas/keep/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+        character = self.database.create_character(
+            77,
+            "Mira",
+            18,
+            race="Human",
+            attributes={
+                "Strength": 12,
+                "Dexterity": 10,
+                "Arcana": 9,
+                "Vitality": 13,
+                "Insight": 14,
+                "Personality": 11,
+            },
+            skills={"Perception": 2},
+        )
+        assert character.character_id is not None
+        self.world.place_character(character.character_id, "hall")
+        self.api.handle("POST", "/api/combat", {"room_id": "hall"})
+
+        status, inspected = self.api.handle(
+            "GET",
+            f"/api/combat/combatants/character/{character.character_id}/inspect",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(inspected["name"], "Mira")
+        self.assertEqual((inspected["hp"], inspected["max_hp"]), (18, 18))
+        self.assertEqual(inspected["attributes"]["Insight"], 14)
+        self.assertEqual(inspected["skills"]["Perception"], 2)
+        self.assertIsNotNone(inspected["wallet"])
+        self.assertIsInstance(inspected["inventory"], list)
+        self.assertIsInstance(inspected["equipment"], list)
 
     def test_combat_scene_exposes_linked_room_door_landmark(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "gatehouse", "name": "Gatehouse"})

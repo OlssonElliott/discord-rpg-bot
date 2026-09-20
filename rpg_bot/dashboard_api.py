@@ -214,12 +214,30 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "relation": combatant.relation.value,
                 "initiative_roll": combatant.initiative_roll,
                 "initiative_score": combatant.initiative_score,
+                "acted_this_round": combatant.acted_this_round,
                 "is_current_turn": (
                     combatant.kind is scene.current_turn_kind
                     and combatant.source_id == scene.current_turn_source_id
                 ),
             }
             for combatant in scene.combatants
+        ],
+        "log_entries": [
+            {
+                "id": entry.id,
+                "round_number": entry.round_number,
+                "event_type": entry.event_type,
+                "message": entry.message,
+                "created_at": entry.created_at,
+                "actor_kind": (
+                    entry.actor_kind.value
+                    if entry.actor_kind is not None
+                    else None
+                ),
+                "actor_source_id": entry.actor_source_id,
+                "actor_name": entry.actor_name,
+            }
+            for entry in scene.log_entries
         ],
     }
 
@@ -314,6 +332,237 @@ def _legacy_enemy_data(entity: object) -> JsonObject:
         "max_hp": None,
         "status": "active",
     }
+
+
+def _catalog_item_summary(
+    world: WorldService,
+    template_id: str,
+) -> JsonObject:
+    try:
+        template = world.catalog.get(template_id)
+    except ValueError:
+        return {
+            "template_id": template_id,
+            "name": template_id,
+            "description": "",
+        }
+    return {
+        "template_id": template.template_id,
+        "name": template.name,
+        "description": template.description,
+    }
+
+
+def _combatant_inspect_data(
+    world: WorldService,
+    kind: str,
+    source_id: str,
+    room_id: str,
+) -> JsonObject | None:
+    if kind == "character":
+        try:
+            character_id = int(source_id)
+        except ValueError:
+            return None
+        character = next(
+            (
+                candidate
+                for candidate in world.list_characters()
+                if candidate.character_id == character_id
+            ),
+            None,
+        )
+        if character is None:
+            return None
+
+        inventory = world.database.get_character_inventory(character_id)
+        equipped_slots = {
+            instance_id: slot.value
+            for slot, instance_id in inventory.equipment.items()
+        }
+        inventory_data: list[JsonObject] = []
+        for item in inventory.items:
+            summary = _catalog_item_summary(world, item.template_id)
+            inventory_data.append(
+                {
+                    "id": item.instance_id,
+                    **summary,
+                    "quantity": item.quantity,
+                    "durability": item.durability,
+                    "equipped_slot": equipped_slots.get(item.instance_id),
+                }
+            )
+
+        equipment_data = []
+        for slot, instance_id in inventory.equipment.items():
+            item = next(
+                (
+                    candidate
+                    for candidate in inventory.items
+                    if candidate.instance_id == instance_id
+                ),
+                None,
+            )
+            summary = (
+                _catalog_item_summary(world, item.template_id)
+                if item is not None
+                else {
+                    "template_id": instance_id,
+                    "name": instance_id,
+                    "description": "",
+                }
+            )
+            equipment_data.append(
+                {
+                    "slot": slot.value,
+                    "id": instance_id,
+                    **summary,
+                }
+            )
+
+        return {
+            "kind": "character",
+            "source_id": source_id,
+            "name": character.name,
+            "description": "",
+            "hp": character.hp,
+            "max_hp": character.max_hp,
+            "status": "active" if character.hp > 0 else "down",
+            "stance": character.stance.value,
+            "race": character.race,
+            "lineage": character.lineage,
+            "age": character.age,
+            "gender": character.gender,
+            "attributes": dict(character.attributes),
+            "skills": dict(character.skills),
+            "inventory": inventory_data,
+            "equipment": equipment_data,
+            "wallet": {
+                "copper": inventory.copper,
+                "silver": inventory.silver,
+                "gold": inventory.gold,
+            },
+            "enemy": None,
+        }
+
+    if kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is not None:
+            template = world.get_enemy_template(enemy.template_id)
+            if template is None:
+                return None
+
+            equipment_templates = {
+                item_id: slot
+                for slot, item_id in (
+                    ("main_hand", template.main_hand_item_id),
+                    ("off_hand", template.off_hand_item_id),
+                    ("armor", template.armor_item_id),
+                )
+                if item_id is not None
+            }
+            inventory_data = [
+                {
+                    "id": stack.item.id,
+                    "template_id": stack.item.id,
+                    "name": stack.item.name,
+                    "description": stack.item.description or "",
+                    "quantity": stack.quantity,
+                    "durability": None,
+                    "equipped_slot": equipment_templates.get(stack.item.id),
+                }
+                for stack in world.inventory(
+                    InventoryHolder.entity(enemy.id)
+                )
+            ]
+            equipment_data = [
+                {
+                    "slot": slot,
+                    "id": item_id,
+                    **_catalog_item_summary(world, item_id),
+                }
+                for slot, item_id in (
+                    ("main_hand", template.main_hand_item_id),
+                    ("off_hand", template.off_hand_item_id),
+                    ("armor", template.armor_item_id),
+                )
+                if item_id is not None
+            ]
+            return {
+                "kind": "enemy",
+                "source_id": source_id,
+                "name": enemy.name,
+                "description": (
+                    enemy.description or template.description or ""
+                ),
+                "hp": enemy.current_hp,
+                "max_hp": template.max_hp,
+                "status": enemy.status.value,
+                "stance": None,
+                "race": template.race,
+                "lineage": None,
+                "age": None,
+                "gender": None,
+                "attributes": {
+                    "strength": template.strength,
+                    "dexterity": template.dexterity,
+                    "arcana": template.arcana,
+                    "vitality": template.vitality,
+                    "insight": template.insight,
+                    "personality": template.personality,
+                },
+                "skills": {},
+                "inventory": inventory_data,
+                "equipment": equipment_data,
+                "wallet": None,
+                "enemy": {
+                    "template_id": template.template_id,
+                    "template_name": template.name,
+                    "difficulty_level": template.difficulty_level,
+                    "armor": template.armor,
+                    "magical_resistance": template.magical_resistance,
+                    "attack_dc": template.attack_dc,
+                    "defense_dc": template.defense_dc,
+                    "damage": template.damage,
+                    "attack_profile": template.attack_profile,
+                    "special_ability": template.special_ability,
+                    "typical_behaviour": template.typical_behaviour,
+                },
+            }
+
+        room = world.get_room(room_id)
+        legacy = next(
+            (
+                candidate
+                for candidate in room.enemies
+                if candidate.id == source_id
+            ),
+            None,
+        ) if room is not None else None
+        if legacy is None:
+            return None
+        return {
+            "kind": "enemy",
+            "source_id": source_id,
+            "name": legacy.name,
+            "description": legacy.description or "",
+            "hp": None,
+            "max_hp": None,
+            "status": "active",
+            "stance": None,
+            "race": None,
+            "lineage": None,
+            "age": None,
+            "gender": None,
+            "attributes": {},
+            "skills": {},
+            "inventory": [],
+            "equipment": [],
+            "wallet": None,
+            "enemy": None,
+        }
+
+    return None
 
 
 class DashboardAPI:
@@ -474,6 +723,39 @@ class DashboardAPI:
                 self._integer(body, "initiative_score", default=0),
             )
             return 200, _combat_state_data(scene, self.world)
+
+        inspect_match = re.fullmatch(
+            r"/api/combat/combatants/(character|enemy)/([^/]+)/inspect",
+            path,
+        )
+        if inspect_match and method == "GET":
+            kind, source_id = inspect_match.groups()
+            scene = self.combat.current(self._combat_guild_id())
+            if scene is None:
+                return 404, {"error": "There is no active combat scene."}
+            if not any(
+                combatant.kind.value == kind
+                and combatant.source_id == source_id
+                for combatant in scene.combatants
+            ):
+                return 404, {
+                    "error": (
+                        f"Combatant '{kind}:{source_id}' is not in the active combat."
+                    )
+                }
+            data = _combatant_inspect_data(
+                self.world,
+                kind,
+                source_id,
+                scene.room_id,
+            )
+            if data is None:
+                return 404, {
+                    "error": (
+                        f"Combatant '{kind}:{source_id}' could not be inspected."
+                    )
+                }
+            return 200, data
 
         match = re.fullmatch(
             r"/api/combat/combatants/(character|enemy)/([^/]+)",

@@ -203,6 +203,24 @@ class CombatService:
                     landmark_id,
                     LandmarkDistance.CLOSE,
                 )
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "combat_started",
+                f"Combat started in {room.name}.",
+            )
+            current = self._require_current(guild_id)
+            current_combatant = current.current_combatant()
+            if current_combatant is not None:
+                self.repository.append_log(
+                    current.id,
+                    current.round_number,
+                    "turn_started",
+                    f"{current_combatant.name}'s turn began.",
+                    actor_kind=current_combatant.kind,
+                    actor_source_id=current_combatant.source_id,
+                    actor_name=current_combatant.name,
+                )
             return self._require_current(guild_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
@@ -313,13 +331,31 @@ class CombatService:
         scene = self._require_current(guild_id)
         if scene.current_combatant() is not None or not scene.combatants:
             return scene
-        first = scene.initiative_order()[0]
+        available = [
+            combatant
+            for combatant in scene.initiative_order()
+            if not combatant.acted_this_round
+        ]
+        if not available:
+            self.repository.set_all_combatants_acted(scene.id, False)
+            scene = self._require_current(guild_id)
+            available = list(scene.initiative_order())
+        first = available[0]
         try:
             self.repository.set_turn(
                 scene.id,
                 scene.round_number,
                 first.kind,
                 first.source_id,
+            )
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "turn_started",
+                f"{first.name}'s turn began.",
+                actor_kind=first.kind,
+                actor_source_id=first.source_id,
+                actor_name=first.name,
             )
         except ValueError as error:
             raise CombatError(str(error)) from error
@@ -329,6 +365,13 @@ class CombatService:
         return self.repository.get_active_scene(guild_id)
 
     def end(self, guild_id: int) -> CombatScene:
+        current = self._require_current(guild_id)
+        self.repository.append_log(
+            current.id,
+            current.round_number,
+            "combat_ended",
+            "Combat ended.",
+        )
         scene = self.repository.end_scene(guild_id)
         if scene is None:
             raise CombatError("There is no active combat scene.")
@@ -370,18 +413,41 @@ class CombatService:
             initiative_roll, initiative_score = self._roll_initiative(
                 template.insight
             )
+            current_combatant = scene.current_combatant()
+            candidate = CombatantState(
+                CombatantKind.ENEMY,
+                enemy.id,
+                enemy.name,
+                destination_id,
+                LandmarkRelation.AT,
+                initiative_roll,
+                initiative_score,
+            )
+            has_passed_current_turn = (
+                current_combatant is not None
+                and candidate.initiative_key < current_combatant.initiative_key
+            )
+            candidate = replace(
+                candidate,
+                acted_this_round=has_passed_current_turn,
+            )
             try:
                 self.repository.add_combatant(
                     scene.id,
-                    CombatantState(
-                        CombatantKind.ENEMY,
-                        enemy.id,
-                        enemy.name,
-                        destination_id,
-                        LandmarkRelation.AT,
-                        initiative_roll,
-                        initiative_score,
+                    candidate,
+                )
+                destination = scene.landmark(destination_id)
+                self.repository.append_log(
+                    scene.id,
+                    scene.round_number,
+                    "combatant_joined",
+                    (
+                        f"{enemy.name} joined combat at "
+                        f"{destination.name if destination is not None else destination_id}."
                     ),
+                    actor_kind=CombatantKind.ENEMY,
+                    actor_source_id=enemy.id,
+                    actor_name=enemy.name,
                 )
             except ValueError as error:
                 self.world.remove_entity(enemy.id)
@@ -395,17 +461,16 @@ class CombatService:
         enemy_id: str,
     ) -> CombatScene:
         scene = self._require_current(guild_id)
-        ordered = scene.initiative_order()
-        target_index = next(
+        removed = next(
             (
-                index
-                for index, combatant in enumerate(ordered)
+                combatant
+                for combatant in scene.combatants
                 if combatant.kind is CombatantKind.ENEMY
                 and combatant.source_id == enemy_id
             ),
             None,
         )
-        if target_index is None:
+        if removed is None:
             raise CombatError(
                 f"Enemy '{enemy_id}' is not in the active combat scene."
             )
@@ -414,26 +479,59 @@ class CombatService:
             scene.current_turn_kind is CombatantKind.ENEMY
             and scene.current_turn_source_id == enemy_id
         )
-        next_combatant = None
-        next_round = scene.round_number
-        if removing_current and len(ordered) > 1:
-            next_index = (target_index + 1) % len(ordered)
-            next_combatant = ordered[next_index]
-            if next_index == 0:
-                next_round += 1
-
         try:
             self.repository.remove_combatant(
                 scene.id,
                 CombatantKind.ENEMY,
                 enemy_id,
             )
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "combatant_removed",
+                f"{removed.name} was removed from combat.",
+                actor_kind=removed.kind,
+                actor_source_id=removed.source_id,
+                actor_name=removed.name,
+            )
             if removing_current:
+                remaining_scene = self._require_current(guild_id)
+                if not remaining_scene.combatants:
+                    self.repository.set_turn(
+                        scene.id,
+                        scene.round_number,
+                        None,
+                        None,
+                    )
+                    return self._require_current(guild_id)
+
+                available = [
+                    combatant
+                    for combatant in remaining_scene.initiative_order()
+                    if not combatant.acted_this_round
+                ]
+                next_round = scene.round_number
+                if not available:
+                    self.repository.set_all_combatants_acted(scene.id, False)
+                    next_round += 1
+                    remaining_scene = self._require_current(guild_id)
+                    available = list(remaining_scene.initiative_order())
+
+                next_combatant = available[0]
                 self.repository.set_turn(
                     scene.id,
                     next_round,
-                    next_combatant.kind if next_combatant is not None else None,
-                    next_combatant.source_id if next_combatant is not None else None,
+                    next_combatant.kind,
+                    next_combatant.source_id,
+                )
+                self.repository.append_log(
+                    scene.id,
+                    next_round,
+                    "turn_started",
+                    f"{next_combatant.name}'s turn began.",
+                    actor_kind=next_combatant.kind,
+                    actor_source_id=next_combatant.source_id,
+                    actor_name=next_combatant.name,
                 )
         except ValueError as error:
             raise CombatError(str(error)) from error
@@ -443,21 +541,45 @@ class CombatService:
         scene = self._require_current(guild_id)
         if not scene.combatants:
             return scene
-        if scene.current_combatant() is None:
+        current = scene.current_combatant()
+        if current is None:
             return self._ensure_turn(guild_id)
 
-        ordered = scene.initiative_order()
-        current_index = self._turn_index(scene)
-        assert current_index is not None
-        next_index = (current_index + 1) % len(ordered)
-        target = ordered[next_index]
-        next_round = scene.round_number + (1 if next_index == 0 else 0)
         try:
+            self.repository.set_combatant_acted(
+                scene.id,
+                current.kind,
+                current.source_id,
+                True,
+            )
+            updated = self._require_current(guild_id)
+            available = [
+                combatant
+                for combatant in updated.initiative_order()
+                if not combatant.acted_this_round
+            ]
+            next_round = scene.round_number
+            if not available:
+                self.repository.set_all_combatants_acted(scene.id, False)
+                next_round += 1
+                updated = self._require_current(guild_id)
+                available = list(updated.initiative_order())
+
+            target = available[0]
             self.repository.set_turn(
                 scene.id,
                 next_round,
                 target.kind,
                 target.source_id,
+            )
+            self.repository.append_log(
+                scene.id,
+                next_round,
+                "turn_started",
+                f"{target.name}'s turn began.",
+                actor_kind=target.kind,
+                actor_source_id=target.source_id,
+                actor_name=target.name,
             )
         except ValueError as error:
             raise CombatError(str(error)) from error
@@ -476,14 +598,30 @@ class CombatService:
         previous_index = (current_index - 1) % len(ordered)
         target = ordered[previous_index]
         previous_round = scene.round_number
-        if current_index == 0 and scene.round_number > 1:
-            previous_round -= 1
         try:
+            if current_index == 0 and scene.round_number > 1:
+                previous_round -= 1
+                self.repository.set_all_combatants_acted(scene.id, True)
+            self.repository.set_combatant_acted(
+                scene.id,
+                target.kind,
+                target.source_id,
+                False,
+            )
             self.repository.set_turn(
                 scene.id,
                 previous_round,
                 target.kind,
                 target.source_id,
+            )
+            self.repository.append_log(
+                scene.id,
+                previous_round,
+                "turn_rewound",
+                f"DM moved the turn back to {target.name}.",
+                actor_kind=target.kind,
+                actor_source_id=target.source_id,
+                actor_name=target.name,
             )
         except ValueError as error:
             raise CombatError(str(error)) from error
@@ -502,13 +640,28 @@ class CombatService:
                 if isinstance(kind, CombatantKind)
                 else CombatantKind(kind)
             )
+            target = next(
+                combatant
+                for combatant in scene.combatants
+                if combatant.kind is parsed_kind
+                and combatant.source_id == source_id
+            )
             self.repository.set_turn(
                 scene.id,
                 scene.round_number,
                 parsed_kind,
                 source_id,
             )
-        except ValueError as error:
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "turn_changed",
+                f"DM set the current turn to {target.name}.",
+                actor_kind=target.kind,
+                actor_source_id=target.source_id,
+                actor_name=target.name,
+            )
+        except (ValueError, StopIteration) as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
@@ -531,13 +684,31 @@ class CombatService:
                 if isinstance(kind, CombatantKind)
                 else CombatantKind(kind)
             )
+            target = next(
+                combatant
+                for combatant in scene.combatants
+                if combatant.kind is parsed_kind
+                and combatant.source_id == source_id
+            )
             self.repository.set_initiative(
                 scene.id,
                 parsed_kind,
                 source_id,
                 initiative_score,
             )
-        except ValueError as error:
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "initiative_changed",
+                (
+                    f"{target.name}'s initiative changed from "
+                    f"{target.initiative_score} to {initiative_score}."
+                ),
+                actor_kind=target.kind,
+                actor_source_id=target.source_id,
+                actor_name=target.name,
+            )
+        except (ValueError, StopIteration) as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
@@ -677,6 +848,12 @@ class CombatService:
                 if isinstance(relation, LandmarkRelation)
                 else LandmarkRelation(relation)
             )
+            combatant = next(
+                item
+                for item in scene.combatants
+                if item.kind is parsed_kind and item.source_id == source_id
+            )
+            landmark = scene.landmark(landmark_id)
             self.repository.set_combatant_position(
                 scene.id,
                 parsed_kind,
@@ -684,7 +861,19 @@ class CombatService:
                 landmark_id,
                 parsed_relation,
             )
-        except ValueError as error:
+            self.repository.append_log(
+                scene.id,
+                scene.round_number,
+                "combatant_moved",
+                (
+                    f"{combatant.name} moved {parsed_relation.value} "
+                    f"{landmark.name if landmark is not None else landmark_id}."
+                ),
+                actor_kind=combatant.kind,
+                actor_source_id=combatant.source_id,
+                actor_name=combatant.name,
+            )
+        except (ValueError, StopIteration) as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
