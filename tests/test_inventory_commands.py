@@ -8,7 +8,6 @@ import discord
 
 from rpg_bot.commands.dm import DMCommands
 from rpg_bot.commands.inventory import (
-    _get_or_create_game_channel,
     InventoryCommands,
     InventoryView,
     forget_open_inventory,
@@ -16,6 +15,7 @@ from rpg_bot.commands.inventory import (
     readable_field_pages,
 )
 from rpg_bot.database import Database
+from rpg_bot.discord_support.game_events import get_or_create_game_channel
 from rpg_bot.inventory import (
     DEFAULT_ITEM_CATALOG_PATH,
     EquipmentSlot,
@@ -113,7 +113,7 @@ class InventoryCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = interaction_for(7)
         interaction.guild = guild
 
-        resolved = await _get_or_create_game_channel(interaction)
+        resolved = await get_or_create_game_channel(interaction)
 
         self.assertIs(resolved, channel)
         guild.create_text_channel.assert_awaited_once_with(

@@ -10,14 +10,23 @@ import random
 
 from ..database import CharacterNotFoundError, Database
 from ..discord_player_view import DiscordPlayerViewAdapter, private_map_channel_name
+from ..discord_support.channels import (
+    private_read_only_overwrites,
+    require_message_permissions,
+    resolve_guild_channel,
+)
+from ..discord_support.game_events import send_game_event
+from ..discord_support.identity import (
+    apply_character_identity,
+    portrait_attachment_name,
+)
 from ..dungeon import ConnectionType, RoomConnection, TrapState
 from ..models import Character
 from ..player_view_service import PlayerViewMessageService, PlayerViewService
 from ..portraits import CharacterPortraitStore
 from ..world import InventoryHolder, ItemStack, Room, WorldError
 from ..world_service import WorldService
-from .inventory import refresh_character_sheet, refresh_inventory_views, send_game_event
-from .player import apply_character_identity, portrait_attachment_name
+from .inventory import refresh_character_sheet, refresh_inventory_views
 
 
 LOGGER = logging.getLogger(__name__)
@@ -854,18 +863,17 @@ class WorldCommands(commands.Cog):
         state = self.database.get_player_view_state(character.character_id)
         channel = None
         if state.discord_channel_id is not None:
-            channel = interaction.guild.get_channel(state.discord_channel_id)
-            if channel is None:
-                try:
-                    fetched = await interaction.client.fetch_channel(
-                        state.discord_channel_id
-                    )
-                    if getattr(fetched, "guild", None) == interaction.guild:
-                        channel = fetched
-                except discord.NotFound:
-                    pass
+            channel = await resolve_guild_channel(
+                interaction.guild,
+                interaction.client,
+                state.discord_channel_id,
+            )
         if channel is not None:
-            self._require_map_message_permissions(channel, interaction.guild.me)
+            require_message_permissions(
+                channel,
+                interaction.guild.me,
+                label="private map",
+            )
             return channel
 
         bot_member = interaction.guild.me
@@ -877,55 +885,17 @@ class WorldCommands(commands.Cog):
                 "I need the **Manage Channels** server permission before I can "
                 "create your private map channel."
             )
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(
-                view_channel=False
-            ),
-            interaction.user: discord.PermissionOverwrite(
-                view_channel=True,
-                read_message_history=True,
-                send_messages=False,
-                add_reactions=False,
-                create_public_threads=False,
-                create_private_threads=False,
-                send_messages_in_threads=False,
-            ),
-        }
-        if bot_member is not None:
-            overwrites[bot_member] = discord.PermissionOverwrite(
-                view_channel=True,
-                read_message_history=True,
-                send_messages=True,
-                embed_links=True,
-                attach_files=True,
-            )
         channel = await interaction.guild.create_text_channel(
             private_map_channel_name(character.name, character.character_id),
-            overwrites=overwrites,
+            overwrites=private_read_only_overwrites(
+                interaction.guild,
+                interaction.user,
+                bot_member,
+            ),
             reason=f"Private dungeon HUD for character {character.character_id}",
         )
         self.player_views.bind_discord_channel(character.character_id, channel.id)
         return channel
-
-    @staticmethod
-    def _require_map_message_permissions(channel, bot_member) -> None:
-        if bot_member is None or not hasattr(channel, "permissions_for"):
-            return
-        permissions = channel.permissions_for(bot_member)
-        required = {
-            "View Channel": permissions.view_channel,
-            "Send Messages": permissions.send_messages,
-            "Embed Links": permissions.embed_links,
-            "Attach Files": permissions.attach_files,
-            "Read Message History": permissions.read_message_history,
-        }
-        missing = [name for name, enabled in required.items() if not enabled]
-        if missing:
-            raise ValueError(
-                "I cannot update the existing private map channel. Missing: "
-                + ", ".join(f"**{name}**" for name in missing)
-                + "."
-            )
 
     async def _refresh_existing_map(self, character_id: int) -> bool:
         if self.map_messages is None:

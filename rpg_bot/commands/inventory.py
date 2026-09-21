@@ -18,6 +18,7 @@ from ..inventory import (
     ItemTemplate,
     ItemType,
 )
+from ..discord_support.game_events import send_game_event
 from ..inventory_service import InventoryError, InventoryService
 from ..models import Character
 from ..portraits import CharacterPortraitStore
@@ -27,7 +28,6 @@ from ..world_service import WorldService
 DISCORD_FIELD_LIMIT = 1024
 DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
 READING_SEPARATOR = "──────────"
-GAME_CHANNEL_NAME = "game"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -445,9 +445,7 @@ class InventoryView(InventoryOwnedView):
         if self.dedicated_cog is None:
             await refresh_character_sheet(interaction, character)
         if equipment_message is not None:
-            await _announce_equipment(
-                interaction, character, equipment_message
-            )
+            await _announce_room_action(interaction, character, equipment_message)
 
     @discord.ui.button(
         label="Equip",
@@ -823,14 +821,6 @@ async def refresh_inventory_views(
     await refresh_character_sheet(interaction, character)
 
 
-async def _announce_equipment(
-    interaction: discord.Interaction,
-    character: Character,
-    description: str,
-) -> None:
-    await _announce_room_action(interaction, character, description)
-
-
 async def _announce_room_action(
     interaction: discord.Interaction,
     character: Character,
@@ -843,71 +833,6 @@ async def _announce_room_action(
         colour=discord.Colour.from_rgb(154, 120, 61),
     )
     await send_game_event(interaction, character, embed, portrait_store)
-
-
-async def send_game_event(
-    interaction: discord.Interaction,
-    character: Character,
-    embed: discord.Embed,
-    portrait_store: CharacterPortraitStore,
-):
-    """Post a character-authored event to the guild's shared game log."""
-    from .player import apply_character_identity, portrait_attachment_name
-
-    game_channel = await _get_or_create_game_channel(interaction)
-    if game_channel is None:
-        return None
-    portrait_path = apply_character_identity(embed, character, portrait_store)
-    if portrait_path is None:
-        await game_channel.send(embed=embed)
-        return game_channel
-    portrait_file = discord.File(
-        portrait_path, filename=portrait_attachment_name(portrait_path)
-    )
-    try:
-        await game_channel.send(embed=embed, file=portrait_file)
-    finally:
-        portrait_file.close()
-    return game_channel
-
-
-async def _get_or_create_game_channel(interaction: discord.Interaction):
-    """Return the guild's single public channel for witnessed game events."""
-    guild = getattr(interaction, "guild", None)
-    if guild is None:
-        return None
-    return await ensure_game_channel(guild)
-
-
-async def ensure_game_channel(guild):
-    """Ensure the guild has its shared public game-event channel."""
-    for channel in getattr(guild, "text_channels", ()):
-        if getattr(channel, "name", "").casefold() == GAME_CHANNEL_NAME:
-            return channel
-    bot_member = getattr(guild, "me", None)
-    if (
-        bot_member is None
-        or not getattr(bot_member.guild_permissions, "manage_channels", False)
-    ):
-        LOGGER.warning(
-            "Could not create #%s in guild %s: Manage Channels is missing",
-            GAME_CHANNEL_NAME,
-            getattr(guild, "id", "unknown"),
-        )
-        return None
-    try:
-        return await guild.create_text_channel(
-            GAME_CHANNEL_NAME,
-            topic="In-world actions witnessed by other player characters.",
-            reason="Public Rollkeeper game-event channel",
-        )
-    except discord.HTTPException:
-        LOGGER.exception(
-            "Could not create #%s in guild %s",
-            GAME_CHANNEL_NAME,
-            getattr(guild, "id", "unknown"),
-        )
-        return None
 
 
 async def show_inventory(

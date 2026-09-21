@@ -54,7 +54,7 @@ class RPGBot(commands.Bot):
     async def on_ready(self) -> None:
         if self.user is not None:
             from .commands.combat import ensure_combat_channel
-            from .commands.inventory import ensure_game_channel
+            from .discord_support.game_events import ensure_game_channel
 
             LOGGER.info("Logged in as %s (ID: %s)", self.user, self.user.id)
             for guild in self.guilds:

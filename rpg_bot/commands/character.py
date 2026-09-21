@@ -22,6 +22,11 @@ from ..character_creation.service import CharacterCreationService
 from ..checks import is_dm
 from ..database import CharacterAlreadyExistsError, CharacterNotFoundError, Database
 from ..discord_player_view import DiscordPlayerViewAdapter, private_map_channel_name
+from ..discord_support.channels import (
+    private_read_only_overwrites,
+    require_message_permissions,
+    resolve_guild_channel,
+)
 from ..models import Character
 from ..inventory import DEFAULT_ITEM_CATALOG_PATH, ItemCatalog
 from ..inventory_service import InventoryService
@@ -1382,19 +1387,16 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         state = self.database.get_character_sheet_view_state(character.character_id)
         channel = None
         if state is not None and state.guild_id == guild.id:
-            channel = guild.get_channel(state.discord_channel_id)
-            if channel is None:
-                try:
-                    fetched = await interaction.client.fetch_channel(
-                        state.discord_channel_id
-                    )
-                    if getattr(getattr(fetched, "guild", None), "id", None) == guild.id:
-                        channel = fetched
-                except discord.NotFound:
-                    pass
+            channel = await resolve_guild_channel(
+                guild,
+                interaction.client,
+                state.discord_channel_id,
+            )
         if channel is not None:
-            self._require_sheet_message_permissions(
-                channel, getattr(guild, "me", None)
+            require_message_permissions(
+                channel,
+                getattr(guild, "me", None),
+                label="character-sheet",
             )
             return channel
 
@@ -1406,28 +1408,13 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
                 "I need the **Manage Channels** server permission before I can "
                 "create your private character-sheet channel."
             )
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(
-                view_channel=True,
-                read_message_history=True,
-                send_messages=False,
-                add_reactions=False,
-                create_public_threads=False,
-                create_private_threads=False,
-                send_messages_in_threads=False,
-            ),
-            bot_member: discord.PermissionOverwrite(
-                view_channel=True,
-                read_message_history=True,
-                send_messages=True,
-                embed_links=True,
-                attach_files=True,
-            ),
-        }
         channel = await guild.create_text_channel(
             self._sheet_channel_name(character),
-            overwrites=overwrites,
+            overwrites=private_read_only_overwrites(
+                guild,
+                interaction.user,
+                bot_member,
+            ),
             reason=f"Private character sheet for character {character.character_id}",
         )
         self.database.bind_character_sheet_channel(
@@ -1443,19 +1430,16 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
         state = self.database.get_player_view_state(character.character_id)
         channel = None
         if state.discord_channel_id is not None:
-            channel = guild.get_channel(state.discord_channel_id)
-            if channel is None:
-                try:
-                    fetched = await interaction.client.fetch_channel(
-                        state.discord_channel_id
-                    )
-                    if getattr(getattr(fetched, "guild", None), "id", None) == guild.id:
-                        channel = fetched
-                except discord.NotFound:
-                    pass
+            channel = await resolve_guild_channel(
+                guild,
+                interaction.client,
+                state.discord_channel_id,
+            )
         if channel is not None:
-            self._require_sheet_message_permissions(
-                channel, getattr(guild, "me", None)
+            require_message_permissions(
+                channel,
+                getattr(guild, "me", None),
+                label="character-sheet",
             )
             return channel
 
@@ -1467,54 +1451,19 @@ class CharacterCommands(commands.GroupCog, group_name="character"):
                 "I need the **Manage Channels** server permission before I can "
                 "create your private map channel."
             )
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(
-                view_channel=True,
-                read_message_history=True,
-                send_messages=False,
-                add_reactions=False,
-                create_public_threads=False,
-                create_private_threads=False,
-                send_messages_in_threads=False,
-            ),
-            bot_member: discord.PermissionOverwrite(
-                view_channel=True,
-                read_message_history=True,
-                send_messages=True,
-                embed_links=True,
-                attach_files=True,
-            ),
-        }
         channel = await guild.create_text_channel(
             private_map_channel_name(character.name, character.character_id),
-            overwrites=overwrites,
+            overwrites=private_read_only_overwrites(
+                guild,
+                interaction.user,
+                bot_member,
+            ),
             reason=f"Private dungeon HUD for character {character.character_id}",
         )
         PlayerViewService(self.database).bind_discord_channel(
             character.character_id, channel.id
         )
         return channel
-
-    @staticmethod
-    def _require_sheet_message_permissions(channel, bot_member) -> None:
-        if bot_member is None or not hasattr(channel, "permissions_for"):
-            return
-        permissions = channel.permissions_for(bot_member)
-        required = {
-            "View Channel": permissions.view_channel,
-            "Send Messages": permissions.send_messages,
-            "Embed Links": permissions.embed_links,
-            "Attach Files": permissions.attach_files,
-            "Read Message History": permissions.read_message_history,
-        }
-        missing = [name for name, enabled in required.items() if not enabled]
-        if missing:
-            raise ValueError(
-                "I cannot update the existing character-sheet channel. Missing: "
-                + ", ".join(f"**{name}**" for name in missing)
-                + "."
-            )
 
     async def _edit_dedicated_sheet_message(
         self, message: discord.Message, character: Character

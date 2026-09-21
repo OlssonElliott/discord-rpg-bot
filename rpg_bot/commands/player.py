@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -18,11 +17,12 @@ from ..dice_visuals import (
     MAX_VISUAL_DICE_COUNT,
     SUPPORTED_VISUAL_DICE,
 )
-from ..models import Character
-from ..portraits import (
-    CharacterPortraitStore,
-    DEFAULT_DM_PORTRAIT_KEY,
+from ..discord_support.identity import (
+    apply_character_identity,
+    portrait_attachment_name,
 )
+from ..models import Character
+from ..portraits import CharacterPortraitStore
 
 
 LOGGER = logging.getLogger(__name__)
@@ -81,30 +81,6 @@ def character_status_embed(character: Character) -> discord.Embed:
     embed.add_field(name="HP", value=f"{character.hp}/{character.max_hp}", inline=True)
     embed.add_field(name="Stance", value=character.stance.display_name, inline=True)
     return embed
-
-
-def apply_character_identity(
-    embed: discord.Embed,
-    character: Character | None,
-    portrait_store: CharacterPortraitStore,
-    dm_portrait_key: str | None = None,
-) -> Path | None:
-    if character is None:
-        path = portrait_store.path_for(dm_portrait_key)
-        if path is None:
-            path = portrait_store.path_for(DEFAULT_DM_PORTRAIT_KEY)
-        name = "Dungeon Master"
-    else:
-        path = portrait_store.path_for(character.portrait_key)
-        name = character.name
-    embed.set_author(name=name)
-    if path is not None:
-        embed.set_thumbnail(url=f"attachment://{portrait_attachment_name(path)}")
-    return path
-
-
-def portrait_attachment_name(path: Path) -> str:
-    return f"character_portrait{path.suffix.lower()}"
 
 
 class PlayerCommands(commands.Cog):

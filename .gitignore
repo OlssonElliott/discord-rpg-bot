@@ -12,3 +12,6 @@ venv/
 assets/dice/*/cache/*.gif
 assets/dice/*/cache/**/*.gif
 assets/dice/*/cache/**/*.png
+assets/dice/*/cache/**/.last_used
+node_modules/
+dashboard/.vite/
