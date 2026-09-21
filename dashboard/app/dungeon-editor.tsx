@@ -24,13 +24,16 @@ import {
   CircleAlert,
   ImageIcon,
   Map,
+  PanelRightOpen,
   Plus,
   Save,
   Skull,
   Sparkles,
+  Swords,
   Trash2,
   Upload,
   Users,
+  X,
 } from 'lucide-react';
 import {
   AlertDialog,
@@ -55,6 +58,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
+import { CharacterWorkspace } from './character-workspace';
+import { CombatWorkspace } from './combat-workspace';
 import {
   api,
   apiAssetUrl,
@@ -64,7 +69,10 @@ import {
   type AreaSummary,
   type CatalogItem,
   type CharacterSummary,
+  type CombatSceneData,
+  type CombatStateData,
   type ConnectionData,
+  type EnemyTemplateData,
   type RoomData,
 } from './api';
 
@@ -109,6 +117,8 @@ type RoomFeatureTemplateData = {
   description: string;
   feature_type: string;
 };
+
+type EnemyTemplateDraft = Omit<EnemyTemplateData, 'id'>;
 
 type ContainerContentItem = {
   id: string;
@@ -265,6 +275,9 @@ function graphEdges(graph: AreaGraphData): Edge[] {
 }
 
 export function DungeonEditor() {
+  const [workspaceMode, setWorkspaceMode] = useState<'locations' | 'characters' | 'combat'>('locations');
+  const [combatScene, setCombatScene] = useState<CombatSceneData | null>(null);
+  const [combatBusy, setCombatBusy] = useState(false);
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
@@ -274,15 +287,20 @@ export function DungeonEditor() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [addRoomOpen, setAddRoomOpen] = useState(false);
+  const [addCombatLandmarkOpen, setAddCombatLandmarkOpen] = useState(false);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [contentKind, setContentKind] = useState<ContentKind | null>(null);
   const [itemLibraryOpen, setItemLibraryOpen] = useState(false);
+  const [enemyLibraryOpen, setEnemyLibraryOpen] = useState(false);
+  const [enemyTemplates, setEnemyTemplates] = useState<EnemyTemplateData[]>([]);
+  const [enemyPlacementOpen, setEnemyPlacementOpen] = useState(false);
   const [featureLibraryOpen, setFeatureLibraryOpen] = useState(false);
   const [roomFeatureTemplates, setRoomFeatureTemplates] = useState<RoomFeatureTemplateData[]>([]);
   const [containerTemplates, setContainerTemplates] = useState<ContainerTemplateData[]>([]);
@@ -370,6 +388,14 @@ export function DungeonEditor() {
     }
   }, []);
 
+  const loadEnemyTemplates = useCallback(async () => {
+    try {
+      setEnemyTemplates(await api<EnemyTemplateData[]>('/enemy-templates'));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load enemies.');
+    }
+  }, []);
+
   const loadRoomFeatureTemplates = useCallback(async () => {
     try {
       setRoomFeatureTemplates(await api<RoomFeatureTemplateData[]>('/room-feature-templates'));
@@ -384,12 +410,97 @@ export function DungeonEditor() {
       void loadCharacters();
       void loadCatalogItems();
       void loadContainerTemplates();
+      void loadEnemyTemplates();
       void loadRoomFeatureTemplates();
     });
-  }, [loadAreas, loadCatalogItems, loadCharacters, loadContainerTemplates, loadRoomFeatureTemplates]);
+  }, [loadAreas, loadCatalogItems, loadCharacters, loadContainerTemplates, loadEnemyTemplates, loadRoomFeatureTemplates]);
   useEffect(() => {
     if (areaId) queueMicrotask(() => void loadGraph(areaId));
   }, [areaId, loadGraph]);
+
+  const loadCombat = useCallback(async (quiet = false) => {
+    try {
+      const state = await api<CombatStateData>('/combat');
+      setCombatScene(state.scene);
+      if (!quiet) setError('');
+    } catch (requestError) {
+      if (!quiet) {
+        setError(requestError instanceof Error ? requestError.message : 'Could not load combat.');
+      }
+    }
+  }, []);
+
+  const startCombat = useCallback(async (roomId: string) => {
+    setCombatBusy(true);
+    try {
+      const state = await api<CombatStateData>('/combat', {
+        method: 'POST',
+        body: JSON.stringify({ room_id: roomId }),
+      });
+      setCombatScene(state.scene);
+      setWorkspaceMode('combat');
+      setNotice('Combat started');
+      setError('');
+      return true;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not start combat.');
+      return false;
+    } finally {
+      setCombatBusy(false);
+    }
+  }, []);
+
+  const endCombat = useCallback(async () => {
+    setCombatBusy(true);
+    try {
+      const state = await api<CombatStateData>('/combat', { method: 'DELETE' });
+      setCombatScene(state.scene);
+      setNotice('Combat ended');
+      setError('');
+      return true;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not end combat.');
+      return false;
+    } finally {
+      setCombatBusy(false);
+    }
+  }, []);
+
+  const updateCombat = useCallback(async (
+    path: string,
+    init: RequestInit,
+    message: string,
+  ) => {
+    setCombatBusy(true);
+    try {
+      const state = await api<CombatStateData>(path, init);
+      setCombatScene(state.scene);
+      setNotice(message);
+      setError('');
+      window.setTimeout(() => setNotice(''), 1400);
+      return true;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Combat change was rejected.');
+      return false;
+    } finally {
+      setCombatBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (workspaceMode !== 'combat') return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (cancelled || document.visibilityState === 'hidden') return;
+      await loadCombat(true);
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [loadCombat, workspaceMode]);
 
   useEffect(() => {
     if (!areaId) return;
@@ -442,6 +553,7 @@ export function DungeonEditor() {
         loadCharacters(),
         loadCatalogItems(),
         loadContainerTemplates(),
+        loadEnemyTemplates(),
         loadRoomFeatureTemplates(),
       ]);
       setNotice(message);
@@ -452,7 +564,7 @@ export function DungeonEditor() {
       setError(requestError instanceof Error ? requestError.message : 'The change was rejected.');
       return false;
     }
-  }, [areaId, loadAreas, loadCatalogItems, loadCharacters, loadContainerTemplates, loadGraph, loadRoomFeatureTemplates]);
+  }, [areaId, loadAreas, loadCatalogItems, loadCharacters, loadContainerTemplates, loadEnemyTemplates, loadGraph, loadRoomFeatureTemplates]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -617,41 +729,224 @@ export function DungeonEditor() {
   return (
     <main className="editor-shell">
       <header className="editor-header">
-        <div className="brand-mark"><Map size={19} /></div>
+        <div className="brand-mark">
+          {workspaceMode === 'locations' ? (
+            <Map size={19} />
+          ) : workspaceMode === 'characters' ? (
+            <Users size={19} />
+          ) : (
+            <Swords size={19} />
+          )}
+        </div>
         <div className="editor-title">
           <p className="kicker">DM workspace</p>
-          <h1>Location editor</h1>
+          <h1>
+            {workspaceMode === 'locations'
+              ? 'Location editor'
+              : workspaceMode === 'characters'
+                ? 'Characters'
+                : 'Combat'}
+          </h1>
         </div>
-        <NativeSelect
-          aria-label="Current area"
-          className="area-select"
-          value={areaId}
-          onChange={(event) => setAreaId(event.target.value)}
-        >
-          {areas.map((area) => (
-            <NativeSelectOption key={area.id} value={area.id}>
-              {area.name} · {area.room_count} locations
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-        <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
-          <Plus /> Area
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
-          <Box /> Item library
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setFeatureLibraryOpen(true)}>
-          <Sparkles /> Feature library
-        </Button>
+        <nav className="workspace-tabs" aria-label="DM workspace">
+          <button
+            type="button"
+            className={workspaceMode === 'locations' ? 'active' : ''}
+            onClick={() => setWorkspaceMode('locations')}
+          >
+            <Map size={14} /> Locations
+          </button>
+          <button
+            type="button"
+            className={workspaceMode === 'characters' ? 'active' : ''}
+            onClick={() => setWorkspaceMode('characters')}
+          >
+            <Users size={14} /> Characters
+          </button>
+          <button
+            type="button"
+            className={workspaceMode === 'combat' ? 'active' : ''}
+            onClick={() => setWorkspaceMode('combat')}
+          >
+            <Swords size={14} /> Combat
+          </button>
+        </nav>
+        {workspaceMode !== 'characters' && (
+          <NativeSelect
+            aria-label="Current area"
+            className="area-select"
+            value={areaId}
+            onChange={(event) => setAreaId(event.target.value)}
+          >
+            {areas.map((area) => (
+              <NativeSelectOption key={area.id} value={area.id}>
+                {area.name} · {area.room_count} locations
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        )}
+        {workspaceMode === 'locations' && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setAddAreaOpen(true)}>
+              <Plus /> Area
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setItemLibraryOpen(true)}>
+              <Box /> Item library
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setFeatureLibraryOpen(true)}>
+              <Sparkles /> Feature library
+            </Button>
+          </>
+        )}
+        {workspaceMode !== 'characters' && (
+          <Button variant="outline" size="sm" onClick={() => setEnemyLibraryOpen(true)}>
+            <Skull /> Enemy library
+          </Button>
+        )}
         <div className="header-status"><span /> {notice || 'Saved'}</div>
-        <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
-          <Plus /> Add location
-        </Button>
+        {workspaceMode === 'locations' && (
+          <Button className="add-location" onClick={() => setAddRoomOpen(true)} disabled={!areaId}>
+            <Plus /> Add location
+          </Button>
+        )}
+        {workspaceMode === 'combat' && combatScene && (
+          <Button
+            className="add-location"
+            onClick={() => setAddCombatLandmarkOpen(true)}
+            disabled={combatBusy}
+          >
+            <Plus /> Add landmark
+          </Button>
+        )}
       </header>
 
       {error && <div className="error-banner"><CircleAlert size={15} />{error}<button onClick={() => setError('')}>Dismiss</button></div>}
 
-      <section className="editor-body">
+      {workspaceMode === 'combat' ? (
+        <CombatWorkspace
+          scene={combatScene}
+          rooms={graph?.nodes ?? []}
+          enemyTemplates={enemyTemplates}
+          preferredRoomId={selectedRoomId}
+          busy={combatBusy}
+          onStart={startCombat}
+          onEnd={endCombat}
+          onRefresh={() => loadCombat()}
+          onPositionLandmark={(landmarkId, x, y) => updateCombat(
+            `/combat/landmarks/${landmarkId}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ x, y }),
+            },
+            'Landmark position saved',
+          )}
+          onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
+            `/combat/movement/${combatant.kind}/${combatant.source_id}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ landmark_id: landmarkId, relation }),
+            },
+            `${combatant.name} moved`,
+          )}
+          onAddEnemy={(templateId, landmarkId, quantity) => updateCombat(
+            '/combat/enemies',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                template_id: templateId,
+                landmark_id: landmarkId,
+                quantity,
+              }),
+            },
+            `${quantity} enem${quantity === 1 ? 'y' : 'ies'} added`,
+          )}
+          onRemoveEnemy={(enemyId) => updateCombat(
+            `/combat/combatants/enemy/${enemyId}`,
+            { method: 'DELETE' },
+            'Enemy removed from combat',
+          )}
+          onAttack={(attacker, targetId) => updateCombat(
+            attacker.kind === 'character'
+              ? '/combat/actions/attack'
+              : '/combat/actions/enemy-attack',
+            {
+              method: 'POST',
+              body: JSON.stringify(
+                attacker.kind === 'character'
+                  ? { target_enemy_id: targetId }
+                  : { target_character_id: targetId },
+              ),
+            },
+            'Attack resolved',
+          )}
+          onNextTurn={() => updateCombat(
+            '/combat/turn/next',
+            { method: 'POST' },
+            'Turn advanced',
+          )}
+          onPreviousTurn={() => updateCombat(
+            '/combat/turn/previous',
+            { method: 'POST' },
+            'Turn moved back',
+          )}
+          onSetInitiative={(combatant, initiativeScore) => updateCombat(
+            `/combat/initiative/${combatant.kind}/${combatant.source_id}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ initiative_score: initiativeScore }),
+            },
+            `${combatant.name}'s initiative updated`,
+          )}
+          onConnectLandmarks={(sourceId, destinationId, distance, obstacle, blocked) => updateCombat(
+            '/combat/routes',
+            {
+              method: 'PUT',
+              body: JSON.stringify({
+                source_landmark_id: sourceId,
+                destination_landmark_id: destinationId,
+                distance,
+                obstacle,
+                blocked,
+              }),
+            },
+            'Combat connection saved',
+          )}
+          onDeleteLandmark={(landmarkId) => updateCombat(
+            `/combat/landmarks/${landmarkId}`,
+            { method: 'DELETE' },
+            'Landmark removed',
+          )}
+          onDeleteConnection={(sourceId, destinationId) => updateCombat(
+            '/combat/routes',
+            {
+              method: 'DELETE',
+              body: JSON.stringify({
+                source_landmark_id: sourceId,
+                destination_landmark_id: destinationId,
+              }),
+            },
+            'Combat connection removed',
+          )}
+        />
+      ) : workspaceMode === 'characters' ? (
+        <CharacterWorkspace
+          characters={characters}
+          catalogItems={catalogItems}
+          areas={areas}
+          onCharactersChanged={loadCharacters}
+          onNotice={(message) => {
+            setNotice(message);
+            window.setTimeout(() => setNotice(''), 1400);
+          }}
+          onError={setError}
+        />
+      ) : (
+        <section
+          className={[
+            'editor-body',
+            inspectorOpen ? '' : 'editor-body--inspector-closed',
+          ].filter(Boolean).join(' ')}
+        >
         <div className="graph-panel">
           {nodes.length ? (
             <ReactFlow
@@ -660,8 +955,16 @@ export function DungeonEditor() {
               nodeTypes={nodeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
-              onNodeClick={(_, node) => { setSelectedRoomId(node.id); setSelectedEdgeId(null); }}
-              onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedRoomId(null); }}
+              onNodeClick={(_, node) => {
+                setSelectedRoomId(node.id);
+                setSelectedEdgeId(null);
+                setInspectorOpen(true);
+              }}
+              onEdgeClick={(_, edge) => {
+                setSelectedEdgeId(edge.id);
+                setSelectedRoomId(null);
+                setInspectorOpen(true);
+              }}
               onNodeDragStop={savePosition}
               onConnect={onConnect}
               connectionMode={ConnectionMode.Loose}
@@ -683,9 +986,34 @@ export function DungeonEditor() {
             </div>
           )}
           <div className="canvas-hint">Drag to pan · Scroll to zoom · Drag a handle to connect</div>
+          {!inspectorOpen && (
+            <Button
+              className="inspector-reopen"
+              variant="outline"
+              size="sm"
+              onClick={() => setInspectorOpen(true)}
+              title="Open inspector"
+            >
+              <PanelRightOpen />
+              Inspector
+            </Button>
+          )}
         </div>
 
+        {inspectorOpen && (
         <aside className="inspector">
+          <div className="inspector__toolbar">
+            <span>Inspector</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setInspectorOpen(false)}
+              title="Close inspector"
+              aria-label="Close inspector"
+            >
+              <X />
+            </Button>
+          </div>
           {selectedRoom ? (
             <RoomInspector
               key={`${selectedRoom.id}:${selectedRoom.name}:${selectedRoom.description}:${selectedRoom.room_image_url || ''}`}
@@ -706,7 +1034,8 @@ export function DungeonEditor() {
                 'Room image removed',
               )}
               onAddContent={(kind) => {
-                if (kind === 'container') setContainerPlacementOpen(true);
+                if (kind === 'enemy') setEnemyPlacementOpen(true);
+                else if (kind === 'container') setContainerPlacementOpen(true);
                 else setContentKind(kind);
               }}
               onEditContainer={setEditingContainerId}
@@ -736,6 +1065,7 @@ export function DungeonEditor() {
                 }),
                 'Character moved',
               )}
+              onStartCombat={() => startCombat(selectedRoom.id)}
               onDelete={() => setDeleteOpen(true)}
               onSelectConnection={(item) => { setSelectedEdgeId(edgeId(item)); setSelectedRoomId(null); }}
             />
@@ -777,7 +1107,9 @@ export function DungeonEditor() {
             <div className="inspector-empty"><p>Select a location or connection to edit it.</p></div>
           )}
         </aside>
+        )}
       </section>
+      )}
 
       <AreaDialog open={addAreaOpen} onOpenChange={setAddAreaOpen} onCreate={async (name, description) => {
         try {
@@ -798,6 +1130,18 @@ export function DungeonEditor() {
         );
         if (ok) setAddRoomOpen(false);
       }} />
+      <CombatLandmarkDialog
+        open={addCombatLandmarkOpen}
+        onOpenChange={setAddCombatLandmarkOpen}
+        onCreate={(name, description) => updateCombat(
+          '/combat/landmarks',
+          {
+            method: 'POST',
+            body: JSON.stringify({ name, description }),
+          },
+          'Landmark added',
+        )}
+      />
       <ConnectionDialog key={`${connection?.source || ''}:${connection?.sourceHandle || ''}:${connection?.target || ''}:${connection?.targetHandle || ''}`} connection={connection} onOpenChange={(open) => { if (!open) setConnection(null); }} onCreate={async (exitName, connectionType, doorState, lockState, unlockDifficulty, hasTrap, trapState, trapDetectionDifficulty, trapDisarmDifficulty, trapDamageType, trapDamage, bidirectional, returnExitName) => {
         if (!connection?.source || !connection.target) return;
         const ok = await mutate(
@@ -818,6 +1162,25 @@ export function DungeonEditor() {
         );
         if (ok) setContentKind(null);
       }} />
+      <EnemyPlacementDialog
+        open={enemyPlacementOpen}
+        templates={enemyTemplates}
+        onOpenChange={setEnemyPlacementOpen}
+        onPlace={async (templateId, quantity) => {
+          if (!selectedRoom) return false;
+          const template = enemyTemplates.find((item) => item.id === templateId);
+          const ok = await mutate(async () => {
+            for (let index = 0; index < quantity; index += 1) {
+              await api(`/rooms/${selectedRoom.id}/enemies`, {
+                method: 'POST',
+                body: JSON.stringify({ template_id: templateId }),
+              });
+            }
+          }, `${template?.name || 'Enemy'} ×${quantity} added`);
+          if (ok) setEnemyPlacementOpen(false);
+          return ok;
+        }}
+      />
       <RoomFeatureDialog
         open={roomFeatureOpen}
         feature={editingRoomFeature}
@@ -970,6 +1333,28 @@ export function DungeonEditor() {
           if (ok) setItemLibraryOpen(false);
         }}
       />
+      <EnemyLibraryDialog
+        open={enemyLibraryOpen}
+        templates={enemyTemplates}
+        catalogItems={catalogItems}
+        onOpenChange={setEnemyLibraryOpen}
+        onSave={(editingId, record) => mutate(
+          () => api(
+            editingId ? `/enemy-templates/${editingId}` : '/enemy-templates',
+            {
+              method: editingId ? 'PUT' : 'POST',
+              body: JSON.stringify(
+                editingId ? record : { ...record, id: identifier(record.name) },
+              ),
+            },
+          ),
+          `${record.name} ${editingId ? 'updated' : 'created'}`,
+        )}
+        onDelete={(template) => mutate(
+          () => api(`/enemy-templates/${template.id}`, { method: 'DELETE' }),
+          `${template.name} removed`,
+        )}
+      />
       <FeatureLibraryDialog
         open={featureLibraryOpen}
         templates={roomFeatureTemplates}
@@ -1011,7 +1396,7 @@ export function DungeonEditor() {
   );
 }
 
-function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onPlaceCharacter, onDelete, onSelectConnection }: {
+function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onPlaceCharacter, onStartCombat, onDelete, onSelectConnection }: {
   room: RoomData;
   connections: ConnectionData[];
   rooms: RoomData[];
@@ -1031,6 +1416,7 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   }) => void;
   onRemoveContent: (kind: ContentKind, id: string) => Promise<boolean>;
   onPlaceCharacter: (characterId: number) => Promise<boolean>;
+  onStartCombat: () => Promise<boolean>;
   onDelete: () => void;
   onSelectConnection: (connection: ConnectionData) => void;
 }) {
@@ -1043,20 +1429,15 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
   const attached = connections.filter((connection) => connection.source_room_id === room.id);
   const roomName = (id: string) => rooms.find((item) => item.id === id)?.name || id;
   const selectedCharacter = characters.find((character) => String(character.id) === characterId);
-  const roomFeatures = ((room as RoomData & {
-    room_features?: Array<{
-      id: string;
-      room_id: string;
-      name: string;
-      description: string;
-      feature_type: string;
-    }>;
-  }).room_features ?? []);
+  const roomFeatures = room.room_features ?? [];
   return (
     <>
       <div className="inspector__topline"><span>Selected location</span><Badge variant="outline">{room.counts.players} players</Badge></div>
       <h2>{room.name}</h2>
       <p className="room-id">{room.id}</p>
+      <Button className="start-combat-location" onClick={() => void onStartCombat()}>
+        <Swords /> Start combat here
+      </Button>
       <div className="inspector__section edit-fields">
         <label htmlFor="room-name">Name</label>
         <Input id="room-name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -1189,7 +1570,16 @@ function RoomInspector({ room, connections, rooms, characters, onSave, onUploadI
       <div className="inspector__section content-summary">
         <h3>Room contents</h3>
         {room.players.map((item) => <p key={item.id}><Users size={15} />{item.name}</p>)}
-        {room.enemies.map((item) => <p key={item.id}><Skull size={15} />{item.name}<button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('enemy', item.id)}><Trash2 size={14} /></button></p>)}
+        {room.enemies.map((item) => (
+          <p key={item.id}>
+            <Skull size={15} />{item.name}
+            {item.current_hp !== null && item.max_hp !== null && (
+              <strong>{item.current_hp}/{item.max_hp} HP</strong>
+            )}
+            {item.status !== 'active' && <Badge variant="outline">{item.status}</Badge>}
+            <button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('enemy', item.id)}><Trash2 size={14} /></button>
+          </p>
+        ))}
         {room.loose_items.map((item) => <p key={item.id}><Sparkles size={15} />{item.name}<strong>×{item.quantity}</strong><button className="remove-content" type="button" title={`Remove ${item.name}`} aria-label={`Remove ${item.name}`} onClick={() => void onRemoveContent('item', item.id)}><Trash2 size={14} /></button></p>)}
         {(room.containers as PlacedContainer[]).map((item) => (
           <p key={item.id}>
@@ -1311,6 +1701,45 @@ function RoomDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenCha
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   return <EditorDialog open={open} onOpenChange={onOpenChange} title="Add location" description="Coordinates are assigned automatically; drag the node afterward." name={name} setName={setName} details={description} setDetails={setDescription} action="Add location" onSubmit={() => onCreate(name, description)} />;
+}
+
+function CombatLandmarkDialog({
+  open,
+  onOpenChange,
+  onCreate,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (name: string, description: string) => Promise<boolean>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  useEffect(() => {
+    if (!open) {
+      setName('');
+      setDescription('');
+    }
+  }, [open]);
+
+  return (
+    <EditorDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add landmark"
+      description="Add a combat-only landmark. It starts unconnected in a free part of the room."
+      name={name}
+      setName={setName}
+      details={description}
+      setDetails={setDescription}
+      action="Add landmark"
+      onSubmit={async () => {
+        if (await onCreate(name, description)) {
+          onOpenChange(false);
+        }
+      }}
+    />
+  );
 }
 
 function RoomFeatureDialog({
@@ -2033,6 +2462,597 @@ function ContentDialog({ kind, catalogItems, onOpenChange, onCreate }: { kind: C
         ) : <Input id="content-name" value={name} onChange={(event) => setName(event.target.value)} />}
         {kind === 'item' && <><label className="dialog-label" htmlFor="content-quantity">Quantity</label><Input id="content-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></>}
         <DialogFooter><Button disabled={!name.trim() || quantity < 1} onClick={() => void onCreate(name, quantity)}>Add {kind}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
+  return {
+    name: '',
+    description: '',
+    race: 'Unknown',
+    difficulty_level: 1,
+    strength: 0,
+    dexterity: 0,
+    arcana: 0,
+    vitality: 0,
+    insight: 0,
+    personality: 0,
+    max_hp: 7,
+    armor: 0,
+    magical_resistance: 0,
+    attack_dc: 12,
+    defense_dc: 12,
+    damage: '1d4',
+    attack_profile: 'Basic attack',
+    special_ability: null,
+    typical_behaviour: 'Unknown',
+    main_hand_item_id: null,
+    off_hand_item_id: null,
+    armor_item_id: null,
+  };
+}
+
+function EnemyPlacementDialog({
+  open,
+  templates,
+  onOpenChange,
+  onPlace,
+}: {
+  open: boolean;
+  templates: EnemyTemplateData[];
+  onOpenChange: (open: boolean) => void;
+  onPlace: (templateId: string, quantity: number) => Promise<boolean>;
+}) {
+  const [templateId, setTemplateId] = useState('');
+  const [quantity, setQuantity] = useState(1);
+  const [search, setSearch] = useState('');
+  const filtered = templates.filter((template) => {
+    const query = search.trim().toLocaleLowerCase();
+    return !query
+      || template.name.toLocaleLowerCase().includes(query)
+      || template.race.toLocaleLowerCase().includes(query);
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add enemy</DialogTitle>
+          <DialogDescription>
+            Place independent enemy instances from the shared enemy library.
+          </DialogDescription>
+        </DialogHeader>
+
+        <label className="dialog-label" htmlFor="enemy-search">
+          Search library
+        </label>
+        <Input
+          id="enemy-search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Skeleton, bandit, troll…"
+        />
+
+        <label className="dialog-label" htmlFor="enemy-template">
+          Enemy type
+        </label>
+        <NativeSelect
+          id="enemy-template"
+          value={templateId}
+          onChange={(event) => setTemplateId(event.target.value)}
+        >
+          <NativeSelectOption value="">
+            Choose an enemy…
+          </NativeSelectOption>
+          {filtered.map((template) => (
+            <NativeSelectOption
+              key={template.id}
+              value={template.id}
+            >
+              {template.name} · {template.race} · {template.max_hp} HP
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+
+        <label className="dialog-label" htmlFor="enemy-quantity">
+          Quantity
+        </label>
+        <Input
+          id="enemy-quantity"
+          type="number"
+          min={1}
+          max={20}
+          value={quantity}
+          onChange={(event) => setQuantity(Number(event.target.value))}
+        />
+
+        <DialogFooter>
+          <Button
+            disabled={
+              !templateId
+              || !Number.isInteger(quantity)
+              || quantity < 1
+              || quantity > 20
+            }
+            onClick={async () => {
+              if (await onPlace(templateId, quantity)) {
+                setTemplateId('');
+                setQuantity(1);
+                setSearch('');
+              }
+            }}
+          >
+            Add {quantity > 1 ? `${quantity} enemies` : 'enemy'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EnemyLibraryDialog({
+  open,
+  templates,
+  catalogItems,
+  onOpenChange,
+  onSave,
+  onDelete,
+}: {
+  open: boolean;
+  templates: EnemyTemplateData[];
+  catalogItems: CatalogItem[];
+  onOpenChange: (open: boolean) => void;
+  onSave: (
+    editingId: string | undefined,
+    record: EnemyTemplateDraft,
+  ) => Promise<boolean>;
+  onDelete: (template: EnemyTemplateData) => Promise<boolean>;
+}) {
+  const [editingId, setEditingId] = useState<string | undefined>();
+  const [draft, setDraft] = useState<EnemyTemplateDraft>(
+    () => emptyEnemyTemplateDraft(),
+  );
+  const editingTemplate = templates.find(
+    (template) => template.id === editingId,
+  );
+  const weapons = catalogItems.filter(
+    (item) => item.item_type === 'weapon',
+  );
+  const armorItems = catalogItems.filter(
+    (item) => item.item_type === 'armor',
+  );
+  const [search, setSearch] = useState('');
+  const [raceFilter, setRaceFilter] = useState('all');
+  const races = Array.from(
+    new Set(templates.map((template) => template.race).filter(Boolean)),
+  ).sort((left, right) => left.localeCompare(right));
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredTemplates = templates.filter((template) => (
+    (raceFilter === 'all' || template.race === raceFilter)
+    && (
+      !normalizedSearch
+      || template.name.toLocaleLowerCase().includes(normalizedSearch)
+      || template.race.toLocaleLowerCase().includes(normalizedSearch)
+      || template.typical_behaviour.toLocaleLowerCase().includes(normalizedSearch)
+    )
+  ));
+
+  function update<K extends keyof EnemyTemplateDraft>(
+    key: K,
+    value: EnemyTemplateDraft[K],
+  ) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function editTemplate(template?: EnemyTemplateData) {
+    setEditingId(template?.id);
+    setDraft(template ? {
+      name: template.name,
+      description: template.description,
+      race: template.race,
+      difficulty_level: template.difficulty_level,
+      strength: template.strength,
+      dexterity: template.dexterity,
+      arcana: template.arcana,
+      vitality: template.vitality,
+      insight: template.insight,
+      personality: template.personality,
+      max_hp: template.max_hp,
+      armor: template.armor,
+      magical_resistance: template.magical_resistance,
+      attack_dc: template.attack_dc,
+      defense_dc: template.defense_dc,
+      damage: template.damage,
+      attack_profile: template.attack_profile,
+      special_ability: template.special_ability,
+      typical_behaviour: template.typical_behaviour,
+      main_hand_item_id: template.main_hand_item_id,
+      off_hand_item_id: template.off_hand_item_id,
+      armor_item_id: template.armor_item_id,
+    } : emptyEnemyTemplateDraft());
+  }
+
+  const invalidNumber = [
+    draft.difficulty_level,
+    draft.strength,
+    draft.dexterity,
+    draft.arcana,
+    draft.vitality,
+    draft.insight,
+    draft.personality,
+    draft.armor,
+    draft.magical_resistance,
+  ].some(
+    (value) => !Number.isInteger(value) || value < 0,
+  );
+
+  const invalidPositive = [
+    draft.max_hp,
+    draft.attack_dc,
+    draft.defense_dc,
+  ].some(
+    (value) => !Number.isInteger(value) || value < 1,
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="enemy-library-dialog sm:max-w-[860px]">
+        <DialogHeader>
+          <DialogTitle>Enemy library</DialogTitle>
+          <DialogDescription>
+            Define reusable enemy types here. Click an existing type to edit or delete it. Placed copies keep independent HP and world state.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="catalog-heading">
+          <div className="catalog-count">
+            {filteredTemplates.length} of {templates.length} enemy types
+          </div>
+          <button
+            type="button"
+            onClick={() => editTemplate()}
+          >
+            New enemy
+          </button>
+        </div>
+
+        <div className="catalog-grid enemy-library-filters">
+          <label className="dialog-label" htmlFor="enemy-library-search">
+            Search
+            <Input
+              id="enemy-library-search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Name, race or behaviour…"
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-library-race">
+            Race
+            <NativeSelect
+              id="enemy-library-race"
+              value={raceFilter}
+              onChange={(event) => setRaceFilter(event.target.value)}
+            >
+              <NativeSelectOption value="all">All races</NativeSelectOption>
+              {races.map((race) => (
+                <NativeSelectOption key={race} value={race}>
+                  {race}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+        </div>
+
+        <div
+          className="catalog-list"
+          aria-label="Existing enemy types"
+        >
+          {filteredTemplates.map((template) => (
+            <button
+              type="button"
+              className={
+                editingId === template.id
+                  ? 'selected'
+                  : ''
+              }
+              key={template.id}
+              onClick={() => editTemplate(template)}
+            >
+              <span>{template.name}</span>
+              <Badge variant="outline">
+                {template.race} · {template.max_hp} HP
+              </Badge>
+            </button>
+          ))}
+        </div>
+
+        <div className="catalog-grid">
+          <label className="dialog-label" htmlFor="enemy-template-name">
+            Name
+            <Input
+              id="enemy-template-name"
+              value={draft.name}
+              onChange={(event) => update('name', event.target.value)}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-race">
+            Race
+            <Input
+              id="enemy-template-race"
+              value={draft.race}
+              onChange={(event) => update('race', event.target.value)}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-difficulty">
+            Difficulty
+            <Input
+              id="enemy-template-difficulty"
+              type="number"
+              min={0}
+              value={draft.difficulty_level}
+              onChange={(event) => update('difficulty_level', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-hp">
+            Max HP
+            <Input
+              id="enemy-template-hp"
+              type="number"
+              min={1}
+              value={draft.max_hp}
+              onChange={(event) => update('max_hp', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-strength">
+            Strength
+            <Input
+              id="enemy-template-strength"
+              type="number"
+              min={0}
+              value={draft.strength}
+              onChange={(event) => update('strength', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-dexterity">
+            Dexterity
+            <Input
+              id="enemy-template-dexterity"
+              type="number"
+              min={0}
+              value={draft.dexterity}
+              onChange={(event) => update('dexterity', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-arcana">
+            Arcana
+            <Input
+              id="enemy-template-arcana"
+              type="number"
+              min={0}
+              value={draft.arcana}
+              onChange={(event) => update('arcana', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-vitality">
+            Vitality
+            <Input
+              id="enemy-template-vitality"
+              type="number"
+              min={0}
+              value={draft.vitality}
+              onChange={(event) => update('vitality', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-insight">
+            Insight
+            <Input
+              id="enemy-template-insight"
+              type="number"
+              min={0}
+              value={draft.insight}
+              onChange={(event) => update('insight', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-personality">
+            Personality
+            <Input
+              id="enemy-template-personality"
+              type="number"
+              min={0}
+              value={draft.personality}
+              onChange={(event) => update('personality', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-armor">
+            Armor
+            <Input
+              id="enemy-template-armor"
+              type="number"
+              min={0}
+              value={draft.armor}
+              onChange={(event) => update('armor', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-magic-resistance">
+            Magic resistance
+            <Input
+              id="enemy-template-magic-resistance"
+              type="number"
+              min={0}
+              value={draft.magical_resistance}
+              onChange={(event) => update('magical_resistance', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-attack-dc">
+            Attack DC
+            <Input
+              id="enemy-template-attack-dc"
+              type="number"
+              min={1}
+              value={draft.attack_dc}
+              onChange={(event) => update('attack_dc', Number(event.target.value))}
+            />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-template-defense-dc">
+            Defense DC
+            <Input
+              id="enemy-template-defense-dc"
+              type="number"
+              min={1}
+              value={draft.defense_dc}
+              onChange={(event) => update('defense_dc', Number(event.target.value))}
+            />
+          </label>
+        </div>
+
+        <label className="dialog-label" htmlFor="enemy-template-description">
+          Description
+        </label>
+        <Textarea
+          id="enemy-template-description"
+          value={draft.description}
+          onChange={(event) => update('description', event.target.value)}
+        />
+
+        <label className="dialog-label" htmlFor="enemy-template-damage">
+          Damage
+        </label>
+        <Input
+          id="enemy-template-damage"
+          value={draft.damage}
+          onChange={(event) => update('damage', event.target.value)}
+          placeholder="1d6"
+        />
+
+        <label className="dialog-label" htmlFor="enemy-template-attack-profile">
+          Attack profile
+        </label>
+        <Input
+          id="enemy-template-attack-profile"
+          value={draft.attack_profile}
+          onChange={(event) => update('attack_profile', event.target.value)}
+        />
+
+        <label className="dialog-label" htmlFor="enemy-template-behaviour">
+          Typical behaviour
+        </label>
+        <Textarea
+          id="enemy-template-behaviour"
+          value={draft.typical_behaviour}
+          onChange={(event) => update('typical_behaviour', event.target.value)}
+        />
+
+        <label className="dialog-label" htmlFor="enemy-template-ability">
+          Special ability
+        </label>
+        <Textarea
+          id="enemy-template-ability"
+          value={draft.special_ability ?? ''}
+          onChange={(event) => update(
+            'special_ability',
+            event.target.value.trim()
+              ? event.target.value
+              : null,
+          )}
+        />
+
+        <div className="catalog-grid">
+          <label className="dialog-label" htmlFor="enemy-template-main-hand">
+            Main hand
+            <NativeSelect
+              id="enemy-template-main-hand"
+              value={draft.main_hand_item_id ?? ''}
+              onChange={(event) => update(
+                'main_hand_item_id',
+                event.target.value || null,
+              )}
+            >
+              <NativeSelectOption value="">None</NativeSelectOption>
+              {weapons.map((item) => (
+                <NativeSelectOption key={item.id} value={item.id}>
+                  {item.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+
+          <label className="dialog-label" htmlFor="enemy-template-off-hand">
+            Off hand
+            <NativeSelect
+              id="enemy-template-off-hand"
+              value={draft.off_hand_item_id ?? ''}
+              onChange={(event) => update(
+                'off_hand_item_id',
+                event.target.value || null,
+              )}
+            >
+              <NativeSelectOption value="">None</NativeSelectOption>
+              {weapons.map((item) => (
+                <NativeSelectOption key={item.id} value={item.id}>
+                  {item.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+
+          <label className="dialog-label" htmlFor="enemy-template-armor-item">
+            Armor
+            <NativeSelect
+              id="enemy-template-armor-item"
+              value={draft.armor_item_id ?? ''}
+              onChange={(event) => update(
+                'armor_item_id',
+                event.target.value || null,
+              )}
+            >
+              <NativeSelectOption value="">None</NativeSelectOption>
+              {armorItems.map((item) => (
+                <NativeSelectOption key={item.id} value={item.id}>
+                  {item.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+        </div>
+
+        <DialogFooter className="enemy-library-footer">
+          {editingTemplate && (
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (await onDelete(editingTemplate)) {
+                  editTemplate();
+                }
+              }}
+            >
+              <Trash2 /> Delete
+            </Button>
+          )}
+
+          <Button
+            disabled={
+              !draft.name.trim()
+              || !draft.race.trim()
+              || !draft.damage.trim()
+              || !draft.attack_profile.trim()
+              || !draft.typical_behaviour.trim()
+              || invalidNumber
+              || invalidPositive
+            }
+            onClick={async () => {
+              if (await onSave(editingId, draft)) {
+                editTemplate();
+              }
+            }}
+          >
+            <Save />
+            {editingId
+              ? 'Save enemy type'
+              : 'Create enemy type'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -8,6 +8,7 @@ from PIL import Image
 from rpg_bot.dashboard_api import DashboardAPI
 from rpg_bot.database import Database
 from rpg_bot.inventory import ItemCatalog
+from rpg_bot.portraits import CharacterPortraitStore
 from rpg_bot.room_images import RoomImageStore
 from rpg_bot.world import InventoryHolder
 from rpg_bot.world_service import WorldService
@@ -24,7 +25,15 @@ class DashboardAPITests(unittest.TestCase):
         self.room_images = RoomImageStore(
             Path(self.temp_directory.name) / "room_images"
         )
-        self.api = DashboardAPI(self.world, self.room_images)
+        self.portraits = CharacterPortraitStore(
+            Path(self.temp_directory.name) / "characters"
+        )
+        self.api = DashboardAPI(
+            self.world,
+            self.room_images,
+            portraits=self.portraits,
+            guild_id=44,
+        )
 
     def tearDown(self) -> None:
         self.temp_directory.cleanup()
@@ -130,6 +139,516 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(missing_status, 404)
         self.assertEqual(graph_after_delete["nodes"][0]["room_features"], [])
 
+    def test_combat_scene_can_be_controlled_through_dashboard_api(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
+        self.api.handle(
+            "POST",
+            "/api/areas/keep/rooms",
+            {"id": "hall", "name": "Guard Hall", "x": 0, "y": 0},
+        )
+        for feature_id, name in (
+            ("pillar", "Stone Pillar"),
+            ("table", "Oak Table"),
+        ):
+            status, _ = self.api.handle(
+                "POST",
+                "/api/rooms/hall/features",
+                {
+                    "id": feature_id,
+                    "name": name,
+                    "feature_type": "structure",
+                    "description": "",
+                },
+            )
+            self.assertEqual(status, 201)
+        status, _ = self.api.handle(
+            "POST",
+            "/api/rooms/hall/entities",
+            {
+                "id": "bandit",
+                "name": "Bandit",
+                "kind": "enemy",
+            },
+        )
+        self.assertEqual(status, 201)
+
+        status, state = self.api.handle(
+            "POST",
+            "/api/combat",
+            {"room_id": "hall"},
+        )
+        self.assertEqual(status, 201)
+        scene = state["scene"]
+        self.assertEqual(scene["room_name"], "Guard Hall")
+        self.assertEqual(
+            {landmark["id"] for landmark in scene["landmarks"]},
+            {"room:center", "feature:pillar", "feature:table"},
+        )
+        self.assertEqual(
+            [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
+            [("enemy", "Bandit")],
+        )
+        self.assertEqual(
+            [entry["event_type"] for entry in scene["log_entries"][:2]],
+            ["combat_started", "turn_started"],
+        )
+
+        inspect_legacy_status, legacy_bandit = self.api.handle(
+            "GET",
+            "/api/combat/combatants/enemy/bandit/inspect",
+        )
+        self.assertEqual(inspect_legacy_status, 200)
+        self.assertEqual(legacy_bandit["name"], "Bandit")
+        self.assertIsNone(legacy_bandit["hp"])
+        self.assertEqual(legacy_bandit["attributes"], {})
+
+        status, positioned = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"x": 0.25, "y": 0.35},
+        )
+        self.assertEqual(status, 200)
+        pillar = next(
+            landmark
+            for landmark in positioned["scene"]["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertEqual((pillar["x"], pillar["y"]), (0.25, 0.35))
+
+        status, routed = self.api.handle(
+            "PUT",
+            "/api/combat/routes",
+            {
+                "source_landmark_id": "feature:pillar",
+                "destination_landmark_id": "feature:table",
+                "distance": "close",
+                "obstacle": "Fallen rubble",
+                "blocked": False,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(routed["scene"]["routes"][0]["obstacle"], "Fallen rubble")
+
+        delete_route_status, disconnected = self.api.handle(
+            "DELETE",
+            "/api/combat/routes",
+            {
+                "source_landmark_id": "feature:pillar",
+                "destination_landmark_id": "feature:table",
+            },
+        )
+        self.assertEqual(delete_route_status, 200)
+        self.assertEqual(disconnected["scene"]["routes"], [])
+
+        add_landmark_status, with_landmark = self.api.handle(
+            "POST",
+            "/api/combat/landmarks",
+            {
+                "name": "Broken balcony",
+                "description": "A raised ledge.",
+            },
+        )
+        self.assertEqual(add_landmark_status, 201)
+        custom = next(
+            landmark
+            for landmark in with_landmark["scene"]["landmarks"]
+            if landmark["feature_type"] == "custom"
+        )
+        self.assertEqual(custom["name"], "Broken balcony")
+        self.assertIsNotNone(custom["x"])
+        self.assertIsNotNone(custom["y"])
+
+        remove_landmark_status, without_landmark = self.api.handle(
+            "DELETE",
+            f"/api/combat/landmarks/{custom['id']}",
+        )
+        self.assertEqual(remove_landmark_status, 200)
+        self.assertNotIn(
+            custom["id"],
+            {
+                landmark["id"]
+                for landmark in without_landmark["scene"]["landmarks"]
+            },
+        )
+
+        status, moved = self.api.handle(
+            "PATCH",
+            "/api/combat/combatants/enemy/bandit",
+            {"landmark_id": "feature:pillar", "relation": "behind"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(moved["scene"]["combatants"][0]["landmark_id"], "feature:pillar")
+        self.assertEqual(moved["scene"]["combatants"][0]["relation"], "behind")
+
+        add_enemy_status, reinforced = self.api.handle(
+            "POST",
+            "/api/combat/enemies",
+            {
+                "template_id": "core_goblin_raider",
+                "landmark_id": "feature:table",
+                "quantity": 2,
+            },
+        )
+        self.assertEqual(add_enemy_status, 201)
+        goblins = [
+            combatant
+            for combatant in reinforced["scene"]["combatants"]
+            if combatant["name"] == "Goblin Raider"
+        ]
+        self.assertEqual(len(goblins), 2)
+        self.assertEqual(
+            {goblin["landmark_id"] for goblin in goblins},
+            {"feature:table"},
+        )
+        self.assertNotEqual(goblins[0]["source_id"], goblins[1]["source_id"])
+        self.assertIsNotNone(
+            self.world.get_enemy(goblins[0]["source_id"])
+        )
+
+        inspect_status, inspected = self.api.handle(
+            "GET",
+            f"/api/combat/combatants/enemy/{goblins[1]['source_id']}/inspect",
+        )
+        self.assertEqual(inspect_status, 200)
+        self.assertEqual(inspected["name"], "Goblin Raider")
+        self.assertEqual(inspected["hp"], inspected["max_hp"])
+        self.assertEqual(inspected["attributes"]["insight"], 1)
+        self.assertEqual(inspected["enemy"]["template_name"], "Goblin Raider")
+        self.assertEqual(
+            inspected["enemy"]["attack_profile"],
+            "Jagged blade or shortbow",
+        )
+
+        remove_enemy_status, reduced = self.api.handle(
+            "DELETE",
+            f"/api/combat/combatants/enemy/{goblins[0]['source_id']}",
+        )
+        self.assertEqual(remove_enemy_status, 200)
+        self.assertNotIn(
+            goblins[0]["source_id"],
+            {
+                combatant["source_id"]
+                for combatant in reduced["scene"]["combatants"]
+            },
+        )
+        self.assertIsNotNone(
+            self.world.get_enemy(goblins[0]["source_id"])
+        )
+
+        remaining_goblin = goblins[1]
+        initiative_status, initiative_state = self.api.handle(
+            "PATCH",
+            f"/api/combat/initiative/enemy/{remaining_goblin['source_id']}",
+            {"initiative_score": 30},
+        )
+        self.assertEqual(initiative_status, 200)
+        edited_goblin = next(
+            combatant
+            for combatant in initiative_state["scene"]["combatants"]
+            if combatant["source_id"] == remaining_goblin["source_id"]
+        )
+        self.assertEqual(edited_goblin["initiative_score"], 30)
+
+        jump_status, jumped = self.api.handle(
+            "PUT",
+            "/api/combat/turn",
+            {
+                "kind": "enemy",
+                "source_id": remaining_goblin["source_id"],
+            },
+        )
+        self.assertEqual(jump_status, 200)
+        self.assertEqual(
+            jumped["scene"]["current_turn_source_id"],
+            remaining_goblin["source_id"],
+        )
+        self.assertTrue(
+            next(
+                combatant
+                for combatant in jumped["scene"]["combatants"]
+                if combatant["source_id"] == remaining_goblin["source_id"]
+            )["is_current_turn"]
+        )
+
+        next_status, advanced = self.api.handle(
+            "POST",
+            "/api/combat/turn/next",
+        )
+        self.assertEqual(next_status, 200)
+        self.assertNotEqual(
+            advanced["scene"]["current_turn_source_id"],
+            remaining_goblin["source_id"],
+        )
+
+        previous_status, restored = self.api.handle(
+            "POST",
+            "/api/combat/turn/previous",
+        )
+        self.assertEqual(previous_status, 200)
+        self.assertEqual(
+            restored["scene"]["current_turn_source_id"],
+            remaining_goblin["source_id"],
+        )
+
+        status, ended = self.api.handle("DELETE", "/api/combat")
+        self.assertEqual(status, 200)
+        self.assertIsNone(ended["scene"])
+
+    def test_character_workspace_can_inspect_and_edit_character(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
+        self.api.handle(
+            "POST",
+            "/api/areas/keep/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+        character = self.database.create_character(
+            77,
+            "Mira",
+            18,
+            race="Human",
+            attributes={
+                "Strength": 12,
+                "Dexterity": 10,
+                "Arcana": 9,
+                "Vitality": 13,
+                "Insight": 14,
+                "Personality": 11,
+            },
+            skills={"Perception": 2},
+        )
+        assert character.character_id is not None
+        self.world.place_character(character.character_id, "hall")
+
+        list_status, listed = self.api.handle("GET", "/api/characters")
+        inspect_status, inspected = self.api.handle(
+            "GET",
+            f"/api/characters/{character.character_id}",
+        )
+
+        self.assertEqual(list_status, 200)
+        self.assertEqual(listed[0]["name"], "Mira")
+        self.assertEqual(listed[0]["current_room_name"], "Hall")
+        self.assertEqual(listed[0]["status"], "active")
+        self.assertEqual(inspect_status, 200)
+        self.assertEqual(inspected["attributes"]["Insight"], 14)
+        self.assertEqual(inspected["skills"]["Perception"], 2)
+
+        update_status, updated = self.api.handle(
+            "PATCH",
+            f"/api/characters/{character.character_id}",
+            {
+                "name": "Mira Thorn",
+                "hp": -3,
+                "max_hp": 20,
+                "status": "downed",
+                "failed_death_saves": 1,
+                "stance": "prone",
+                "race": "Human",
+                "lineage": "Northborn",
+                "age": "29",
+                "gender": "Female",
+                "current_room_id": "hall",
+                "attributes": {
+                    "Strength": 13,
+                    "Dexterity": 11,
+                    "Arcana": 9,
+                    "Vitality": 15,
+                    "Insight": 14,
+                    "Personality": 10,
+                },
+                "skills": {
+                    "Perception": 3,
+                    "Survival": 1,
+                },
+                "wallet": {
+                    "copper": 8,
+                    "silver": 4,
+                    "gold": 2,
+                },
+            },
+        )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["name"], "Mira Thorn")
+        self.assertEqual((updated["hp"], updated["max_hp"]), (-3, 20))
+        self.assertEqual(updated["status"], "downed")
+        self.assertEqual(updated["failed_death_saves"], 1)
+        self.assertEqual(updated["stance"], "prone")
+        self.assertEqual(updated["attributes"]["Vitality"], 15)
+        self.assertEqual(updated["skills"]["Survival"], 1)
+        self.assertEqual(updated["wallet"], {
+            "copper": 8,
+            "silver": 4,
+            "gold": 2,
+        })
+
+    def test_character_workspace_can_manage_inventory(self) -> None:
+        character = self.database.create_character(77, "Mira", 18)
+        assert character.character_id is not None
+        self.world.create_item_template(
+            {
+                "id": "test_blade",
+                "item_type": "weapon",
+                "name": "Test Blade",
+                "rarity": "common",
+                "value": 5,
+                "description": "A testing weapon.",
+                "weight": 1,
+                "grip": "one_handed",
+                "durability": 6,
+                "damage_parts": [
+                    {"amount": 6, "damage_type": "slash"}
+                ],
+            }
+        )
+
+        add_status, added = self.api.handle(
+            "POST",
+            f"/api/characters/{character.character_id}/items",
+            {"template_id": "test_blade", "quantity": 1},
+        )
+        self.assertEqual(add_status, 201)
+        item = next(
+            item
+            for item in added["inventory"]
+            if item["template_id"] == "test_blade"
+        )
+
+        edit_status, edited = self.api.handle(
+            "PATCH",
+            (
+                f"/api/characters/{character.character_id}"
+                f"/items/{item['id']}"
+            ),
+            {
+                "quantity": 2,
+                "durability": 4,
+                "equipped_slot": "main_hand",
+            },
+        )
+        self.assertEqual(edit_status, 200)
+        edited_item = next(
+            candidate
+            for candidate in edited["inventory"]
+            if candidate["id"] == item["id"]
+        )
+        self.assertEqual(edited_item["quantity"], 2)
+        self.assertEqual(edited_item["durability"], 4)
+        self.assertEqual(edited_item["equipped_slot"], "main_hand")
+
+        delete_status, after_delete = self.api.handle(
+            "DELETE",
+            (
+                f"/api/characters/{character.character_id}"
+                f"/items/{item['id']}"
+            ),
+        )
+        self.assertEqual(delete_status, 200)
+        self.assertFalse(
+            any(
+                candidate["id"] == item["id"]
+                for candidate in after_delete["inventory"]
+            )
+        )
+
+    def test_character_workspace_can_upload_portrait(self) -> None:
+        character = self.database.create_character(77, "Mira", 18)
+        assert character.character_id is not None
+        image = Image.new("RGB", (320, 240), "white")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+
+        status, updated = self.api.upload_character_portrait(
+            character.character_id,
+            buffer.getvalue(),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIsNotNone(updated["portrait_url"])
+        self.assertIsNotNone(
+            self.api.character_portrait_path(character.character_id)
+        )
+
+    def test_character_combatant_can_be_inspected(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "keep", "name": "Keep"})
+        self.api.handle(
+            "POST",
+            "/api/areas/keep/rooms",
+            {"id": "hall", "name": "Hall", "x": 0, "y": 0},
+        )
+        character = self.database.create_character(
+            77,
+            "Mira",
+            18,
+            race="Human",
+            attributes={
+                "Strength": 12,
+                "Dexterity": 10,
+                "Arcana": 9,
+                "Vitality": 13,
+                "Insight": 14,
+                "Personality": 11,
+            },
+            skills={"Perception": 2},
+        )
+        assert character.character_id is not None
+        self.world.place_character(character.character_id, "hall")
+        self.api.handle("POST", "/api/combat", {"room_id": "hall"})
+
+        status, inspected = self.api.handle(
+            "GET",
+            f"/api/combat/combatants/character/{character.character_id}/inspect",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(inspected["name"], "Mira")
+        self.assertEqual((inspected["hp"], inspected["max_hp"]), (18, 18))
+        self.assertEqual(inspected["attributes"]["Insight"], 14)
+        self.assertEqual(inspected["skills"]["Perception"], 2)
+        self.assertIsNotNone(inspected["wallet"])
+        self.assertIsInstance(inspected["inventory"], list)
+        self.assertIsInstance(inspected["equipment"], list)
+
+    def test_combat_scene_exposes_linked_room_door_landmark(self) -> None:
+        self.api.handle("POST", "/api/areas", {"id": "gatehouse", "name": "Gatehouse"})
+        for room_id, name in (("hall", "Hall"), ("yard", "Yard")):
+            self.api.handle(
+                "POST",
+                "/api/areas/gatehouse/rooms",
+                {"id": room_id, "name": name, "x": 0, "y": 0},
+            )
+        connection_status, connection = self.api.handle(
+            "POST",
+            "/api/connections",
+            {
+                "source_room_id": "hall",
+                "destination_room_id": "yard",
+                "exit_name": "north gate",
+                "return_exit_name": "south gate",
+                "connection_type": "door",
+            },
+        )
+        self.assertEqual(connection_status, 201)
+
+        status, state = self.api.handle(
+            "POST",
+            "/api/combat",
+            {"room_id": "hall"},
+        )
+
+        self.assertEqual(status, 201)
+        door = next(
+            landmark
+            for landmark in state["scene"]["landmarks"]
+            if landmark["feature_type"] == "door"
+        )
+        self.assertEqual(door["name"], "Door: north gate")
+        self.assertEqual(
+            door["source_connection_id"],
+            connection["connection_id"],
+        )
+        self.assertIn("Yard", door["description"])
+
     def test_room_feature_templates_are_reusable_and_independent(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})
         for room_id in ("hall", "vault"):
@@ -197,6 +716,192 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(delete_status, 200)
         self.assertEqual(deleted, {"deleted": "oak_table"})
         self.assertEqual(vault_feature, placed[1])
+
+    def test_enemy_templates_create_independent_persistent_room_instances(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "crypt", "name": "Crypt"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/crypt/rooms",
+            {
+                "id": "hall",
+                "name": "Hall",
+                "x": 0,
+                "y": 0,
+            },
+        )
+
+        item_status, _ = self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "rusty_sword",
+                "name": "Rusty Sword",
+                "item_type": "weapon",
+                "damage": 3,
+            },
+        )
+
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "skeleton_warrior",
+                "name": "Skeleton Warrior",
+                "race": "Undead",
+                "difficulty_level": 2,
+                "strength": 3,
+                "dexterity": 1,
+                "vitality": 3,
+                "max_hp": 10,
+                "armor": 1,
+                "attack_dc": 14,
+                "defense_dc": 11,
+                "damage": "1d6",
+                "attack_profile": "Heavy sword swing",
+                "special_ability": "Ignores ordinary fear.",
+                "typical_behaviour": "Slow and relentless.",
+                "main_hand_item_id": "rusty_sword",
+            },
+        )
+
+        first_status, first = self.api.handle(
+            "POST",
+            "/api/rooms/hall/enemies",
+            {"template_id": template["id"]},
+        )
+        second_status, second = self.api.handle(
+            "POST",
+            "/api/rooms/hall/enemies",
+            {"template_id": template["id"]},
+        )
+        graph_status, graph = self.api.handle(
+            "GET",
+            "/api/areas/crypt/graph",
+        )
+
+        self.assertEqual(item_status, 201)
+        self.assertEqual(template_status, 201)
+        self.assertEqual(first_status, 201)
+        self.assertEqual(second_status, 201)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(
+            (first["current_hp"], first["max_hp"]),
+            (10, 10),
+        )
+        self.assertEqual(
+            (second["current_hp"], second["max_hp"]),
+            (10, 10),
+        )
+        self.assertEqual(graph_status, 200)
+        self.assertEqual(
+            {
+                enemy["id"]
+                for enemy in graph["nodes"][0]["enemies"]
+            },
+            {first["id"], second["id"]},
+        )
+        self.assertEqual(
+            [
+                stack.item.id
+                for stack in self.world.inventory(
+                    InventoryHolder.entity(first["id"])
+                )
+            ],
+            ["rusty_sword"],
+        )
+
+        update_status, updated = self.api.handle(
+            "PATCH",
+            f"/api/enemies/{first['id']}",
+            {"current_hp": 3},
+        )
+        _, untouched = self.api.handle(
+            "GET",
+            f"/api/enemies/{second['id']}",
+        )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["current_hp"], 3)
+        self.assertEqual(untouched["current_hp"], 10)
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(first["id"])
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.current_hp, 3)
+
+        delete_in_use_status, _ = self.api.handle(
+            "DELETE",
+            "/api/enemy-templates/skeleton_warrior",
+        )
+        self.assertEqual(delete_in_use_status, 400)
+
+        self.api.handle(
+            "DELETE",
+            f"/api/enemies/{first['id']}",
+        )
+        self.api.handle(
+            "DELETE",
+            f"/api/enemies/{second['id']}",
+        )
+        delete_status, deleted = self.api.handle(
+            "DELETE",
+            "/api/enemy-templates/skeleton_warrior",
+        )
+        self.assertEqual(delete_status, 200)
+        self.assertEqual(
+            deleted,
+            {"deleted": "skeleton_warrior"},
+        )
+
+    def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:
+        status, templates = self.api.handle(
+            "GET",
+            "/api/enemy-templates",
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(
+            {
+                "core_goblin_raider",
+                "core_bandit",
+                "core_skeleton_warrior",
+                "core_bone_hound",
+                "core_cultist",
+                "core_swamp_troll",
+            }.issubset({template["id"] for template in templates})
+        )
+
+        update_status, updated = self.api.handle(
+            "PUT",
+            "/api/enemy-templates/core_bandit",
+            {
+                "name": "Road Bandit",
+                "max_hp": 11,
+            },
+        )
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["name"], "Road Bandit")
+        self.assertEqual(updated["max_hp"], 11)
+
+        delete_status, _ = self.api.handle(
+            "DELETE",
+            "/api/enemy-templates/core_bone_hound",
+        )
+        self.assertEqual(delete_status, 200)
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        self.assertIsNone(
+            reopened.get_enemy_template("core_bone_hound")
+        )
+        persisted = reopened.get_enemy_template("core_bandit")
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.name, "Road Bandit")
+        self.assertEqual(persisted.max_hp, 11)
 
     def test_room_image_can_be_uploaded_replaced_persisted_and_removed(self) -> None:
         self.api.handle("POST", "/api/areas", {"id": "crypt", "name": "Crypt"})

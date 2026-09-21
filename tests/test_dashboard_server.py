@@ -2,15 +2,18 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from io import BytesIO
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 from threading import Thread
 import unittest
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
 from rpg_bot.dashboard_api import DashboardAPI
-from rpg_bot.dashboard_server import DashboardRequestHandler
+from rpg_bot.dashboard_server import DashboardRequestHandler, main
 from rpg_bot.database import Database
 from rpg_bot.inventory import ItemCatalog
 from rpg_bot.room_images import RoomImageStore
@@ -20,6 +23,51 @@ from rpg_bot.world_service import WorldService
 class QuietDashboardRequestHandler(DashboardRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+
+class DashboardServerConfigurationTests(unittest.TestCase):
+    def test_main_loads_dotenv_before_dashboard_configuration(self) -> None:
+        server = Mock()
+
+        def populate_environment() -> bool:
+            os.environ["DATABASE_PATH"] = "configured-dashboard.db"
+            os.environ["DISCORD_GUILD_ID"] = "987654321"
+            os.environ["CHARACTER_MEDIA_PATH"] = "configured-characters"
+            return True
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(sys, "argv", ["dashboard_server"]),
+            patch(
+                "rpg_bot.dashboard_server.load_dotenv",
+                side_effect=populate_environment,
+            ) as load_environment,
+            patch("rpg_bot.dashboard_server.Database") as database_type,
+            patch("rpg_bot.dashboard_server.WorldService") as world_service_type,
+            patch(
+                "rpg_bot.dashboard_server.CharacterPortraitStore"
+            ) as portrait_store_type,
+            patch("rpg_bot.dashboard_server.DashboardAPI") as dashboard_api_type,
+            patch(
+                "rpg_bot.dashboard_server.ThreadingHTTPServer",
+                return_value=server,
+            ),
+        ):
+            main()
+
+        load_environment.assert_called_once_with()
+        database_type.assert_called_once_with("configured-dashboard.db")
+        database_type.return_value.initialize.assert_called_once_with()
+        world_service_type.assert_called_once_with(database_type.return_value)
+        portrait_store_type.assert_called_once_with(
+            "configured-characters"
+        )
+        dashboard_api_type.assert_called_once_with(
+            world_service_type.return_value,
+            portraits=portrait_store_type.return_value,
+            guild_id=987654321,
+        )
+        server.serve_forever.assert_called_once_with()
 
 
 class DashboardServerRoomImageTests(unittest.TestCase):

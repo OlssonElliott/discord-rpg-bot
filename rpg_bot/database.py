@@ -14,7 +14,13 @@ from .dice_visuals import (
     DEFAULT_DICE_NUMBER_COLOR,
     normalize_dice_color,
 )
-from .models import Character, CharacterSheetViewState, Stance
+from .models import (
+    Character,
+    CharacterCombatState,
+    CharacterCombatStatus,
+    CharacterSheetViewState,
+    Stance,
+)
 from .dungeon import (
     CharacterLocation,
     CharacterRoomKnowledge,
@@ -430,14 +436,17 @@ class Database:
             )
 
     @staticmethod
-    def _create_character_tables(connection: sqlite3.Connection) -> None:
+    def _create_characters_table(
+        connection: sqlite3.Connection,
+        table_name: str = "characters",
+    ) -> None:
         connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS characters (
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 discord_user_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
-                hp INTEGER NOT NULL CHECK (hp >= 0 AND hp <= max_hp),
+                hp INTEGER NOT NULL CHECK (hp >= -max_hp AND hp <= max_hp),
                 max_hp INTEGER NOT NULL CHECK (max_hp > 0),
                 stance TEXT NOT NULL CHECK (
                     stance IN ('steady', 'bad_stance', 'prone')
@@ -459,6 +468,10 @@ class Database:
             )
             """
         )
+
+    @classmethod
+    def _create_character_tables(cls, connection: sqlite3.Connection) -> None:
+        cls._create_characters_table(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS character_skills (
@@ -468,6 +481,86 @@ class Database:
                 PRIMARY KEY (character_id, skill),
                 FOREIGN KEY (character_id) REFERENCES characters(id)
             )
+            """
+        )
+
+    @classmethod
+    def _migrate_character_hp_constraint(
+        cls,
+        connection: sqlite3.Connection,
+    ) -> None:
+        row = connection.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'characters'
+            """
+        ).fetchone()
+        table_sql = (row["sql"] if row is not None else "") or ""
+        normalized_sql = "".join(table_sql.casefold().split())
+        if "hp>=-max_hp" in normalized_sql:
+            return
+
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.execute("DROP TABLE IF EXISTS characters_new")
+            cls._create_characters_table(connection, "characters_new")
+            connection.execute(
+                """
+                INSERT INTO characters_new (
+                    id, discord_user_id, name, hp, max_hp, stance,
+                    lineage, race, age, gender,
+                    strength, dexterity, arcana, vitality, insight, personality,
+                    portrait_key, current_room_id, is_active, is_archived
+                )
+                SELECT
+                    id, discord_user_id, name, hp, max_hp, stance,
+                    lineage, race, age, gender,
+                    strength, dexterity, arcana, vitality, insight, personality,
+                    portrait_key, current_room_id, is_active, is_archived
+                FROM characters
+                """
+            )
+            connection.execute("DROP TABLE characters")
+            connection.execute(
+                "ALTER TABLE characters_new RENAME TO characters"
+            )
+            connection.commit()
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
+
+    @staticmethod
+    def _initialize_character_combat_states(
+        connection: sqlite3.Connection,
+    ) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS character_combat_states (
+                character_id INTEGER PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (
+                    status IN ('active', 'downed', 'stable', 'recovering', 'dead')
+                ),
+                failed_death_saves INTEGER NOT NULL DEFAULT 0 CHECK (
+                    failed_death_saves BETWEEN 0 AND 3
+                ),
+                FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO character_combat_states (
+                character_id, status, failed_death_saves
+            )
+            SELECT
+                id,
+                CASE
+                    WHEN hp <= -max_hp THEN 'dead'
+                    WHEN hp <= 0 THEN 'downed'
+                    ELSE 'active'
+                END,
+                0
+            FROM characters
             """
         )
 
@@ -556,8 +649,10 @@ class Database:
                     connection.execute(
                         "ALTER TABLE characters ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0"
                     )
+                cls._migrate_character_hp_constraint(connection)
                 cls._create_character_tables(connection)
 
+        cls._initialize_character_combat_states(connection)
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_character_per_user
@@ -616,6 +711,45 @@ class Database:
                 name TEXT NOT NULL,
                 description TEXT,
                 FOREIGN KEY (room_id) REFERENCES rooms(id)
+            );
+            CREATE TABLE IF NOT EXISTS enemy_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                race TEXT NOT NULL DEFAULT 'Unknown',
+                difficulty_level INTEGER NOT NULL DEFAULT 1 CHECK (difficulty_level >= 0),
+                strength INTEGER NOT NULL DEFAULT 0 CHECK (strength >= 0),
+                dexterity INTEGER NOT NULL DEFAULT 0 CHECK (dexterity >= 0),
+                arcana INTEGER NOT NULL DEFAULT 0 CHECK (arcana >= 0),
+                vitality INTEGER NOT NULL DEFAULT 0 CHECK (vitality >= 0),
+                insight INTEGER NOT NULL DEFAULT 0 CHECK (insight >= 0),
+                personality INTEGER NOT NULL DEFAULT 0 CHECK (personality >= 0),
+                max_hp INTEGER NOT NULL DEFAULT 7 CHECK (max_hp > 0),
+                armor INTEGER NOT NULL DEFAULT 0 CHECK (armor >= 0),
+                magical_resistance INTEGER NOT NULL DEFAULT 0 CHECK (magical_resistance >= 0),
+                attack_dc INTEGER NOT NULL DEFAULT 12 CHECK (attack_dc > 0),
+                defense_dc INTEGER NOT NULL DEFAULT 12 CHECK (defense_dc > 0),
+                damage TEXT NOT NULL DEFAULT '1d4',
+                attack_profile TEXT NOT NULL DEFAULT 'Basic attack',
+                special_ability TEXT,
+                typical_behaviour TEXT NOT NULL DEFAULT 'Unknown',
+                main_hand_item_id TEXT,
+                off_hand_item_id TEXT,
+                armor_item_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS world_enemies (
+                entity_id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                current_hp INTEGER NOT NULL CHECK (current_hp >= 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'dead', 'fled')),
+                FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES enemy_templates(id)
+            );
+            CREATE INDEX IF NOT EXISTS world_enemies_by_template
+                ON world_enemies(template_id);
+            CREATE TABLE IF NOT EXISTS world_seed_state (
+                key TEXT PRIMARY KEY
             );
             CREATE TABLE IF NOT EXISTS container_templates (
                 id TEXT PRIMARY KEY,
@@ -712,6 +846,95 @@ class Database:
             CREATE INDEX IF NOT EXISTS characters_by_room ON characters(current_room_id);
             """
         )
+        enemy_seed_key = "basic_enemy_templates_v1"
+        if connection.execute(
+            "SELECT 1 FROM world_seed_state WHERE key = ?",
+            (enemy_seed_key,),
+        ).fetchone() is None:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO enemy_templates (
+                    id, name, description, race, difficulty_level,
+                    strength, dexterity, arcana, vitality, insight, personality,
+                    max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                    damage, attack_profile, special_ability, typical_behaviour
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    (
+                        "core_goblin_raider",
+                        "Goblin Raider",
+                        "A wiry goblin skirmisher accustomed to ambushes and dirty fighting.",
+                        "Goblin",
+                        1, 1, 3, 0, 1, 1, 0, 6, 0, 0, 12, 13,
+                        "1d4",
+                        "Jagged blade or shortbow",
+                        "Pack opportunist",
+                        "Circles isolated targets, attacks from advantage, and retreats when pressured.",
+                    ),
+                    (
+                        "core_bandit",
+                        "Bandit",
+                        "A common outlaw with practical weapons and little discipline.",
+                        "Human",
+                        1, 2, 2, 0, 2, 1, 1, 9, 1, 0, 12, 12,
+                        "1d6",
+                        "Sword or club",
+                        None,
+                        "Fights directly while an advantage remains and may flee when badly hurt.",
+                    ),
+                    (
+                        "core_skeleton_warrior",
+                        "Skeleton Warrior",
+                        "An animated warrior held together by old armor and darker forces.",
+                        "Undead",
+                        2, 3, 1, 0, 3, 0, 0, 10, 1, 1, 13, 11,
+                        "1d6",
+                        "Heavy weapon swing",
+                        "Fearless",
+                        "Advances without hesitation and keeps pressure on the nearest living target.",
+                    ),
+                    (
+                        "core_bone_hound",
+                        "Bone Hound",
+                        "A fast skeletal predator that hunts by sound and movement.",
+                        "Undead Beast",
+                        2, 2, 4, 0, 2, 2, 0, 8, 0, 1, 13, 13,
+                        "1d6",
+                        "Bite and maul",
+                        "Relentless pursuit",
+                        "Rushes vulnerable targets and stays close once it has engaged.",
+                    ),
+                    (
+                        "core_cultist",
+                        "Cultist",
+                        "A fanatical occultist carrying crude weapons and unstable magic.",
+                        "Human",
+                        2, 1, 2, 4, 1, 2, 2, 7, 0, 2, 13, 11,
+                        "1d4",
+                        "Ritual blade or dark bolt",
+                        "Dark invocation",
+                        "Keeps distance when possible and supports stronger allies with occult pressure.",
+                    ),
+                    (
+                        "core_swamp_troll",
+                        "Swamp Troll",
+                        "A massive troll accustomed to fighting through wounds that would stop lesser creatures.",
+                        "Troll",
+                        4, 6, 1, 0, 6, 1, 0, 28, 2, 1, 15, 10,
+                        "2d6",
+                        "Crushing claw or heavy club",
+                        "Regeneration",
+                        "Pushes into the center of a fight and focuses on the nearest threatening target.",
+                    ),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO world_seed_state (key) VALUES (?)",
+                (enemy_seed_key,),
+            )
         room_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(rooms)")
         }
@@ -1795,6 +2018,14 @@ class Database:
                     ),
                 )
                 character_id = cursor.lastrowid
+                connection.execute(
+                    """
+                    INSERT INTO character_combat_states (
+                        character_id, status, failed_death_saves
+                    ) VALUES (?, 'active', 0)
+                    """,
+                    (character_id,),
+                )
                 if previous is not None:
                     self._transfer_private_views(
                         connection, previous["id"], character_id
@@ -1892,6 +2123,22 @@ class Database:
                 """
             ).fetchall()
             return [self._to_character_with_skills(connection, row) for row in rows]
+
+    def get_character_by_global_id(self, character_id: int) -> Character | None:
+        """Return one selectable character without requiring its Discord owner id."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, discord_user_id, name, hp, max_hp, stance,
+                       lineage, race, age, gender,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       is_active, is_archived, portrait_key, current_room_id
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            return self._to_character_with_skills(connection, row) if row else None
 
     def select_character(self, discord_user_id: int, character_id: int) -> Character:
         with self._connect() as connection:
@@ -2421,6 +2668,243 @@ class Database:
                 )
                 if cursor.rowcount == 0:
                     raise ValueError("That item is not in this inventory.")
+
+    def update_character_admin(
+        self,
+        character_id: int,
+        *,
+        name: str,
+        hp: int,
+        max_hp: int,
+        stance: Stance,
+        lineage: str | None,
+        race: str | None,
+        age: str | None,
+        gender: str | None,
+        attributes: Mapping[str, int],
+        skills: Mapping[str, int],
+        status: CharacterCombatStatus,
+        failed_death_saves: int,
+        current_room_id: str | None,
+        copper: int,
+        silver: int,
+        gold: int,
+    ) -> Character:
+        """Apply an explicit DM edit to a character and its attached state."""
+        clean_name = self._clean_name(name, "Character name")
+        if max_hp <= 0:
+            raise InvalidHitPointsError("Maximum HP must be greater than 0.")
+        if not -max_hp <= hp <= max_hp:
+            raise InvalidHitPointsError(
+                f"HP must be between {-max_hp} and {max_hp}."
+            )
+        if not 0 <= failed_death_saves <= 3:
+            raise ValueError("Failed death saves must be between 0 and 3.")
+        if copper < 0 or silver < 0 or gold < 0:
+            raise ValueError("Currency amounts cannot be negative.")
+
+        attribute_names = (
+            "Strength",
+            "Dexterity",
+            "Arcana",
+            "Vitality",
+            "Insight",
+            "Personality",
+        )
+        normalized_attributes: dict[str, int | None] = {}
+        for attribute in attribute_names:
+            value = attributes.get(attribute)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int)
+            ):
+                raise ValueError(f"{attribute} must be an integer.")
+            normalized_attributes[attribute] = value
+
+        normalized_skills: dict[str, int] = {}
+        for skill, rank in skills.items():
+            clean_skill = skill.strip()
+            if not clean_skill:
+                raise ValueError("Skill names cannot be empty.")
+            if len(clean_skill) > 100:
+                raise ValueError("Skill names cannot be longer than 100 characters.")
+            if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
+                raise ValueError("Skill ranks must be non-negative integers.")
+            if rank:
+                normalized_skills[clean_skill] = rank
+
+        with self._connect() as connection:
+            current = connection.execute(
+                """
+                SELECT current_room_id FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            if current is None:
+                raise CharacterNotFoundError("That character does not exist.")
+            if current_room_id is not None:
+                self._require_room(connection, current_room_id)
+
+            try:
+                connection.execute(
+                    """
+                    UPDATE characters
+                    SET name = ?, hp = ?, max_hp = ?, stance = ?,
+                        lineage = ?, race = ?, age = ?, gender = ?,
+                        strength = ?, dexterity = ?, arcana = ?,
+                        vitality = ?, insight = ?, personality = ?,
+                        current_room_id = ?
+                    WHERE id = ? AND is_archived = 0
+                    """,
+                    (
+                        clean_name,
+                        hp,
+                        max_hp,
+                        stance.value,
+                        lineage,
+                        race,
+                        age,
+                        gender,
+                        normalized_attributes["Strength"],
+                        normalized_attributes["Dexterity"],
+                        normalized_attributes["Arcana"],
+                        normalized_attributes["Vitality"],
+                        normalized_attributes["Insight"],
+                        normalized_attributes["Personality"],
+                        current_room_id,
+                        character_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise CharacterAlreadyExistsError(
+                    "That Discord user already has a selectable character with this name."
+                ) from error
+
+            connection.execute(
+                "DELETE FROM character_skills WHERE character_id = ?",
+                (character_id,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO character_skills (character_id, skill, rank)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    (character_id, skill, rank)
+                    for skill, rank in normalized_skills.items()
+                ),
+            )
+
+            self._ensure_character_combat_state_row(connection, character_id)
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = ?
+                WHERE character_id = ?
+                """,
+                (status.value, failed_death_saves, character_id),
+            )
+
+            connection.execute(
+                "INSERT OR IGNORE INTO character_wallets (character_id) VALUES (?)",
+                (character_id,),
+            )
+            connection.execute(
+                """
+                UPDATE character_wallets
+                SET copper = ?, silver = ?, gold = ?
+                WHERE character_id = ?
+                """,
+                (copper, silver, gold, character_id),
+            )
+
+            previous_room_id = current["current_room_id"]
+            if previous_room_id != current_room_id:
+                if previous_room_id is not None:
+                    self._queue_map_refresh_for_room(
+                        connection,
+                        previous_room_id,
+                    )
+                if current_room_id is not None:
+                    self._record_room_visit(
+                        connection,
+                        character_id,
+                        current_room_id,
+                    )
+                    self._queue_map_refresh_for_room(
+                        connection,
+                        current_room_id,
+                    )
+
+        updated = self.get_character_by_global_id(character_id)
+        if updated is None:
+            raise RuntimeError("Updated character could not be loaded.")
+        return updated
+
+    def set_character_inventory_item_admin(
+        self,
+        character_id: int,
+        instance_id: str,
+        *,
+        quantity: int,
+        durability: int | None,
+        equipped_slot: EquipmentSlot | None,
+    ) -> None:
+        """Update one inventory instance from the local DM workspace."""
+        if durability is not None and durability < 0:
+            raise ValueError("Durability cannot be negative.")
+        with self._connect() as connection:
+            item = connection.execute(
+                """
+                SELECT 1 FROM character_items
+                WHERE character_id = ? AND instance_id = ?
+                """,
+                (character_id, instance_id),
+            ).fetchone()
+            if item is None:
+                raise ValueError("That item is not in this inventory.")
+
+            connection.execute(
+                """
+                DELETE FROM character_equipment
+                WHERE character_id = ? AND item_instance_id = ?
+                """,
+                (character_id, instance_id),
+            )
+            if quantity <= 0:
+                connection.execute(
+                    """
+                    DELETE FROM character_items
+                    WHERE character_id = ? AND instance_id = ?
+                    """,
+                    (character_id, instance_id),
+                )
+                return
+
+            connection.execute(
+                """
+                UPDATE character_items
+                SET quantity = ?, durability = ?, parent_container_id = NULL
+                WHERE character_id = ? AND instance_id = ?
+                """,
+                (quantity, durability, character_id, instance_id),
+            )
+            if equipped_slot is not None:
+                connection.execute(
+                    """
+                    DELETE FROM character_equipment
+                    WHERE character_id = ? AND slot = ?
+                    """,
+                    (character_id, equipped_slot.value),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO character_equipment (
+                        character_id, slot, item_instance_id
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (character_id, equipped_slot.value, instance_id),
+                )
 
     def set_character_portrait(
         self, discord_user_id: int, character_id: int, portrait_key: str | None
@@ -3631,7 +4115,11 @@ class Database:
         trap_damage_type = None
         with self._connect() as connection:
             character = connection.execute(
-                "SELECT current_room_id, hp FROM characters WHERE id = ? AND is_archived = 0",
+                """
+                SELECT current_room_id, hp, max_hp
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
                 (character_id,),
             ).fetchone()
             if character is None:
@@ -3685,17 +4173,18 @@ class Database:
             ):
                 configured_damage = max(0, int(locked["trap_damage"] or 0))
                 trap_triggered = True
-                trap_damage = min(int(character["hp"]), configured_damage)
                 trap_damage_type = (
                     TrapDamageType(locked["trap_damage_type"])
                     if locked["trap_damage_type"]
                     else None
                 )
                 if configured_damage:
-                    connection.execute(
-                        "UPDATE characters SET hp = MAX(0, hp - ?) WHERE id = ?",
-                        (configured_damage, character_id),
+                    new_hp, _, _ = self._apply_character_damage(
+                        connection,
+                        character_id,
+                        configured_damage,
                     )
+                    trap_damage = int(character["hp"]) - new_hp
                 connection.execute(
                     "UPDATE room_connections SET trap_state = ? WHERE id = ?",
                     (TrapState.TRIGGERED.value, locked["id"]),
@@ -4156,6 +4645,385 @@ class Database:
                 "UPDATE game_state SET lock_state = ? WHERE id = 1", (state.value,)
             )
         return state
+
+    def list_enemy_templates(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, description, race, difficulty_level,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                       damage, attack_profile, special_ability, typical_behaviour,
+                       main_hand_item_id, off_hand_item_id, armor_item_id
+                FROM enemy_templates
+                ORDER BY name COLLATE NOCASE, id
+                """
+            ).fetchall()
+        return tuple(self._enemy_template_from_row(row) for row in rows)
+
+    def get_enemy_template(self, template_id: str):
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, name, description, race, difficulty_level,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                       damage, attack_profile, special_ability, typical_behaviour,
+                       main_hand_item_id, off_hand_item_id, armor_item_id
+                FROM enemy_templates
+                WHERE id = ?
+                """,
+                (template_id,),
+            ).fetchone()
+        return self._enemy_template_from_row(row) if row is not None else None
+
+    def create_enemy_template(self, template):
+        clean_id = self._clean_identifier(
+            template.template_id, "Enemy template ID"
+        )
+        clean_name = self._clean_name(
+            template.name, "Enemy template name"
+        )
+        with self._connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO enemy_templates (
+                        id, name, description, race, difficulty_level,
+                        strength, dexterity, arcana, vitality, insight, personality,
+                        max_hp, armor, magical_resistance, attack_dc, defense_dc,
+                        damage, attack_profile, special_ability, typical_behaviour,
+                        main_hand_item_id, off_hand_item_id, armor_item_id
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        clean_id,
+                        clean_name,
+                        template.description,
+                        template.race,
+                        template.difficulty_level,
+                        template.strength,
+                        template.dexterity,
+                        template.arcana,
+                        template.vitality,
+                        template.insight,
+                        template.personality,
+                        template.max_hp,
+                        template.armor,
+                        template.magical_resistance,
+                        template.attack_dc,
+                        template.defense_dc,
+                        template.damage,
+                        template.attack_profile,
+                        template.special_ability,
+                        template.typical_behaviour,
+                        template.main_hand_item_id,
+                        template.off_hand_item_id,
+                        template.armor_item_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Enemy template '{clean_id}' already exists."
+                ) from error
+
+        created = self.get_enemy_template(clean_id)
+        assert created is not None
+        return created
+
+    def update_enemy_template(self, template_id: str, template):
+        clean_id = self._clean_identifier(
+            template_id, "Enemy template ID"
+        )
+        clean_name = self._clean_name(
+            template.name, "Enemy template name"
+        )
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE enemy_templates
+                SET name = ?, description = ?, race = ?, difficulty_level = ?,
+                    strength = ?, dexterity = ?, arcana = ?, vitality = ?,
+                    insight = ?, personality = ?, max_hp = ?, armor = ?,
+                    magical_resistance = ?, attack_dc = ?, defense_dc = ?,
+                    damage = ?, attack_profile = ?, special_ability = ?,
+                    typical_behaviour = ?, main_hand_item_id = ?,
+                    off_hand_item_id = ?, armor_item_id = ?
+                WHERE id = ?
+                """,
+                (
+                    clean_name,
+                    template.description,
+                    template.race,
+                    template.difficulty_level,
+                    template.strength,
+                    template.dexterity,
+                    template.arcana,
+                    template.vitality,
+                    template.insight,
+                    template.personality,
+                    template.max_hp,
+                    template.armor,
+                    template.magical_resistance,
+                    template.attack_dc,
+                    template.defense_dc,
+                    template.damage,
+                    template.attack_profile,
+                    template.special_ability,
+                    template.typical_behaviour,
+                    template.main_hand_item_id,
+                    template.off_hand_item_id,
+                    template.armor_item_id,
+                    clean_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Enemy template '{clean_id}' does not exist."
+                )
+
+            connection.execute(
+                """
+                UPDATE world_enemies
+                SET current_hp = MIN(current_hp, ?)
+                WHERE template_id = ?
+                """,
+                (template.max_hp, clean_id),
+            )
+
+        updated = self.get_enemy_template(clean_id)
+        assert updated is not None
+        return updated
+
+    def remove_enemy_template(self, template_id: str) -> None:
+        clean_id = self._clean_identifier(
+            template_id, "Enemy template ID"
+        )
+        with self._connect() as connection:
+            try:
+                cursor = connection.execute(
+                    "DELETE FROM enemy_templates WHERE id = ?",
+                    (clean_id,),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    "Enemy templates cannot be removed while placed "
+                    "enemies use them."
+                ) from error
+
+            if cursor.rowcount == 0:
+                raise NotFoundError(
+                    f"Enemy template '{clean_id}' does not exist."
+                )
+
+    def create_enemy_instance(
+        self,
+        room_id: str,
+        template_id: str,
+        *,
+        instance_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+    ):
+        template = self.get_enemy_template(template_id)
+        if template is None:
+            raise NotFoundError(
+                f"Enemy template '{template_id}' does not exist."
+            )
+
+        clean_id = self._clean_identifier(
+            instance_id or f"{template.template_id}_{uuid4().hex[:12]}",
+            "Enemy ID",
+        )
+        clean_name = self._clean_name(
+            name or template.name, "Enemy name"
+        )
+        resolved_description = (
+            template.description if description is None else description
+        )
+
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO world_entities (
+                        id, room_id, kind, name, description
+                    ) VALUES (?, ?, 'enemy', ?, ?)
+                    """,
+                    (
+                        clean_id,
+                        room_id,
+                        clean_name,
+                        resolved_description,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO world_enemies (
+                        entity_id, template_id, current_hp, status
+                    ) VALUES (?, ?, ?, 'active')
+                    """,
+                    (
+                        clean_id,
+                        template.template_id,
+                        template.max_hp,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Enemy '{clean_id}' already exists."
+                ) from error
+
+        created = self.get_enemy_instance(clean_id)
+        assert created is not None
+        return created
+
+    def get_enemy_instance(self, enemy_id: str):
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT entity.id, entity.room_id, enemy.template_id,
+                       entity.name, entity.description,
+                       enemy.current_hp, enemy.status
+                FROM world_entities AS entity
+                JOIN world_enemies AS enemy
+                  ON enemy.entity_id = entity.id
+                WHERE entity.id = ? AND entity.kind = 'enemy'
+                """,
+                (enemy_id,),
+            ).fetchone()
+
+        return (
+            self._enemy_instance_from_row(row)
+            if row is not None
+            else None
+        )
+
+    def list_room_enemy_instances(self, room_id: str):
+        with self._connect() as connection:
+            self._require_room(connection, room_id)
+            rows = connection.execute(
+                """
+                SELECT entity.id, entity.room_id, enemy.template_id,
+                       entity.name, entity.description,
+                       enemy.current_hp, enemy.status
+                FROM world_entities AS entity
+                JOIN world_enemies AS enemy
+                  ON enemy.entity_id = entity.id
+                WHERE entity.room_id = ? AND entity.kind = 'enemy'
+                ORDER BY entity.name COLLATE NOCASE, entity.id
+                """,
+                (room_id,),
+            ).fetchall()
+
+        return tuple(
+            self._enemy_instance_from_row(row)
+            for row in rows
+        )
+
+    def update_enemy_instance(self, enemy):
+        template = self.get_enemy_template(enemy.template_id)
+        if template is None:
+            raise NotFoundError(
+                f"Enemy template '{enemy.template_id}' does not exist."
+            )
+
+        if enemy.current_hp < 0 or enemy.current_hp > template.max_hp:
+            raise ValueError(
+                f"Enemy HP must be between 0 and {template.max_hp}."
+            )
+
+        clean_name = self._clean_name(enemy.name, "Enemy name")
+
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT 1 FROM world_entities
+                WHERE id = ? AND kind = 'enemy'
+                """,
+                (enemy.id,),
+            ).fetchone()
+
+            if existing is None:
+                raise NotFoundError(
+                    f"Enemy '{enemy.id}' does not exist."
+                )
+
+            connection.execute(
+                """
+                UPDATE world_entities
+                SET name = ?, description = ?
+                WHERE id = ?
+                """,
+                (
+                    clean_name,
+                    enemy.description,
+                    enemy.id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE world_enemies
+                SET current_hp = ?, status = ?
+                WHERE entity_id = ?
+                """,
+                (
+                    enemy.current_hp,
+                    enemy.status.value,
+                    enemy.id,
+                ),
+            )
+
+        updated = self.get_enemy_instance(enemy.id)
+        assert updated is not None
+        return updated
+
+    @staticmethod
+    def _enemy_template_from_row(row):
+        from .enemies import EnemyTemplate
+
+        return EnemyTemplate(
+            template_id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            race=row["race"],
+            difficulty_level=row["difficulty_level"],
+            strength=row["strength"],
+            dexterity=row["dexterity"],
+            arcana=row["arcana"],
+            vitality=row["vitality"],
+            insight=row["insight"],
+            personality=row["personality"],
+            max_hp=row["max_hp"],
+            armor=row["armor"],
+            magical_resistance=row["magical_resistance"],
+            attack_dc=row["attack_dc"],
+            defense_dc=row["defense_dc"],
+            damage=row["damage"],
+            attack_profile=row["attack_profile"],
+            special_ability=row["special_ability"],
+            typical_behaviour=row["typical_behaviour"],
+            main_hand_item_id=row["main_hand_item_id"],
+            off_hand_item_id=row["off_hand_item_id"],
+            armor_item_id=row["armor_item_id"],
+        )
+
+    @staticmethod
+    def _enemy_instance_from_row(row):
+        from .enemies import EnemyInstance, EnemyStatus
+
+        return EnemyInstance(
+            id=row["id"],
+            room_id=row["room_id"],
+            template_id=row["template_id"],
+            name=row["name"],
+            current_hp=row["current_hp"],
+            status=EnemyStatus(row["status"]),
+            description=row["description"],
+        )
 
     def create_world_entity(
         self,
@@ -4651,29 +5519,337 @@ class Database:
             )
         return normalized_color
 
+    @staticmethod
+    def _ensure_character_combat_state_row(
+        connection: sqlite3.Connection,
+        character_id: int,
+    ) -> sqlite3.Row:
+        character = connection.execute(
+            """
+            SELECT id, hp, max_hp FROM characters
+            WHERE id = ? AND is_archived = 0
+            """,
+            (character_id,),
+        ).fetchone()
+        if character is None:
+            raise CharacterNotFoundError(
+                f"Character {character_id} does not exist."
+            )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO character_combat_states (
+                character_id, status, failed_death_saves
+            ) VALUES (
+                ?,
+                CASE
+                    WHEN ? <= -? THEN 'dead'
+                    WHEN ? <= 0 THEN 'downed'
+                    ELSE 'active'
+                END,
+                0
+            )
+            """,
+            (
+                character_id,
+                character["hp"],
+                character["max_hp"],
+                character["hp"],
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT character_id, status, failed_death_saves
+            FROM character_combat_states
+            WHERE character_id = ?
+            """,
+            (character_id,),
+        ).fetchone()
+        assert row is not None
+        return row
+
+    @staticmethod
+    def _combat_state_from_row(row: sqlite3.Row) -> CharacterCombatState:
+        return CharacterCombatState(
+            character_id=int(row["character_id"]),
+            status=CharacterCombatStatus(row["status"]),
+            failed_death_saves=int(row["failed_death_saves"]),
+        )
+
+    def get_character_combat_state(
+        self,
+        character_id: int,
+    ) -> CharacterCombatState:
+        with self._connect() as connection:
+            row = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            return self._combat_state_from_row(row)
+
+    @classmethod
+    def _apply_character_damage(
+        cls,
+        connection: sqlite3.Connection,
+        character_id: int,
+        amount: int,
+    ) -> tuple[int, int, CharacterCombatStatus]:
+        character = connection.execute(
+            """
+            SELECT hp, max_hp FROM characters
+            WHERE id = ? AND is_archived = 0
+            """,
+            (character_id,),
+        ).fetchone()
+        if character is None:
+            raise CharacterNotFoundError(
+                f"Character {character_id} does not exist."
+            )
+        state = cls._ensure_character_combat_state_row(
+            connection,
+            character_id,
+        )
+        old_hp = int(character["hp"])
+        max_hp = int(character["max_hp"])
+        new_hp = max(-max_hp, old_hp - amount)
+
+        if new_hp <= -max_hp:
+            new_status = CharacterCombatStatus.DEAD
+        elif new_hp <= 0:
+            new_status = CharacterCombatStatus.DOWNED
+        elif state["status"] == CharacterCombatStatus.RECOVERING.value:
+            new_status = CharacterCombatStatus.RECOVERING
+        else:
+            new_status = CharacterCombatStatus.ACTIVE
+
+        failed_death_saves = int(state["failed_death_saves"])
+        if old_hp > 0 and new_hp <= 0:
+            failed_death_saves = 0
+
+        connection.execute(
+            "UPDATE characters SET hp = ? WHERE id = ?",
+            (new_hp, character_id),
+        )
+        connection.execute(
+            """
+            UPDATE character_combat_states
+            SET status = ?, failed_death_saves = ?
+            WHERE character_id = ?
+            """,
+            (
+                new_status.value,
+                failed_death_saves,
+                character_id,
+            ),
+        )
+        return new_hp, max_hp, new_status
+
     def damage(self, discord_user_id: int, amount: int) -> Character:
         if amount <= 0:
             raise InvalidHitPointsError("Damage must be greater than 0.")
-        return self._update_hp(discord_user_id, "MAX(0, hp - ?)", amount)
+        character = self._require_character(discord_user_id)
+        assert character.character_id is not None
+        return self.damage_character_by_id(character.character_id, amount)
+
+    def damage_character_by_id(
+        self,
+        character_id: int,
+        amount: int,
+    ) -> Character:
+        if amount <= 0:
+            raise InvalidHitPointsError("Damage must be greater than 0.")
+        with self._connect() as connection:
+            self._apply_character_damage(
+                connection,
+                character_id,
+                amount,
+            )
+            row = connection.execute(
+                """
+                SELECT id, discord_user_id, name, hp, max_hp, stance,
+                       lineage, race, age, gender,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       is_active, is_archived, portrait_key, current_room_id
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            assert row is not None
+            return self._to_character_with_skills(connection, row)
 
     def heal(self, discord_user_id: int, amount: int) -> Character:
         if amount <= 0:
             raise InvalidHitPointsError("Healing must be greater than 0.")
-        return self._update_hp(discord_user_id, "MIN(max_hp, hp + ?)", amount)
+        character = self._require_character(discord_user_id)
+        assert character.character_id is not None
+        return self.heal_character_by_id(character.character_id, amount)
+
+    def heal_character_by_id(
+        self,
+        character_id: int,
+        amount: int,
+    ) -> Character:
+        if amount <= 0:
+            raise InvalidHitPointsError("Healing must be greater than 0.")
+        with self._connect() as connection:
+            character = connection.execute(
+                """
+                SELECT hp, max_hp FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            if character is None:
+                raise CharacterNotFoundError(
+                    f"Character {character_id} does not exist."
+                )
+            state = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            if state["status"] == CharacterCombatStatus.DEAD.value:
+                raise InvalidHitPointsError(
+                    "Dead characters cannot be restored by normal healing."
+                )
+
+            old_hp = int(character["hp"])
+            max_hp = int(character["max_hp"])
+            new_hp = min(max_hp, old_hp + amount)
+            if old_hp <= 0 < new_hp:
+                new_status = CharacterCombatStatus.RECOVERING
+                failed_death_saves = 0
+            else:
+                new_status = CharacterCombatStatus(state["status"])
+                failed_death_saves = int(state["failed_death_saves"])
+
+            connection.execute(
+                "UPDATE characters SET hp = ? WHERE id = ?",
+                (new_hp, character_id),
+            )
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = ?
+                WHERE character_id = ?
+                """,
+                (
+                    new_status.value,
+                    failed_death_saves,
+                    character_id,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT id, discord_user_id, name, hp, max_hp, stance,
+                       lineage, race, age, gender,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       is_active, is_archived, portrait_key, current_room_id
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            assert row is not None
+            return self._to_character_with_skills(connection, row)
+
+    def record_death_save(
+        self,
+        character_id: int,
+        *,
+        success: bool,
+    ) -> CharacterCombatState:
+        with self._connect() as connection:
+            state = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            if state["status"] != CharacterCombatStatus.DOWNED.value:
+                raise InvalidHitPointsError(
+                    "Only a downed character can make a death save."
+                )
+            if success:
+                status = CharacterCombatStatus.STABLE
+                failures = 0
+            else:
+                failures = min(3, int(state["failed_death_saves"]) + 1)
+                status = (
+                    CharacterCombatStatus.DEAD
+                    if failures >= 3
+                    else CharacterCombatStatus.DOWNED
+                )
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = ?
+                WHERE character_id = ?
+                """,
+                (status.value, failures, character_id),
+            )
+            return CharacterCombatState(
+                character_id,
+                status,
+                failures,
+            )
+
+    def finish_short_rest(
+        self,
+        character_id: int,
+    ) -> CharacterCombatState:
+        with self._connect() as connection:
+            state = self._ensure_character_combat_state_row(
+                connection,
+                character_id,
+            )
+            status = CharacterCombatStatus(state["status"])
+            if status is CharacterCombatStatus.RECOVERING:
+                status = CharacterCombatStatus.ACTIVE
+                connection.execute(
+                    """
+                    UPDATE character_combat_states
+                    SET status = 'active'
+                    WHERE character_id = ?
+                    """,
+                    (character_id,),
+                )
+            return CharacterCombatState(
+                character_id,
+                status,
+                int(state["failed_death_saves"]),
+            )
 
     def set_hp(self, discord_user_id: int, hp: int) -> Character:
         character = self._require_character(discord_user_id)
-        if not 0 <= hp <= character.max_hp:
+        if not -character.max_hp <= hp <= character.max_hp:
             raise InvalidHitPointsError(
-                f"HP must be between 0 and {character.max_hp} for {character.name}."
+                f"HP must be between {-character.max_hp} and "
+                f"{character.max_hp} for {character.name}."
             )
+        assert character.character_id is not None
         with self._connect() as connection:
+            self._ensure_character_combat_state_row(
+                connection,
+                character.character_id,
+            )
+            if hp <= -character.max_hp:
+                status = CharacterCombatStatus.DEAD
+            elif hp <= 0:
+                status = CharacterCombatStatus.DOWNED
+            else:
+                status = CharacterCombatStatus.ACTIVE
             connection.execute(
                 """
                 UPDATE characters SET hp = ?
                 WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
                 """,
                 (hp, discord_user_id),
+            )
+            connection.execute(
+                """
+                UPDATE character_combat_states
+                SET status = ?, failed_death_saves = 0
+                WHERE character_id = ?
+                """,
+                (status.value, character.character_id),
             )
         return self._require_character(discord_user_id)
 
@@ -4687,19 +5863,6 @@ class Database:
                 """,
                 (stance.value, discord_user_id),
             )
-        return self._require_character(discord_user_id)
-
-    def _update_hp(self, discord_user_id: int, sql_expression: str, amount: int) -> Character:
-        with self._connect() as connection:
-            cursor = connection.execute(
-                f"""
-                UPDATE characters SET hp = {sql_expression}
-                WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
-                """,
-                (amount, discord_user_id),
-            )
-            if cursor.rowcount == 0:
-                raise CharacterNotFoundError("That Discord user does not have a character.")
         return self._require_character(discord_user_id)
 
     def _require_character(self, discord_user_id: int) -> Character:

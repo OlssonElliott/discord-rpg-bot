@@ -16,7 +16,8 @@ from rpg_bot.dice_visuals import (
     DEFAULT_DICE_NUMBER_COLOR,
     InvalidDiceColorError,
 )
-from rpg_bot.models import Stance
+from rpg_bot.inventory import EquipmentSlot
+from rpg_bot.models import CharacterCombatStatus, Stance
 
 
 class DatabaseTests(unittest.TestCase):
@@ -92,15 +93,130 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("trap_damage_type", columns)
         self.assertIn("trap_damage", columns)
 
-    def test_hp_is_clamped_for_damage_and_healing(self) -> None:
-        self.database.create_character(123, "Olof", 22)
-        self.assertEqual(self.database.damage(123, 50).hp, 0)
-        self.assertEqual(self.database.heal(123, 50).hp, 22)
+    def test_damage_is_clamped_at_negative_max_hp_and_marks_character_dead(self) -> None:
+        character = self.database.create_character(123, "Olof", 22)
+        assert character.character_id is not None
+
+        damaged = self.database.damage(123, 50)
+        state = self.database.get_character_combat_state(
+            character.character_id
+        )
+
+        self.assertEqual(damaged.hp, -22)
+        self.assertEqual(state.status, CharacterCombatStatus.DEAD)
+        with self.assertRaisesRegex(
+            InvalidHitPointsError,
+            "cannot be restored",
+        ):
+            self.database.heal(123, 50)
 
     def test_stance_and_manual_hp_can_be_updated(self) -> None:
         self.database.create_character(123, "Olof", 22)
         self.assertEqual(self.database.set_hp(123, 7).hp, 7)
         self.assertEqual(self.database.set_stance(123, Stance.PRONE).stance, Stance.PRONE)
+
+    def test_dm_admin_can_update_complete_character_state(self) -> None:
+        self.database.create_area("keep", "Keep")
+        self.database.create_room("hall", "keep", "Hall")
+        character = self.database.create_character(
+            123,
+            "Olof",
+            12,
+            attributes={"Strength": 11, "Vitality": 13},
+            skills={"Perception": 1},
+        )
+        assert character.character_id is not None
+
+        updated = self.database.update_character_admin(
+            character.character_id,
+            name="Olof the Scarred",
+            hp=-3,
+            max_hp=14,
+            stance=Stance.PRONE,
+            lineage="Northman",
+            race="Human",
+            age="33",
+            gender="Male",
+            attributes={
+                "Strength": 15,
+                "Dexterity": 9,
+                "Arcana": 8,
+                "Vitality": 14,
+                "Insight": 12,
+                "Personality": 10,
+            },
+            skills={"Perception": 2, "Survival": 1},
+            status=CharacterCombatStatus.DOWNED,
+            failed_death_saves=1,
+            current_room_id="hall",
+            copper=7,
+            silver=4,
+            gold=2,
+        )
+
+        state = self.database.get_character_combat_state(
+            character.character_id
+        )
+        inventory = self.database.get_character_inventory(
+            character.character_id
+        )
+        self.assertEqual(updated.name, "Olof the Scarred")
+        self.assertEqual((updated.hp, updated.max_hp), (-3, 14))
+        self.assertEqual(updated.stance, Stance.PRONE)
+        self.assertEqual(updated.current_room_id, "hall")
+        self.assertEqual(updated.attributes["Strength"], 15)
+        self.assertEqual(updated.skills, {"Perception": 2, "Survival": 1})
+        self.assertEqual(state.status, CharacterCombatStatus.DOWNED)
+        self.assertEqual(state.failed_death_saves, 1)
+        self.assertEqual(
+            (inventory.copper, inventory.silver, inventory.gold),
+            (7, 4, 2),
+        )
+
+    def test_dm_admin_can_update_inventory_item_and_equipment(self) -> None:
+        character = self.database.create_character(123, "Olof", 12)
+        assert character.character_id is not None
+        instance_id = self.database.add_inventory_item(
+            character.character_id,
+            "test_blade",
+            quantity=1,
+            durability=6,
+        )
+
+        self.database.set_character_inventory_item_admin(
+            character.character_id,
+            instance_id,
+            quantity=2,
+            durability=4,
+            equipped_slot=EquipmentSlot.MAIN_HAND,
+        )
+
+        inventory = self.database.get_character_inventory(
+            character.character_id
+        )
+        item = next(
+            item for item in inventory.items if item.instance_id == instance_id
+        )
+        self.assertEqual((item.quantity, item.durability), (2, 4))
+        self.assertEqual(
+            inventory.equipment[EquipmentSlot.MAIN_HAND],
+            instance_id,
+        )
+
+        self.database.set_character_inventory_item_admin(
+            character.character_id,
+            instance_id,
+            quantity=0,
+            durability=4,
+            equipped_slot=None,
+        )
+        inventory = self.database.get_character_inventory(
+            character.character_id
+        )
+        self.assertFalse(
+            any(item.instance_id == instance_id for item in inventory.items)
+        )
+        self.assertNotIn(EquipmentSlot.MAIN_HAND, inventory.equipment)
 
     def test_published_character_sheet_message_persists_per_channel(self) -> None:
         character = self.database.create_character(123, "Olof", 22)
@@ -359,6 +475,44 @@ class DatabaseTests(unittest.TestCase):
             migrated.get_dice_number_color(42), DEFAULT_DICE_NUMBER_COLOR
         )
         self.assertIsNone(migrated.get_dm_portrait(42))
+
+    def test_existing_modern_character_table_migrates_to_negative_hp(self) -> None:
+        old_path = Path(self.temp_directory.name) / "old-hp-check.db"
+        with closing(sqlite3.connect(old_path)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE characters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    discord_user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    hp INTEGER NOT NULL CHECK (hp >= 0 AND hp <= max_hp),
+                    max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+                    stance TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    is_archived INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO characters (
+                    discord_user_id, name, hp, max_hp, stance
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (42, "Legacy", 8, 10, "steady"),
+            )
+            connection.commit()
+
+        migrated = Database(old_path)
+        migrated.initialize()
+
+        damaged = migrated.damage(42, 15)
+        assert damaged.character_id is not None
+        state = migrated.get_character_combat_state(
+            damaged.character_id
+        )
+        self.assertEqual(damaged.hp, -7)
+        self.assertEqual(state.status, CharacterCombatStatus.DOWNED)
 
     def test_existing_character_table_gains_creation_columns(self) -> None:
         old_path = Path(self.temp_directory.name) / "old-characters.db"

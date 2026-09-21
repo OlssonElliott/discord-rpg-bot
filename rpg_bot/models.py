@@ -14,6 +14,21 @@ class Stance(str, Enum):
         return self.value.replace("_", " ").title()
 
 
+class CharacterCombatStatus(str, Enum):
+    ACTIVE = "active"
+    DOWNED = "downed"
+    STABLE = "stable"
+    RECOVERING = "recovering"
+    DEAD = "dead"
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterCombatState:
+    character_id: int
+    status: CharacterCombatStatus
+    failed_death_saves: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class Character:
     discord_user_id: int

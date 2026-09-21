@@ -16,3 +16,4 @@ class BotSetupTests(unittest.IsolatedAsyncioTestCase):
         await RPGBot.setup_hook(bot)
 
         bot.load_extension.assert_any_await("rpg_bot.commands.give")
+        bot.load_extension.assert_any_await("rpg_bot.commands.combat")
