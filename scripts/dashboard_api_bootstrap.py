@@ -15,7 +15,7 @@ if not SITE_PACKAGES.is_dir():
 sys.path.insert(0, str(SITE_PACKAGES))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from rpg_bot.dashboard_server import main
+from rpg_bot.dashboard.server import main
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from rpg_bot.__main__ import RPGBot
+from rpg_bot.app.bot import RPGBot
 
 
 class BotSetupTests(unittest.IsolatedAsyncioTestCase):

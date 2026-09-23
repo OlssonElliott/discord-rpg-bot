@@ -2,11 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rpg_bot.containers import ContainerType
+from rpg_bot.world.containers import ContainerType
 from rpg_bot.database import Database
-from rpg_bot.dungeon import ConnectionType
+from rpg_bot.world.dungeon import ConnectionType
 from rpg_bot.world import EntityKind, InventoryHolder
-from rpg_bot.world_service import WorldService
+from rpg_bot.world.service import WorldService
 
 
 class ContainerSystemTests(unittest.TestCase):
@@ -218,7 +218,7 @@ class ContainerSystemTests(unittest.TestCase):
 
 
     def test_dashboard_container_flow_places_edits_and_lists_contents(self) -> None:
-        from rpg_bot.dashboard_api import DashboardAPI
+        from rpg_bot.dashboard.api import DashboardAPI
 
         api = DashboardAPI(self.world)
         status, created = api.handle(

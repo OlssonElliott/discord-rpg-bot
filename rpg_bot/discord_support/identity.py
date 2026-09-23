@@ -4,8 +4,8 @@ from pathlib import Path
 
 import discord
 
-from ..models import Character
-from ..portraits import CharacterPortraitStore, DEFAULT_DM_PORTRAIT_KEY
+from ..characters.models import Character
+from ..media.portraits import CharacterPortraitStore, DEFAULT_DM_PORTRAIT_KEY
 
 
 def apply_character_identity(

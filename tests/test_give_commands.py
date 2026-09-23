@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 from rpg_bot.commands.give import GiveCommands, GiveOffer, GiveSetupView, RoomRecipient
 from rpg_bot.database import Database
-from rpg_bot.inventory_service import InventoryError
-from rpg_bot.world_service import WorldService
+from rpg_bot.inventory.service import InventoryError
+from rpg_bot.world.service import WorldService
 
 
 class GiveCommandTests(unittest.TestCase):

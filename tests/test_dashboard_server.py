@@ -12,12 +12,12 @@ from unittest.mock import Mock, patch
 
 from PIL import Image
 
-from rpg_bot.dashboard_api import DashboardAPI
-from rpg_bot.dashboard_server import DashboardRequestHandler, main
+from rpg_bot.dashboard.api import DashboardAPI
+from rpg_bot.dashboard.server import DashboardRequestHandler, main
 from rpg_bot.database import Database
 from rpg_bot.inventory import ItemCatalog
-from rpg_bot.room_images import RoomImageStore
-from rpg_bot.world_service import WorldService
+from rpg_bot.media.room_images import RoomImageStore
+from rpg_bot.world.service import WorldService
 
 
 class QuietDashboardRequestHandler(DashboardRequestHandler):
@@ -39,17 +39,17 @@ class DashboardServerConfigurationTests(unittest.TestCase):
             patch.dict(os.environ, {}, clear=True),
             patch.object(sys, "argv", ["dashboard_server"]),
             patch(
-                "rpg_bot.dashboard_server.load_dotenv",
+                "rpg_bot.dashboard.server.load_dotenv",
                 side_effect=populate_environment,
             ) as load_environment,
-            patch("rpg_bot.dashboard_server.Database") as database_type,
-            patch("rpg_bot.dashboard_server.WorldService") as world_service_type,
+            patch("rpg_bot.dashboard.server.Database") as database_type,
+            patch("rpg_bot.dashboard.server.WorldService") as world_service_type,
             patch(
-                "rpg_bot.dashboard_server.CharacterPortraitStore"
+                "rpg_bot.dashboard.server.CharacterPortraitStore"
             ) as portrait_store_type,
-            patch("rpg_bot.dashboard_server.DashboardAPI") as dashboard_api_type,
+            patch("rpg_bot.dashboard.server.DashboardAPI") as dashboard_api_type,
             patch(
-                "rpg_bot.dashboard_server.ThreadingHTTPServer",
+                "rpg_bot.dashboard.server.ThreadingHTTPServer",
                 return_value=server,
             ),
         ):

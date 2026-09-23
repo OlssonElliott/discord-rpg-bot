@@ -1,0 +1,1 @@
+"""Shared world persistence mixins."""

@@ -6,11 +6,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from ..checks import dm_only
+from ..app.checks import dm_only
 from ..combat import CombatScene
-from ..combat_service import CombatError, CombatService
+from ..combat.service import CombatError, CombatService
 from ..database import Database
-from ..world_service import WorldService
+from ..world.service import WorldService
 
 
 COMBAT_CHANNEL_NAME = "combat"

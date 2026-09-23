@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from rpg_bot.dice_visuals import (
+from rpg_bot.dice.visuals import (
     D20AnimationRenderer,
     InvalidDiceColorError,
     normalize_dice_color,
@@ -357,7 +357,7 @@ class DiceVisualTests(unittest.TestCase):
             self.create_master(classic)
             renderer = D20AnimationRenderer(assets, theme="cartoon")
 
-            with self.assertLogs("rpg_bot.dice_visuals", level="WARNING"):
+            with self.assertLogs("rpg_bot.dice.visuals", level="WARNING"):
                 resolved = renderer.resolve_master(17)
 
             self.assertEqual(resolved.path, classic)
@@ -388,7 +388,7 @@ class DiceVisualTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             renderer = D20AnimationRenderer(Path(directory) / "d20", theme="cartoon")
 
-            with self.assertLogs("rpg_bot.dice_visuals", level="WARNING"):
+            with self.assertLogs("rpg_bot.dice.visuals", level="WARNING"):
                 self.assertIsNone(renderer.render(17, "#7A2EFF"))
             self.assertFalse(renderer.cache_directory.exists())
 

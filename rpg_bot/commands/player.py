@@ -7,11 +7,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..checks import is_dm
+from ..app.checks import is_dm
 from ..database import Database
 from ..dice import DiceExpressionError, roll
-from ..dice_audio import DiceSoundManager
-from ..dice_visuals import (
+from ..dice.audio import DiceSoundManager
+from ..dice.visuals import (
     D20AnimationRenderer,
     InvalidDiceColorError,
     MAX_VISUAL_DICE_COUNT,
@@ -21,8 +21,8 @@ from ..discord_support.identity import (
     apply_character_identity,
     portrait_attachment_name,
 )
-from ..models import Character
-from ..portraits import CharacterPortraitStore
+from ..characters.models import Character
+from ..media.portraits import CharacterPortraitStore
 
 
 LOGGER = logging.getLogger(__name__)

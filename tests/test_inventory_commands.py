@@ -23,9 +23,9 @@ from rpg_bot.inventory import (
     ItemTemplate,
     ItemType,
 )
-from rpg_bot.inventory_service import InventoryService
+from rpg_bot.inventory.service import InventoryService
 from rpg_bot.world import InventoryHolder
-from rpg_bot.world_service import WorldService
+from rpg_bot.world.service import WorldService
 
 
 def interaction_for(user_id: int) -> SimpleNamespace:

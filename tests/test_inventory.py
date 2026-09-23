@@ -11,7 +11,7 @@ from rpg_bot.inventory import (
     ItemTemplate,
     ItemType,
 )
-from rpg_bot.inventory_service import InventoryError, InventoryService
+from rpg_bot.inventory.service import InventoryError, InventoryService
 
 
 class InventoryTests(unittest.TestCase):

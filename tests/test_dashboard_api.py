@@ -5,13 +5,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from rpg_bot.dashboard_api import DashboardAPI
+from rpg_bot.dashboard.api import DashboardAPI
 from rpg_bot.database import Database
 from rpg_bot.inventory import ItemCatalog
-from rpg_bot.portraits import CharacterPortraitStore
-from rpg_bot.room_images import RoomImageStore
+from rpg_bot.media.portraits import CharacterPortraitStore
+from rpg_bot.media.room_images import RoomImageStore
 from rpg_bot.world import InventoryHolder
-from rpg_bot.world_service import WorldService
+from rpg_bot.world.service import WorldService
 
 
 class DashboardAPITests(unittest.TestCase):

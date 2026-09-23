@@ -4,8 +4,8 @@ import logging
 
 import discord
 
-from ..models import Character
-from ..portraits import CharacterPortraitStore
+from ..characters.models import Character
+from ..media.portraits import CharacterPortraitStore
 from .identity import apply_character_identity, portrait_attachment_name
 
 

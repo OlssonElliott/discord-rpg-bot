@@ -10,9 +10,9 @@ from rpg_bot.commands.inventory import (
 )
 from rpg_bot.commands.world import WorldCommands
 from rpg_bot.database import Database
-from rpg_bot.dungeon import ConnectionType, TrapDamageType, TrapState
+from rpg_bot.world.dungeon import ConnectionType, TrapDamageType, TrapState
 from rpg_bot.inventory import EquipmentSlot
-from rpg_bot.portraits import CharacterPortraitStore
+from rpg_bot.media.portraits import CharacterPortraitStore
 from rpg_bot.world import InventoryHolder
 
 
@@ -672,7 +672,7 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             is_closed=MagicMock(side_effect=(False, True)),
         )
 
-        with patch("rpg_bot.commands.world.asyncio.sleep", new=AsyncMock()):
+        with patch("rpg_bot.commands.world.cog.asyncio.sleep", new=AsyncMock()):
             await self.cog._process_map_refresh_requests()
 
         self.cog.map_messages.refresh.assert_awaited_once_with(self.character_id)
@@ -831,7 +831,7 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
             destination.id,
         )
 
-    @patch("rpg_bot.commands.world.random.randint")
+    @patch("rpg_bot.commands.world.cog.random.randint")
     async def test_movement_announces_trap_damage_and_refreshes_sheet(
         self, mocked_roll: MagicMock
     ) -> None:
@@ -877,7 +877,7 @@ class WorldCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refreshed_character.hp, 11)
         mocked_roll.assert_not_called()
 
-    @patch("rpg_bot.commands.world.random.randint", return_value=20)
+    @patch("rpg_bot.commands.world.cog.random.randint", return_value=20)
     async def test_search_traps_records_detected_trap(
         self, _mocked_roll: MagicMock
     ) -> None:

@@ -11,10 +11,10 @@ from rpg_bot.commands.player import (
     setup,
 )
 from rpg_bot.dice import DiceRoll
-from rpg_bot.dice_assets import DiceAsset
-from rpg_bot.dice_visuals import InvalidDiceColorError, RenderedDiceAnimation
-from rpg_bot.models import Character, Stance
-from rpg_bot.portraits import CharacterPortraitStore
+from rpg_bot.dice.assets import DiceAsset
+from rpg_bot.dice.visuals import InvalidDiceColorError, RenderedDiceAnimation
+from rpg_bot.characters.models import Character, Stance
+from rpg_bot.media.portraits import CharacterPortraitStore
 
 
 class FakeMember:
@@ -78,7 +78,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         cog = bot.add_cog.await_args.args[0]
         self.assertEqual(cog.animation_renderer.theme, "cartoon")
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     async def test_player_without_character_cannot_roll(self) -> None:
         database = Mock()
         database.get_character.return_value = None
@@ -92,7 +92,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             ephemeral=True,
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("2d6+3", 2, 6, 3, (2, 5)))
     async def test_dm_without_character_gets_generic_roll_embed(self, _: Mock) -> None:
         database = Mock()
@@ -122,7 +122,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d100", 1, 100, 0, (42,)))
     async def test_dm_without_character_roll_uses_custom_dm_portrait(self, _: Mock) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -145,7 +145,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "attachment://character_portrait.webp",
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("2d6+3", 2, 6, 3, (2, 5)))
     async def test_dm_with_character_keeps_character_roll_embed(self, _: Mock) -> None:
         database = Mock()
@@ -168,7 +168,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             [("HP", "8/12"), ("Stance", "Prone")],
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d100", 1, 100, 0, (42,)))
     async def test_portrait_is_attached_to_instant_character_roll(self, _: Mock) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -199,7 +199,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(call.kwargs["embed"].author.name, "Olof")
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d100", 1, 100, 0, (42,)))
     async def test_default_race_portrait_is_attached_to_roll(self, _: Mock) -> None:
         database = Mock()
@@ -317,7 +317,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([choice.value for choice in choices], ["#7A2EFF"])
         self.assertIn("Royal Purple", choices[0].name)
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d20+4", 1, 20, 4, (17,)))
     async def test_single_d20_animation_is_replaced_by_result_embed(
@@ -373,7 +373,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "d20_17_result.png",
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("1d6+2", 1, 6, 2, (4,)))
     async def test_single_supported_non_d20_uses_visual_animation(
@@ -425,7 +425,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "d6_4_result.png",
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
     @patch("rpg_bot.commands.player.roll", return_value=DiceRoll("3d6+2", 3, 6, 2, (2, 5, 1)))
     async def test_multiple_dice_use_a_group_animation_and_result_strip(
@@ -507,7 +507,7 @@ class PlayerCommandTests(unittest.IsolatedAsyncioTestCase):
             "d6_2-5-1_results.png",
         )
 
-    @patch("rpg_bot.checks.discord.Member", FakeMember)
+    @patch("rpg_bot.app.checks.discord.Member", FakeMember)
     @patch("rpg_bot.commands.player.asyncio.sleep", new_callable=AsyncMock)
     @patch(
         "rpg_bot.commands.player.roll",
