@@ -3,14 +3,14 @@ import unittest
 from pathlib import Path
 
 from rpg_bot.database import Database
-from rpg_bot.dungeon import ConnectionType, TrapDamageType, TrapState
+from rpg_bot.world.dungeon import ConnectionType, TrapDamageType, TrapState
 from rpg_bot.world import (
     EntityKind,
     InvalidMovementError,
     InvalidTransferError,
     InventoryHolder,
 )
-from rpg_bot.world_service import WorldService
+from rpg_bot.world.service import WorldService
 
 
 class WorldServiceTests(unittest.TestCase):

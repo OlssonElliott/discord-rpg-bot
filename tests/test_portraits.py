@@ -5,7 +5,7 @@ import unittest
 
 from PIL import Image
 
-from rpg_bot.portraits import (
+from rpg_bot.media.portraits import (
     CharacterPortraitStore,
     InvalidPortraitError,
     default_portrait_key,

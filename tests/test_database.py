@@ -10,14 +10,14 @@ from rpg_bot.database import (
     Database,
     InvalidHitPointsError,
 )
-from rpg_bot.dice_visuals import (
+from rpg_bot.dice.visuals import (
     DEFAULT_DICE_COLOR,
     DEFAULT_DICE_EDGE_COLOR,
     DEFAULT_DICE_NUMBER_COLOR,
     InvalidDiceColorError,
 )
 from rpg_bot.inventory import EquipmentSlot
-from rpg_bot.models import CharacterCombatStatus, Stance
+from rpg_bot.characters.models import CharacterCombatStatus, Stance
 
 
 class DatabaseTests(unittest.TestCase):

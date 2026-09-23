@@ -1,8 +1,8 @@
 """Application boundary between completed creation flows and persistence."""
 
 from ..database import Database
-from ..models import Character
-from ..portraits import default_portrait_key
+from ..characters.models import Character
+from ..media.portraits import default_portrait_key
 from .models import CharacterCreationResult
 
 

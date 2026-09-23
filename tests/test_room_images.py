@@ -5,9 +5,9 @@ import unittest
 
 from PIL import Image, ImageChops, ImageDraw
 
-from rpg_bot.dungeon import FocusedRoomView, KnowledgeState
-from rpg_bot.room_images import InvalidRoomImageError, RoomImageStore
-from rpg_bot.room_scene_renderer import (
+from rpg_bot.world.dungeon import FocusedRoomView, KnowledgeState
+from rpg_bot.media.room_images import InvalidRoomImageError, RoomImageStore
+from rpg_bot.media.room_scene import (
     INFO_BOUNDS,
     PANEL_SIZE,
     ROOM_PANEL_PATH,

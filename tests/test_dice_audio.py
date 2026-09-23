@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 import wave
 
-from rpg_bot.dice_audio import BYTES_PER_FRAME, DiceSoundManager, WaveSequenceAudioSource
+from rpg_bot.dice.audio import BYTES_PER_FRAME, DiceSoundManager, WaveSequenceAudioSource
 
 
 def create_wave(path: Path, sample: int) -> None:

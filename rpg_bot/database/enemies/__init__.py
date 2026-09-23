@@ -1,0 +1,1 @@
+"""Enemy persistence mixins."""

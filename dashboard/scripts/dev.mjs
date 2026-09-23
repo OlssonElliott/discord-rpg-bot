@@ -116,7 +116,7 @@ const uiAlreadyRunning = await isPortOpen(3000);
 const bot = start(python, ["-m", "rpg_bot"], projectDir);
 const api = apiAlreadyRunning
   ? null
-  : start(python, ["-m", "rpg_bot.dashboard_server", "--database", database], projectDir);
+  : start(python, ["-m", "rpg_bot.dashboard.server", "--database", database], projectDir);
 const ui = uiAlreadyRunning
   ? null
   : start(vinext, ["dev"], dashboardDir, process.platform === "win32");

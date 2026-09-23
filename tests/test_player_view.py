@@ -9,8 +9,8 @@ from unittest.mock import Mock
 from PIL import Image
 
 from rpg_bot.database import Database
-from rpg_bot.discord_player_view import DiscordPlayerViewAdapter
-from rpg_bot.dungeon import (
+from rpg_bot.player_view.adapter import DiscordPlayerViewAdapter
+from rpg_bot.world.dungeon import (
     ConnectionType,
     Floor,
     GameLock,
@@ -22,8 +22,8 @@ from rpg_bot.dungeon import (
     TrapDamageType,
     TrapState,
 )
-from rpg_bot.player_view_service import PlayerViewMessageService, PlayerViewService
-from rpg_bot.room_images import RoomImageStore
+from rpg_bot.player_view.service import PlayerViewMessageService, PlayerViewService
+from rpg_bot.media.room_images import RoomImageStore
 from rpg_bot.map_renderer import (
     CONNECTION_ART_HEIGHT,
     CONNECTION_ROOM_GAP,
@@ -67,7 +67,7 @@ from rpg_bot.map_renderer import (
     render_player_map,
 )
 from rpg_bot.world import InvalidMovementError, InventoryHolder
-from rpg_bot.world_service import WorldService
+from rpg_bot.world.service import WorldService
 
 
 class PlayerViewServiceTests(unittest.TestCase):

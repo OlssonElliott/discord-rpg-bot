@@ -10,7 +10,7 @@
     "dev:ui": "vinext dev",
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
-    "lint": "oxlint app",
+    "lint": "oxlint app features lib",
     "format": "oxfmt"
   },
   "dependencies": {

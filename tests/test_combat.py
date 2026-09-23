@@ -8,13 +8,13 @@ from rpg_bot.combat import (
     LandmarkDistance,
     LandmarkRelation,
 )
-from rpg_bot.combat_service import CombatError, CombatService
+from rpg_bot.combat.service import CombatError, CombatService
 from rpg_bot.database import Database
-from rpg_bot.dungeon import ConnectionType
+from rpg_bot.world.dungeon import ConnectionType
 from rpg_bot.inventory import EquipmentSlot
-from rpg_bot.models import CharacterCombatStatus
+from rpg_bot.characters.models import CharacterCombatStatus
 from rpg_bot.world import EntityKind
-from rpg_bot.world_service import WorldService
+from rpg_bot.world.service import WorldService
 
 
 class CombatServiceTests(unittest.TestCase):
@@ -318,7 +318,7 @@ class CombatServiceTests(unittest.TestCase):
 
     def test_initiative_uses_insight_and_tracks_dynamic_turn_order(self) -> None:
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[15, 9, 20],
         ):
             scene = self.service.start(44, self.hall.id)
@@ -579,7 +579,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[15, 4],
         ):
             scene, result = self.service.attack_enemy(
@@ -692,7 +692,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             return_value=20,
         ):
             scene, result = self.service.attack_enemy(
@@ -773,7 +773,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             return_value=9,
         ):
             scene, result = self.service.attack_character(
@@ -831,7 +831,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[5, 4],
         ):
             scene, result = self.service.attack_character(
@@ -875,7 +875,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[1, 4],
         ):
             scene, result = self.service.attack_character(
@@ -920,7 +920,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[1, 4],
         ):
             scene, result = self.service.attack_character(
@@ -960,7 +960,7 @@ class CombatServiceTests(unittest.TestCase):
         self.database.set_hp(7, -4)
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             return_value=12,
         ):
             scene, result = self.service.roll_death_save(
@@ -1000,7 +1000,7 @@ class CombatServiceTests(unittest.TestCase):
         self.database.set_hp(7, -2)
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             return_value=12,
         ):
             advanced = self.service.next_turn(44)
@@ -1030,7 +1030,7 @@ class CombatServiceTests(unittest.TestCase):
                 str(self.olof.character_id),
             )
             with patch(
-                "rpg_bot.combat_service.random.randint",
+                "rpg_bot.combat.service.random.randint",
                 return_value=1,
             ):
                 last_scene, result = self.service.roll_death_save(
@@ -1092,7 +1092,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[18, 15, 4],
         ):
             _, result = self.service.attack_enemy(
@@ -1120,7 +1120,7 @@ class CombatServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "rpg_bot.combat_service.random.randint",
+            "rpg_bot.combat.service.random.randint",
             side_effect=[18, 1, 4],
         ):
             _, result = self.service.attack_character(

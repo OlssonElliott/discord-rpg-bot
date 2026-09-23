@@ -38,10 +38,10 @@ from rpg_bot.commands.character import (
     creation_view,
     setup,
 )
-from rpg_bot.models import Character, CharacterSheetViewState, Stance
-from rpg_bot.dungeon import PlayerViewState
+from rpg_bot.characters.models import Character, CharacterSheetViewState, Stance
+from rpg_bot.world.dungeon import PlayerViewState
 from rpg_bot.inventory import InventoryState
-from rpg_bot.portraits import CharacterPortraitStore
+from rpg_bot.media.portraits import CharacterPortraitStore
 
 
 def interaction_for(user_id: int) -> SimpleNamespace:
@@ -571,7 +571,7 @@ class CharacterCommandTests(unittest.IsolatedAsyncioTestCase):
                 interaction.response.send_message.await_args.args[0],
             )
 
-    @patch("rpg_bot.commands.character.is_dm", return_value=True)
+    @patch("rpg_bot.commands.character.cog.is_dm", return_value=True)
     async def test_dm_without_active_character_can_upload_and_remove_portrait(
         self, _: Mock
     ) -> None:

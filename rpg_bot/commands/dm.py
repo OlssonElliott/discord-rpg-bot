@@ -4,13 +4,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..checks import dm_only
+from ..app.checks import dm_only
 from ..database import (
     CharacterNotFoundError,
     Database,
     InvalidHitPointsError,
 )
-from ..models import Character, Stance
+from ..characters.models import Character, Stance
 
 
 def result_embed(title: str, character: Character) -> discord.Embed:

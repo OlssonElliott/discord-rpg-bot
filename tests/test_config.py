@@ -2,9 +2,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from rpg_bot.config import Config
-from rpg_bot.dice_assets import InvalidDiceThemeError
-from rpg_bot.__main__ import REQUIRED_BOT_PERMISSIONS
+from rpg_bot.app.config import Config
+from rpg_bot.dice.assets import InvalidDiceThemeError
+from rpg_bot.app.bot import REQUIRED_BOT_PERMISSIONS
 
 
 class ConfigTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertTrue(getattr(REQUIRED_BOT_PERMISSIONS, permission))
 
     def test_dice_theme_defaults_to_classic_and_normalizes(self) -> None:
-        with patch("rpg_bot.config.load_dotenv"), patch.dict(
+        with patch("rpg_bot.app.config.load_dotenv"), patch.dict(
             os.environ, {"DISCORD_TOKEN": "token"}, clear=True
         ):
             self.assertEqual(Config.from_env().dice_theme, "classic")
@@ -31,7 +31,7 @@ class ConfigTests(unittest.TestCase):
                 Config.from_env().character_media_path, "data/characters"
             )
 
-        with patch("rpg_bot.config.load_dotenv"), patch.dict(
+        with patch("rpg_bot.app.config.load_dotenv"), patch.dict(
             os.environ,
             {"DISCORD_TOKEN": "token", "DICE_THEME": " Cartoon "},
             clear=True,
@@ -39,7 +39,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(Config.from_env().dice_theme, "cartoon")
 
     def test_invalid_dice_theme_is_rejected(self) -> None:
-        with patch("rpg_bot.config.load_dotenv"), patch.dict(
+        with patch("rpg_bot.app.config.load_dotenv"), patch.dict(
             os.environ,
             {"DISCORD_TOKEN": "token", "DICE_THEME": "../cartoon"},
             clear=True,
@@ -48,7 +48,7 @@ class ConfigTests(unittest.TestCase):
                 Config.from_env()
 
     def test_character_media_path_can_be_configured(self) -> None:
-        with patch("rpg_bot.config.load_dotenv"), patch.dict(
+        with patch("rpg_bot.app.config.load_dotenv"), patch.dict(
             os.environ,
             {"DISCORD_TOKEN": "token", "CHARACTER_MEDIA_PATH": "var/portraits"},
             clear=True,
