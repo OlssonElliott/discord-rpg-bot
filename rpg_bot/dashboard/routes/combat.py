@@ -71,12 +71,28 @@ def handle_combat_request(
 
     match = re.fullmatch(r"/api/combat/landmarks/([^/]+)", path)
     if match and method == "PATCH":
-        scene = api.combat.set_landmark_position(
-            _combat_guild_id(api),
-            match.group(1),
-            parse_number(body, "x"),
-            parse_number(body, "y"),
-        )
+        guild_id = _combat_guild_id(api)
+        landmark_id = match.group(1)
+        scene = None
+        if "x" in body or "y" in body:
+            if "x" not in body or "y" not in body:
+                raise ValueError("Both 'x' and 'y' are required to move a landmark.")
+            scene = api.combat.set_landmark_position(
+                guild_id,
+                landmark_id,
+                parse_number(body, "x"),
+                parse_number(body, "y"),
+            )
+        if "supports_behind" in body:
+            scene = api.combat.set_landmark_supports_behind(
+                guild_id,
+                landmark_id,
+                parse_boolean(body, "supports_behind", default=False),
+            )
+        if scene is None:
+            raise ValueError(
+                "Landmark PATCH requires position or supports_behind."
+            )
         return 200, _combat_state_data(scene, api.world)
     if match and method == "DELETE":
         scene = api.combat.remove_landmark(
