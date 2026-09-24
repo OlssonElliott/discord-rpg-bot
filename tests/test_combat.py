@@ -86,6 +86,7 @@ class CombatServiceTests(unittest.TestCase):
         center = scene.landmark("room:center")
         assert center is not None
         self.assertTrue(center.synthetic)
+        self.assertFalse(center.supports_behind)
         self.assertEqual((center.x, center.y), (0.5, 0.5))
         expected_corners = {
             "room:corner:nw": (0.12, 0.18),
@@ -97,6 +98,7 @@ class CombatServiceTests(unittest.TestCase):
             corner = scene.landmark(landmark_id)
             assert corner is not None
             self.assertTrue(corner.synthetic)
+            self.assertFalse(corner.supports_behind)
             self.assertEqual(corner.feature_type, "corner")
             self.assertEqual((corner.x, corner.y), expected_position)
         self.assertEqual(
@@ -107,6 +109,12 @@ class CombatServiceTests(unittest.TestCase):
             },
         )
         self.assertNotIn("Sven", {item.name for item in scene.combatants})
+        pillar = scene.landmark("feature:stone_pillar")
+        table = scene.landmark("feature:oak_table")
+        assert pillar is not None
+        assert table is not None
+        self.assertTrue(pillar.supports_behind)
+        self.assertTrue(table.supports_behind)
         self.assertEqual(len(scene.routes), 4)
         for corner_id in expected_corners:
             self.assertTrue(
@@ -119,6 +127,53 @@ class CombatServiceTests(unittest.TestCase):
                     and route.distance is LandmarkDistance.CLOSE
                     for route in scene.routes
                 )
+            )
+
+    def test_behind_requires_landmark_support_and_disabling_it_resets_relation(self) -> None:
+        self.service.start(44, self.hall.id)
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "does not support a behind position",
+        ):
+            self.service.move_combatant(
+                44,
+                CombatantKind.CHARACTER,
+                str(self.olof.character_id),
+                "room:center",
+                LandmarkRelation.BEHIND,
+            )
+
+        self.service.move_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            "feature:stone_pillar",
+            LandmarkRelation.BEHIND,
+        )
+        scene = self.service.set_landmark_supports_behind(
+            44,
+            "feature:stone_pillar",
+            False,
+        )
+        pillar = scene.landmark("feature:stone_pillar")
+        assert pillar is not None
+        self.assertFalse(pillar.supports_behind)
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(olof.relation, LandmarkRelation.AT)
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "Synthetic room anchors",
+        ):
+            self.service.set_landmark_supports_behind(
+                44,
+                "room:corner:nw",
+                True,
             )
 
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
