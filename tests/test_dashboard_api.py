@@ -192,6 +192,18 @@ class DashboardAPITests(unittest.TestCase):
                 "feature:table",
             },
         )
+        center = next(
+            landmark
+            for landmark in scene["landmarks"]
+            if landmark["id"] == "room:center"
+        )
+        pillar = next(
+            landmark
+            for landmark in scene["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertFalse(center["supports_behind"])
+        self.assertTrue(pillar["supports_behind"])
         self.assertEqual(
             [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
             [("enemy", "Bandit")],
@@ -222,6 +234,39 @@ class DashboardAPITests(unittest.TestCase):
             if landmark["id"] == "feature:pillar"
         )
         self.assertEqual((pillar["x"], pillar["y"]), (0.25, 0.35))
+
+        status, no_behind = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"supports_behind": False},
+        )
+        self.assertEqual(status, 200)
+        pillar = next(
+            landmark
+            for landmark in no_behind["scene"]["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertFalse(pillar["supports_behind"])
+
+        invalid_move_status, _ = self.api.handle(
+            "PATCH",
+            "/api/combat/combatants/enemy/bandit",
+            {"landmark_id": "feature:pillar", "relation": "behind"},
+        )
+        self.assertEqual(invalid_move_status, 400)
+
+        status, with_behind = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"supports_behind": True},
+        )
+        self.assertEqual(status, 200)
+        pillar = next(
+            landmark
+            for landmark in with_behind["scene"]["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertTrue(pillar["supports_behind"])
 
         status, routed = self.api.handle(
             "PUT",
