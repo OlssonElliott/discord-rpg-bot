@@ -125,6 +125,32 @@ class CombatLandmarkMixin:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
+    def set_landmark_supports_behind(
+        self,
+        guild_id: int,
+        landmark_id: str,
+        supports_behind: bool,
+    ) -> CombatScene:
+        if not isinstance(supports_behind, bool):
+            raise CombatError("supports_behind must be a boolean.")
+        scene = self._require_current(guild_id)
+        landmark = scene.landmark(landmark_id)
+        if landmark is None:
+            raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
+        if landmark.synthetic and supports_behind:
+            raise CombatError(
+                "Synthetic room anchors cannot support behind positions."
+            )
+        try:
+            self.repository.set_landmark_supports_behind(
+                scene.id,
+                landmark_id,
+                supports_behind,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
     def connect_landmarks(
         self,
         guild_id: int,
