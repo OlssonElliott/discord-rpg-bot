@@ -162,6 +162,7 @@ export type CombatLandmarkData = {
   source_connection_id: string | null;
   feature_type: string | null;
   synthetic: boolean;
+  supports_behind: boolean;
   x: number | null;
   y: number | null;
 };
