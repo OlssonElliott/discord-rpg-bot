@@ -38,6 +38,17 @@ class CombatMovementMixin:
                 if item.kind is parsed_kind and item.source_id == source_id
             )
             landmark = scene.landmark(landmark_id)
+            if landmark is None:
+                raise CombatError(
+                    f"Unknown combat landmark '{landmark_id}'."
+                )
+            if (
+                parsed_relation is LandmarkRelation.BEHIND
+                and not landmark.supports_behind
+            ):
+                raise CombatError(
+                    f"{landmark.name} does not support a behind position."
+                )
             self.repository.set_combatant_position(
                 scene.id,
                 parsed_kind,
@@ -110,6 +121,13 @@ class CombatMovementMixin:
             if destination is None:
                 raise CombatError(
                     f"Unknown combat landmark '{landmark_id}'."
+                )
+            if (
+                parsed_relation is LandmarkRelation.BEHIND
+                and not destination.supports_behind
+            ):
+                raise CombatError(
+                    f"{destination.name} does not support a behind position."
                 )
 
             if (
