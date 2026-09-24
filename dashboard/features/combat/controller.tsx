@@ -54,6 +54,14 @@ export function CombatWorkspaceController({
         },
         'Landmark position saved',
       )}
+      onSetLandmarkSupportsBehind={(landmarkId, supportsBehind) => updateCombat(
+        `/combat/landmarks/${landmarkId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ supports_behind: supportsBehind }),
+        },
+        supportsBehind ? 'Behind position enabled' : 'Behind position disabled',
+      )}
       onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
         `/combat/movement/${combatant.kind}/${combatant.source_id}`,
         {
