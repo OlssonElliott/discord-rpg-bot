@@ -22,10 +22,7 @@ class CombatantKind(str, Enum):
 
 class LandmarkRelation(str, Enum):
     AT = "at"
-    BESIDE = "beside"
     BEHIND = "behind"
-    ON = "on"
-    INSIDE = "inside"
 
 
 @dataclass(frozen=True, slots=True)

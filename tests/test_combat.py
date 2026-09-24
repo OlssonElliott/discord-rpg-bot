@@ -73,12 +73,32 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(scene.room_id, self.hall.id)
         self.assertEqual(
             {landmark.id for landmark in scene.landmarks},
-            {"room:center", "feature:stone_pillar", "feature:oak_table"},
+            {
+                "room:center",
+                "room:corner:nw",
+                "room:corner:ne",
+                "room:corner:sw",
+                "room:corner:se",
+                "feature:stone_pillar",
+                "feature:oak_table",
+            },
         )
         center = scene.landmark("room:center")
         assert center is not None
         self.assertTrue(center.synthetic)
         self.assertEqual((center.x, center.y), (0.5, 0.5))
+        expected_corners = {
+            "room:corner:nw": (0.12, 0.18),
+            "room:corner:ne": (0.80, 0.18),
+            "room:corner:sw": (0.12, 0.82),
+            "room:corner:se": (0.80, 0.82),
+        }
+        for landmark_id, expected_position in expected_corners.items():
+            corner = scene.landmark(landmark_id)
+            assert corner is not None
+            self.assertTrue(corner.synthetic)
+            self.assertEqual(corner.feature_type, "corner")
+            self.assertEqual((corner.x, corner.y), expected_position)
         self.assertEqual(
             {(combatant.kind, combatant.name) for combatant in scene.combatants},
             {
@@ -87,6 +107,19 @@ class CombatServiceTests(unittest.TestCase):
             },
         )
         self.assertNotIn("Sven", {item.name for item in scene.combatants})
+        self.assertEqual(len(scene.routes), 4)
+        for corner_id in expected_corners:
+            self.assertTrue(
+                any(
+                    {
+                        route.source_landmark_id,
+                        route.destination_landmark_id,
+                    }
+                    == {"room:center", corner_id}
+                    and route.distance is LandmarkDistance.CLOSE
+                    for route in scene.routes
+                )
+            )
 
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
@@ -120,15 +153,23 @@ class CombatServiceTests(unittest.TestCase):
                 abs(feature.x - door.x) < 0.20
                 and abs(feature.y - door.y) < 0.14
             )
-        self.assertEqual(len(scene.routes), 1)
+        self.assertEqual(len(scene.routes), 5)
+        door_route = next(
+            route
+            for route in scene.routes
+            if door.id in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+        )
         self.assertEqual(
             {
-                scene.routes[0].source_landmark_id,
-                scene.routes[0].destination_landmark_id,
+                door_route.source_landmark_id,
+                door_route.destination_landmark_id,
             },
             {"room:center", door.id},
         )
-        self.assertEqual(scene.routes[0].distance, LandmarkDistance.CLOSE)
+        self.assertEqual(door_route.distance, LandmarkDistance.CLOSE)
 
         self.service.end(44)
         reverse_scene = self.service.start(44, self.other.id)
@@ -140,7 +181,7 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(reverse_door.name, "Door: west gate")
         self.assertEqual(reverse_door.source_connection_id, connection.id)
         self.assertEqual((reverse_door.x, reverse_door.y), (0.08, 0.5))
-        self.assertEqual(len(reverse_scene.routes), 1)
+        self.assertEqual(len(reverse_scene.routes), 5)
 
     def test_cardinal_doors_start_on_matching_edges(self) -> None:
         exits = {
@@ -170,7 +211,7 @@ class CombatServiceTests(unittest.TestCase):
         }
 
         self.assertEqual(len(doors), 4)
-        self.assertEqual(len(scene.routes), 4)
+        self.assertEqual(len(scene.routes), 8)
         for exit_name, (_, expected_position) in exits.items():
             door = doors[exit_name]
             self.assertEqual((door.x, door.y), expected_position)
@@ -235,14 +276,14 @@ class CombatServiceTests(unittest.TestCase):
             custom.id,
             LandmarkDistance.CLOSE,
         )
-        self.assertEqual(len(scene.routes), 1)
+        self.assertEqual(len(scene.routes), 5)
 
         scene = self.service.disconnect_landmarks(
             44,
             "room:center",
             custom.id,
         )
-        self.assertEqual(scene.routes, ())
+        self.assertEqual(len(scene.routes), 4)
 
         scene = self.service.remove_landmark(44, custom.id)
         self.assertIsNone(scene.landmark(custom.id))
@@ -304,9 +345,24 @@ class CombatServiceTests(unittest.TestCase):
         pillar = reopened.landmark("feature:stone_pillar")
         assert pillar is not None
         self.assertEqual((pillar.x, pillar.y), (0.25, 0.35))
-        self.assertEqual(len(reopened.routes), 1)
-        self.assertEqual(reopened.routes[0].distance, LandmarkDistance.CLOSE)
-        self.assertEqual(reopened.routes[0].obstacle, "Fallen rubble")
+        self.assertEqual(len(reopened.routes), 5)
+        pillar_route = next(
+            route
+            for route in reopened.routes
+            if {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+            == {
+                "room:center",
+                "feature:stone_pillar",
+            }
+        )
+        self.assertEqual(
+            pillar_route.distance,
+            LandmarkDistance.CLOSE,
+        )
+        self.assertEqual(pillar_route.obstacle, "Fallen rubble")
         olof = next(
             item
             for item in reopened.combatants

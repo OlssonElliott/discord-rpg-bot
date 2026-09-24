@@ -19,6 +19,14 @@ from ..world.dungeon import ConnectionType
 from ..world.enemies import EnemyStatus
 
 
+ROOM_CORNER_SPECS = (
+    ("room:corner:nw", "Northwest Corner", 0.12, 0.18),
+    ("room:corner:ne", "Northeast Corner", 0.80, 0.18),
+    ("room:corner:sw", "Southwest Corner", 0.12, 0.82),
+    ("room:corner:se", "Southeast Corner", 0.80, 0.82),
+)
+
+
 class CombatLifecycleMixin:
     """Start, access, and end combat scenes."""
 
@@ -40,6 +48,18 @@ class CombatLifecycleMixin:
                 y=0.5,
             )
         ]
+        landmarks.extend(
+            CombatLandmark(
+                id=landmark_id,
+                name=name,
+                description="A tactical position near the corner of the room.",
+                feature_type="corner",
+                synthetic=True,
+                x=x,
+                y=y,
+            )
+            for landmark_id, name, x, y in ROOM_CORNER_SPECS
+        )
         landmarks.extend(
             CombatLandmark(
                 id=f"feature:{feature.id}",
@@ -187,6 +207,13 @@ class CombatLifecycleMixin:
                 tuple(landmarks),
                 tuple(combatants),
             )
+            for landmark_id, _, _, _ in ROOM_CORNER_SPECS:
+                self.repository.set_route(
+                    scene.id,
+                    self.CENTER_LANDMARK_ID,
+                    landmark_id,
+                    LandmarkDistance.CLOSE,
+                )
             for landmark_id in door_landmark_ids:
                 self.repository.set_route(
                     scene.id,

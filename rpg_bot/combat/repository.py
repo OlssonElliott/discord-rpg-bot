@@ -90,7 +90,7 @@ class CombatRepository:
                 name TEXT NOT NULL,
                 landmark_id TEXT NOT NULL,
                 relation TEXT NOT NULL CHECK (
-                    relation IN ('at', 'beside', 'behind', 'on', 'inside')
+                    relation IN ('at', 'behind')
                 ),
                 initiative_roll INTEGER NOT NULL DEFAULT 0,
                 initiative_score INTEGER NOT NULL DEFAULT 0,
@@ -197,6 +197,14 @@ class CombatRepository:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN standard_action_spent INTEGER NOT NULL DEFAULT 0"
             )
+
+        # Older combat scenes may still contain relations that are no longer
+        # part of the combat model. Treat those positions as simply being at
+        # their landmark.
+        connection.execute(
+            "UPDATE combatants SET relation = 'at' "
+            "WHERE relation NOT IN ('at', 'behind')"
+        )
 
     def start_scene(
         self,

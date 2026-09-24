@@ -669,10 +669,7 @@ function CombatantEditor({
         onChange={(event) => setRelation(event.target.value as Relation)}
       >
         <NativeSelectOption value="at">At</NativeSelectOption>
-        <NativeSelectOption value="beside">Beside</NativeSelectOption>
         <NativeSelectOption value="behind">Behind</NativeSelectOption>
-        <NativeSelectOption value="on">On</NativeSelectOption>
-        <NativeSelectOption value="inside">Inside</NativeSelectOption>
       </NativeSelect>
       <Button
         size="sm"

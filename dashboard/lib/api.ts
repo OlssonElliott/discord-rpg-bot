@@ -180,7 +180,7 @@ export type CombatantData = {
   source_id: string;
   name: string;
   landmark_id: string;
-  relation: 'at' | 'beside' | 'behind' | 'on' | 'inside';
+  relation: 'at' | 'behind';
   initiative_roll: number;
   initiative_score: number;
   acted_this_round: boolean;

@@ -182,7 +182,15 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(scene["room_name"], "Guard Hall")
         self.assertEqual(
             {landmark["id"] for landmark in scene["landmarks"]},
-            {"room:center", "feature:pillar", "feature:table"},
+            {
+                "room:center",
+                "room:corner:nw",
+                "room:corner:ne",
+                "room:corner:sw",
+                "room:corner:se",
+                "feature:pillar",
+                "feature:table",
+            },
         )
         self.assertEqual(
             [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
@@ -227,7 +235,19 @@ class DashboardAPITests(unittest.TestCase):
             },
         )
         self.assertEqual(status, 200)
-        self.assertEqual(routed["scene"]["routes"][0]["obstacle"], "Fallen rubble")
+        feature_route = next(
+            route
+            for route in routed["scene"]["routes"]
+            if {
+                route["source_landmark_id"],
+                route["destination_landmark_id"],
+            }
+            == {
+                "feature:pillar",
+                "feature:table",
+            }
+        )
+        self.assertEqual(feature_route["obstacle"], "Fallen rubble")
 
         delete_route_status, disconnected = self.api.handle(
             "DELETE",
@@ -238,7 +258,24 @@ class DashboardAPITests(unittest.TestCase):
             },
         )
         self.assertEqual(delete_route_status, 200)
-        self.assertEqual(disconnected["scene"]["routes"], [])
+        self.assertEqual(len(disconnected["scene"]["routes"]), 4)
+        self.assertEqual(
+            {
+                frozenset(
+                    (
+                        route["source_landmark_id"],
+                        route["destination_landmark_id"],
+                    )
+                )
+                for route in disconnected["scene"]["routes"]
+            },
+            {
+                frozenset(("room:center", "room:corner:nw")),
+                frozenset(("room:center", "room:corner:ne")),
+                frozenset(("room:center", "room:corner:sw")),
+                frozenset(("room:center", "room:corner:se")),
+            },
+        )
 
         add_landmark_status, with_landmark = self.api.handle(
             "POST",
