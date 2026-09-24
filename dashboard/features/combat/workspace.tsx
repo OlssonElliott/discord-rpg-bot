@@ -66,6 +66,10 @@ type CombatWorkspaceProps = {
   onEnd: () => Promise<boolean>;
   onRefresh: () => Promise<void>;
   onPositionLandmark: (landmarkId: string, x: number, y: number) => Promise<boolean>;
+  onSetLandmarkSupportsBehind: (
+    landmarkId: string,
+    supportsBehind: boolean,
+  ) => Promise<boolean>;
   onMoveCombatant: (
     combatant: CombatantData,
     landmarkId: string,
@@ -534,6 +538,9 @@ function CombatantEditor({
   );
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
+  const movementLandmark = scene.landmarks.find(
+    (landmark) => landmark.id === landmarkId,
+  ) ?? null;
   const targetKind = combatant.kind === 'character' ? 'enemy' : 'character';
   const incapacitated = (
     combatant.kind === 'character'
@@ -564,6 +571,12 @@ function CombatantEditor({
     combatant.relation,
     combatant.route_destination_landmark_id,
   ]);
+
+  useEffect(() => {
+    if (relation === 'behind' && !movementLandmark?.supports_behind) {
+      setRelation('at');
+    }
+  }, [movementLandmark?.supports_behind, relation]);
 
   useEffect(() => {
     const validTarget = scene.combatants.some(
@@ -669,7 +682,9 @@ function CombatantEditor({
         onChange={(event) => setRelation(event.target.value as Relation)}
       >
         <NativeSelectOption value="at">At</NativeSelectOption>
-        <NativeSelectOption value="behind">Behind</NativeSelectOption>
+        {movementLandmark?.supports_behind && (
+          <NativeSelectOption value="behind">Behind</NativeSelectOption>
+        )}
       </NativeSelect>
       <Button
         size="sm"
@@ -795,6 +810,7 @@ export function CombatWorkspace({
   onEnd,
   onRefresh,
   onPositionLandmark,
+  onSetLandmarkSupportsBehind,
   onMoveCombatant,
   onAddEnemy,
   onRemoveEnemy,
@@ -1281,6 +1297,23 @@ export function CombatWorkspace({
               )}
               {selectedLandmark.source_feature_id && (
                 <p className="combat-selection-meta">Snapshot of a room feature.</p>
+              )}
+              <label className="combat-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selectedLandmark.supports_behind}
+                  disabled={busy || selectedLandmark.synthetic}
+                  onChange={(event) => void onSetLandmarkSupportsBehind(
+                    selectedLandmark.id,
+                    event.target.checked,
+                  )}
+                />
+                Supports a Behind position
+              </label>
+              {selectedLandmark.synthetic && (
+                <p className="combat-selection-meta">
+                  Room anchors are movement positions and cannot provide Behind.
+                </p>
               )}
               {selectedLandmark.feature_type === 'custom' && (
                 <Button
