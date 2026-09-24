@@ -36,6 +36,7 @@ class CombatLandmark:
     synthetic: bool = False
     x: float | None = None
     y: float | None = None
+    supports_behind: bool = False
 
 
 @dataclass(frozen=True, slots=True)
