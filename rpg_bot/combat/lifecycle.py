@@ -67,6 +67,7 @@ class CombatLifecycleMixin:
                 description=feature.description,
                 source_feature_id=feature.id,
                 feature_type=feature.feature_type.value,
+                supports_behind=True,
             )
             for feature in self.world.list_room_features(room_id)
         )
