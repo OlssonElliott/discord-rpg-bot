@@ -210,6 +210,46 @@ class CombatServiceTests(unittest.TestCase):
             )
         )
 
+    def test_auto_connect_fills_missing_connection_slots(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        self.service.set_landmark_auto_connect(
+            44,
+            "feature:stone_pillar",
+            False,
+        )
+        self.service.connect_landmarks(
+            44,
+            "feature:stone_pillar",
+            "room:center",
+            LandmarkDistance.CLOSE,
+        )
+        self.service.connect_landmarks(
+            44,
+            "feature:stone_pillar",
+            "room:corner:nw",
+            LandmarkDistance.CLOSE,
+        )
+
+        scene = self.service.set_landmark_auto_connect(
+            44,
+            "feature:stone_pillar",
+            True,
+        )
+        pillar_routes = [
+            route
+            for route in scene.routes
+            if "feature:stone_pillar" in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+        ]
+
+        self.assertEqual(len(pillar_routes), 3)
+        self.assertEqual(
+            sum(route.automatic for route in pillar_routes),
+            1,
+        )
+
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
             self.hall.id,
