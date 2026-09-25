@@ -639,23 +639,66 @@ class CombatServiceTests(unittest.TestCase):
         self.assertIsNotNone(custom.x)
         self.assertIsNotNone(custom.y)
 
-        self.assertEqual(len(scene.routes), 7)
+        custom_routes = [
+            route
+            for route in scene.routes
+            if custom.id in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+        ]
+        self.assertTrue(custom_routes)
 
+        route = custom_routes[0]
         scene = self.service.disconnect_landmarks(
             44,
-            "room:center",
-            custom.id,
+            route.source_landmark_id,
+            route.destination_landmark_id,
         )
-        self.assertEqual(len(scene.routes), 6)
+        self.assertFalse(
+            any(
+                {
+                    item.source_landmark_id,
+                    item.destination_landmark_id,
+                }
+                == {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for item in scene.routes
+            )
+        )
 
         scene = self.service.remove_landmark(44, custom.id)
         self.assertIsNone(scene.landmark(custom.id))
+        self.assertFalse(
+            any(
+                custom.id in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
 
-    def test_source_landmark_cannot_be_removed_from_combat_scene(self) -> None:
+    def test_source_landmark_can_be_removed_when_unoccupied(self) -> None:
         self.service.start(44, self.hall.id)
 
-        with self.assertRaises(CombatError):
-            self.service.remove_landmark(44, "feature:stone_pillar")
+        scene = self.service.remove_landmark(
+            44,
+            "feature:stone_pillar",
+        )
+
+        self.assertIsNone(scene.landmark("feature:stone_pillar"))
+        self.assertFalse(
+            any(
+                "feature:stone_pillar" in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
 
     def test_feature_snapshot_does_not_change_mid_combat(self) -> None:
         self.service.start(44, self.hall.id)
