@@ -1269,6 +1269,87 @@ class CombatServiceTests(unittest.TestCase):
                 str(defender.character_id),
             )
 
+    def test_defend_spends_standard_action_and_grants_next_defense_advantage(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.defend(44)
+        defender = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(defender.standard_action_spent)
+        self.assertTrue(defender.defending)
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        with patch(
+            "rpg_bot.combat.service.random.randint",
+            side_effect=[4, 17],
+        ):
+            scene, result = self.service.attack_character(
+                44,
+                str(self.olof.character_id),
+            )
+
+        self.assertEqual(result.defense_roll, 17)
+        defender = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(defender.defending)
+        self.assertTrue(
+            any(
+                "Defend Advantage" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_defend_expires_when_the_defenders_next_turn_begins(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.service.defend(44)
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        defender = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(defender.defending)
+        self.assertFalse(defender.standard_action_spent)
+
     def test_failed_automatic_defense_applies_armor_and_character_damage(self) -> None:
         armor = self.world.catalog.get("leather_armor")
         armor_instance_id = self.database.add_inventory_item(
