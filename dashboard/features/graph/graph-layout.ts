@@ -66,38 +66,57 @@ export function alignNodeCenterToGrid<T extends Record<string, unknown>>(
   };
 }
 
+type AxisCluster = {
+  center: number;
+  values: number[];
+};
+
+function clusterAxis(
+  values: number[],
+  threshold: number,
+): AxisCluster[] {
+  const sorted = [...values].sort((a, b) => a - b);
+  const clusters: AxisCluster[] = [];
+
+  for (const value of sorted) {
+    const current = clusters.at(-1);
+    if (!current || Math.abs(value - current.center) > threshold) {
+      clusters.push({ center: value, values: [value] });
+      continue;
+    }
+    current.values.push(value);
+    current.center = (
+      current.values.reduce((sum, item) => sum + item, 0)
+      / current.values.length
+    );
+  }
+
+  return clusters;
+}
+
+function nearestClusterIndex(
+  clusters: AxisCluster[],
+  value: number,
+): number {
+  return clusters.reduce(
+    (bestIndex, cluster, index) => (
+      Math.abs(value - cluster.center)
+        < Math.abs(value - clusters[bestIndex].center)
+        ? index
+        : bestIndex
+    ),
+    0,
+  );
+}
+
 export function alignedGridNodes<T extends Record<string, unknown>>(
   displayNodes: Node<T>[],
   spacingScale: number,
   toLogicalPosition: (position: Point) => Point,
-  horizontalDistance = SNAP_GRID_SIZE * 10,
-  verticalDistance = SNAP_GRID_SIZE * 6,
+  horizontalDistance = SNAP_GRID_SIZE * 12,
+  verticalDistance = SNAP_GRID_SIZE * 8,
 ): Node<T>[] {
   if (!displayNodes.length) return [];
-
-  const center = graphCenter(displayNodes);
-  const columns = Math.max(1, Math.ceil(Math.sqrt(displayNodes.length)));
-  const rows = Math.ceil(displayNodes.length / columns);
-  const slotCenters: Point[] = [];
-
-  for (let row = 0; row < rows; row += 1) {
-    const rowCount = Math.min(
-      columns,
-      displayNodes.length - row * columns,
-    );
-    for (let column = 0; column < rowCount; column += 1) {
-      slotCenters.push({
-        x: center.x
-          + (column - (rowCount - 1) / 2)
-            * horizontalDistance
-            * spacingScale,
-        y: center.y
-          + (row - (rows - 1) / 2)
-            * verticalDistance
-            * spacingScale,
-      });
-    }
-  }
 
   const nodeItems = displayNodes.map((node) => {
     const width = node.measured?.width ?? FALLBACK_NODE_WIDTH;
@@ -113,48 +132,61 @@ export function alignedGridNodes<T extends Record<string, unknown>>(
     };
   });
 
-  const availableNodeIds = new Set(nodeItems.map(({ node }) => node.id));
-  const availableSlotIndexes = new Set(
-    slotCenters.map((_, index) => index),
+  // Locations are free-form graphs. Align should tidy the structure the DM
+  // already made, not replace it with a new compact sqrt(n) layout.
+  const xClusters = clusterAxis(
+    nodeItems.map((item) => item.center.x),
+    SNAP_GRID_SIZE * 5,
   );
-  const assignments = new Map<string, number>();
+  const yClusters = clusterAxis(
+    nodeItems.map((item) => item.center.y),
+    SNAP_GRID_SIZE * 4,
+  );
 
-  const candidates = nodeItems.flatMap((item) => (
-    slotCenters.map((slot, slotIndex) => ({
-      nodeId: item.node.id,
-      slotIndex,
-      distance: Math.hypot(
-        item.center.x - slot.x,
-        item.center.y - slot.y,
-      ),
-    }))
-  )).sort((first, second) => (
-    first.distance - second.distance
-    || first.nodeId.localeCompare(second.nodeId)
-    || first.slotIndex - second.slotIndex
+  const currentCenter = {
+    x: nodeItems.reduce((sum, item) => sum + item.center.x, 0)
+      / nodeItems.length,
+    y: nodeItems.reduce((sum, item) => sum + item.center.y, 0)
+      / nodeItems.length,
+  };
+
+  const xSpan = xClusters.length > 1
+    ? xClusters.at(-1)!.center - xClusters[0].center
+    : 0;
+  const ySpan = yClusters.length > 1
+    ? yClusters.at(-1)!.center - yClusters[0].center
+    : 0;
+
+  const xSpacing = xClusters.length > 1
+    ? Math.max(
+        horizontalDistance * spacingScale,
+        xSpan / (xClusters.length - 1),
+      )
+    : 0;
+  const ySpacing = yClusters.length > 1
+    ? Math.max(
+        verticalDistance * spacingScale,
+        ySpan / (yClusters.length - 1),
+      )
+    : 0;
+
+  const targetX = xClusters.map((_, index) => (
+    currentCenter.x
+    + (index - (xClusters.length - 1) / 2) * xSpacing
+  ));
+  const targetY = yClusters.map((_, index) => (
+    currentCenter.y
+    + (index - (yClusters.length - 1) / 2) * ySpacing
   ));
 
-  for (const candidate of candidates) {
-    if (
-      !availableNodeIds.has(candidate.nodeId)
-      || !availableSlotIndexes.has(candidate.slotIndex)
-    ) {
-      continue;
-    }
-    assignments.set(candidate.nodeId, candidate.slotIndex);
-    availableNodeIds.delete(candidate.nodeId);
-    availableSlotIndexes.delete(candidate.slotIndex);
-  }
-
-  return nodeItems.map(({ node, width, height }) => {
-    const slotIndex = assignments.get(node.id);
-    if (slotIndex == null) return node;
-    const slot = slotCenters[slotIndex];
+  return nodeItems.map(({ node, width, height, center }) => {
+    const column = nearestClusterIndex(xClusters, center.x);
+    const row = nearestClusterIndex(yClusters, center.y);
     return {
       ...node,
       position: toLogicalPosition({
-        x: slot.x - width / 2,
-        y: slot.y - height / 2,
+        x: targetX[column] - width / 2,
+        y: targetY[row] - height / 2,
       }),
     };
   });
