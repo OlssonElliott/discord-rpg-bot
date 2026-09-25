@@ -80,7 +80,7 @@ button, input, textarea { font: inherit; }
 .error-banner button { margin-left: auto; color: #ffc1bd; text-decoration: underline; }
 .graph-panel { position: relative; min-width: 0; background: radial-gradient(circle at 45% 35%, #142033 0, #0b1320 58%, #080e17 100%); }
 .inspector-reopen { position: absolute; top: 14px; right: 14px; z-index: 8; gap: 6px; background: #0f1724e8; box-shadow: 0 8px 22px #0007; }
-.canvas-hint { position: absolute; left: 18px; bottom: 18px; z-index: 5; padding: 7px 10px; color: #8593a6; font-size: .72rem; border: 1px solid #26344a; border-radius: 7px; background: #0d1522dd; }
+.canvas-hint { position: absolute; left: 50%; bottom: 18px; z-index: 5; max-width: calc(100% - 220px); padding: 7px 10px; color: #8593a6; font-size: .72rem; text-align: center; border: 1px solid #26344a; border-radius: 7px; background: #0d1522dd; pointer-events: none; transform: translateX(-50%); }
 .room-node { width: 204px; padding: 14px 15px 13px; border: 1px solid #33445c; border-radius: 9px; background: linear-gradient(145deg, #172338, #101a29); box-shadow: 0 12px 30px #02060d80; }
 .room-node--selected { border-color: #d39a4a; box-shadow: 0 0 0 2px #d39a4a22, 0 15px 36px #02060daa; }
 .room-node__eyebrow { margin-bottom: 4px; color: #78879b; font-size: .62rem; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
@@ -255,7 +255,7 @@ button, input, textarea { font: inherit; }
 .combat-connection-edge--blocked .react-flow__edge-path { stroke: #aa5656; stroke-dasharray: 4 5; }
 .combat-board .react-flow__edge-text { fill: #b8c2cf; font-size: 11px; text-transform: capitalize; }
 .combat-board .react-flow__edge-textbg { fill: #111925; fill-opacity: .92; }
-.combat-board__hint { position: absolute; left: 12px; bottom: 10px; z-index: 5; padding: 6px 8px; color: #667487; font-size: .68rem; border: 1px solid #26344a; border-radius: 6px; background: #0d1522dd; pointer-events: none; }
+.combat-board__hint { position: absolute; left: 50%; bottom: 10px; z-index: 5; max-width: calc(100% - 220px); padding: 6px 8px; color: #667487; font-size: .68rem; text-align: center; border: 1px solid #26344a; border-radius: 6px; background: #0d1522dd; pointer-events: none; transform: translateX(-50%); }
 .combat-control-panel { padding: 22px; overflow-y: auto; border-left: 1px solid #26344a; background: #0f1724; }
 .combat-control-panel__heading { display: flex; align-items: center; justify-content: space-between; }
 .combat-control-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid #26344a; }
