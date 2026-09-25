@@ -215,6 +215,10 @@ def handle_combat_request(
             }
         return 200, data
 
+    if path == "/api/combat/actions/defend" and method == "POST":
+        scene = api.combat.defend(_combat_guild_id(api))
+        return 200, _combat_state_data(scene, api.world)
+
     if path == "/api/combat/actions/attack" and method == "POST":
         scene, result = api.combat.attack_enemy(
             _combat_guild_id(api),
