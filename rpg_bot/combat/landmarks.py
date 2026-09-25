@@ -255,6 +255,96 @@ class CombatLandmarkMixin:
             for landmark in landmarks
         )
 
+    @staticmethod
+    def _near_room_edge(landmark: CombatLandmark) -> bool:
+        if landmark.x is None or landmark.y is None:
+            return False
+        return min(
+            landmark.x,
+            1 - landmark.x,
+            landmark.y,
+            1 - landmark.y,
+        ) <= 0.30
+
+    @classmethod
+    def _corner_shortcut_pairs(
+        cls,
+        scene: CombatScene,
+    ) -> list[tuple[CombatLandmark, CombatLandmark]]:
+        """Return bounded diagonal shortcuts around synthetic room corners.
+
+        Perimeter landmarks are ordered around Room Center. For each corner,
+        connect the nearest non-corner landmark on either side of that corner.
+        This creates natural diagonal movement around the room without turning
+        the combat graph into a full mesh.
+        """
+        center = scene.landmark(cls.CENTER_LANDMARK_ID)
+        if (
+            center is None
+            or center.x is None
+            or center.y is None
+        ):
+            return []
+
+        perimeter = [
+            landmark
+            for landmark in scene.landmarks
+            if (
+                landmark.id != cls.CENTER_LANDMARK_ID
+                and landmark.x is not None
+                and landmark.y is not None
+                and (
+                    landmark.feature_type == "corner"
+                    or cls._near_room_edge(landmark)
+                )
+            )
+        ]
+        if len(perimeter) < 3:
+            return []
+
+        ordered = sorted(
+            perimeter,
+            key=lambda landmark: (
+                math.atan2(
+                    landmark.y - center.y,
+                    landmark.x - center.x,
+                ),
+                landmark.id,
+            ),
+        )
+
+        pairs: dict[
+            frozenset[str],
+            tuple[CombatLandmark, CombatLandmark],
+        ] = {}
+        for index, corner in enumerate(ordered):
+            if corner.feature_type != "corner":
+                continue
+            source = ordered[(index - 1) % len(ordered)]
+            target = ordered[(index + 1) % len(ordered)]
+            if (
+                source.feature_type == "corner"
+                or target.feature_type == "corner"
+                or source.id == target.id
+            ):
+                continue
+            if not cls._automatic_route_is_local(
+                source,
+                target,
+                scene.landmarks,
+            ):
+                continue
+            pair = frozenset((source.id, target.id))
+            pairs[pair] = (source, target)
+
+        return [
+            pairs[pair]
+            for pair in sorted(
+                pairs,
+                key=lambda item: tuple(sorted(item)),
+            )
+        ]
+
     def auto_connect_landmark(
         self,
         guild_id: int,
@@ -340,65 +430,105 @@ class CombatLandmarkMixin:
             for route in scene.routes
         )
         missing_local_connections = max(0, 2 - local_degree)
-        if missing_local_connections == 0:
-            return scene
 
-        candidates = [
-            landmark
-            for landmark in scene.landmarks
-            if (
-                landmark.id != source.id
-                and landmark.id != self.CENTER_LANDMARK_ID
-                and landmark.x is not None
-                and landmark.y is not None
-                and self._automatic_route_is_local(
-                    source,
-                    landmark,
-                    scene.landmarks,
-                )
-                and not any(
-                    {route.source_landmark_id, route.destination_landmark_id}
-                    == {source.id, landmark.id}
-                    for route in scene.routes
+        connected_pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
                 )
             )
-        ]
-        candidates.sort(
-            key=lambda landmark: (
-                self._distance_between(source, landmark),
-                landmark.id,
-            )
-        )
-
+            for route in scene.routes
+        }
+        # Center spokes are abstract hub movement. They should not behave like
+        # physical walls when deciding whether a local shortcut crosses a route.
         existing_segments = [
             (
                 scene.landmark(route.source_landmark_id),
                 scene.landmark(route.destination_landmark_id),
             )
             for route in scene.routes
+            if self.CENTER_LANDMARK_ID not in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
         ]
 
         try:
-            added = 0
-            for target in candidates:
-                if added >= missing_local_connections:
-                    break
+            if missing_local_connections:
+                candidates = [
+                    landmark
+                    for landmark in scene.landmarks
+                    if (
+                        landmark.id != source.id
+                        and landmark.id != self.CENTER_LANDMARK_ID
+                        and landmark.x is not None
+                        and landmark.y is not None
+                        and self._automatic_route_is_local(
+                            source,
+                            landmark,
+                            scene.landmarks,
+                        )
+                        and frozenset((source.id, landmark.id))
+                        not in connected_pairs
+                    )
+                ]
+                candidates.sort(
+                    key=lambda landmark: (
+                        self._distance_between(source, landmark),
+                        landmark.id,
+                    )
+                )
+
+                added = 0
+                for target in candidates:
+                    if added >= missing_local_connections:
+                        break
+                    if any(
+                        first is not None
+                        and second is not None
+                        and self._segments_cross(source, target, first, second)
+                        for first, second in existing_segments
+                    ):
+                        continue
+                    self.repository.set_route(
+                        scene.id,
+                        source.id,
+                        target.id,
+                        LandmarkDistance.CLOSE,
+                        automatic=True,
+                    )
+                    connected_pairs.add(frozenset((source.id, target.id)))
+                    existing_segments.append((source, target))
+                    added += 1
+
+            for first, second in self._corner_shortcut_pairs(scene):
+                if source.id not in {first.id, second.id}:
+                    continue
+                pair = frozenset((first.id, second.id))
+                if pair in connected_pairs:
+                    continue
                 if any(
-                    first is not None
-                    and second is not None
-                    and self._segments_cross(source, target, first, second)
-                    for first, second in existing_segments
+                    segment_source is not None
+                    and segment_target is not None
+                    and self._segments_cross(
+                        first,
+                        second,
+                        segment_source,
+                        segment_target,
+                    )
+                    for segment_source, segment_target in existing_segments
                 ):
                     continue
                 self.repository.set_route(
                     scene.id,
-                    source.id,
-                    target.id,
+                    first.id,
+                    second.id,
                     LandmarkDistance.CLOSE,
                     automatic=True,
                 )
-                existing_segments.append((source, target))
-                added += 1
+                connected_pairs.add(pair)
+                existing_segments.append((first, second))
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
@@ -434,9 +564,9 @@ class CombatLandmarkMixin:
             if source is None or target is None:
                 continue
             connected_pairs.add(frozenset((source.id, target.id)))
-            existing_segments.append((source, target))
             if self.CENTER_LANDMARK_ID in {source.id, target.id}:
                 continue
+            existing_segments.append((source, target))
             if source.id in local_degrees:
                 local_degrees[source.id] += 1
             if target.id in local_degrees:
@@ -488,6 +618,29 @@ class CombatLandmarkMixin:
                 )
                 local_degrees[source.id] += 1
                 local_degrees[target.id] += 1
+                connected_pairs.add(frozenset((source.id, target.id)))
+                existing_segments.append((source, target))
+
+            # Add at most one diagonal across each room corner. This lets
+            # perimeter landmarks cut across the corner instead of forcing
+            # movement through the corner anchor, while remaining bounded.
+            for source, target in self._corner_shortcut_pairs(scene):
+                pair = frozenset((source.id, target.id))
+                if pair in connected_pairs:
+                    continue
+                if any(
+                    self._segments_cross(source, target, first, second)
+                    for first, second in existing_segments
+                ):
+                    continue
+                self.repository.set_route(
+                    scene.id,
+                    source.id,
+                    target.id,
+                    LandmarkDistance.CLOSE,
+                    automatic=True,
+                )
+                connected_pairs.add(pair)
                 existing_segments.append((source, target))
         except ValueError as error:
             raise CombatError(str(error)) from error
