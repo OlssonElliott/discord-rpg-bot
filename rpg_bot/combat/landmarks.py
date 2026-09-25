@@ -235,8 +235,50 @@ class CombatLandmarkMixin:
 
     def auto_connect_all(self, guild_id: int) -> CombatScene:
         scene = self._require_current(guild_id)
-        for landmark in scene.landmarks:
-            self.auto_connect_landmark(guild_id, landmark.id)
+        positioned = [
+            landmark
+            for landmark in scene.landmarks
+            if landmark.x is not None and landmark.y is not None
+        ]
+        degrees = {landmark.id: 0 for landmark in positioned}
+        connected_pairs: set[frozenset[str]] = set()
+        for route in scene.routes:
+            pair = frozenset(
+                (route.source_landmark_id, route.destination_landmark_id)
+            )
+            connected_pairs.add(pair)
+            if route.source_landmark_id in degrees:
+                degrees[route.source_landmark_id] += 1
+            if route.destination_landmark_id in degrees:
+                degrees[route.destination_landmark_id] += 1
+
+        candidates: list[tuple[float, str, str, CombatLandmark, CombatLandmark]] = []
+        for index, source in enumerate(positioned):
+            for target in positioned[index + 1:]:
+                pair = frozenset((source.id, target.id))
+                if pair in connected_pairs:
+                    continue
+                distance = math.hypot(target.x - source.x, target.y - source.y)
+                candidates.append(
+                    (distance, source.id, target.id, source, target)
+                )
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        try:
+            for _, _, _, source, target in candidates:
+                if degrees[source.id] >= 3 or degrees[target.id] >= 3:
+                    continue
+                self.repository.set_route(
+                    scene.id,
+                    source.id,
+                    target.id,
+                    self._automatic_distance(source, target),
+                    automatic=True,
+                )
+                degrees[source.id] += 1
+                degrees[target.id] += 1
+        except ValueError as error:
+            raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
     def disconnect_landmark_routes(
