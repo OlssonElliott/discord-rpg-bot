@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useEdgesState,
   useNodesState,
@@ -47,6 +47,7 @@ export function DungeonEditor() {
   const [workspaceMode, setWorkspaceMode] = useState<'locations' | 'characters' | 'combat'>('locations');
   const [combatScene, setCombatScene] = useState<CombatSceneData | null>(null);
   const [combatBusy, setCombatBusy] = useState(false);
+  const combatRevision = useRef(0);
   const [areas, setAreas] = useState<AreaSummary[]>([]);
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
@@ -188,18 +189,21 @@ export function DungeonEditor() {
   }, [areaId, loadGraph]);
 
   const loadCombat = useCallback(async (quiet = false) => {
+    const revisionAtStart = combatRevision.current;
     try {
       const state = await api<CombatStateData>('/combat');
+      if (revisionAtStart !== combatRevision.current) return;
       setCombatScene(state.scene);
       if (!quiet) setError('');
     } catch (requestError) {
-      if (!quiet) {
+      if (!quiet && revisionAtStart === combatRevision.current) {
         setError(requestError instanceof Error ? requestError.message : 'Could not load combat.');
       }
     }
   }, []);
 
   const startCombat = useCallback(async (roomId: string) => {
+    combatRevision.current += 1;
     setCombatBusy(true);
     try {
       const state = await api<CombatStateData>('/combat', {
@@ -220,6 +224,7 @@ export function DungeonEditor() {
   }, []);
 
   const endCombat = useCallback(async () => {
+    combatRevision.current += 1;
     setCombatBusy(true);
     try {
       const state = await api<CombatStateData>('/combat', { method: 'DELETE' });
@@ -240,6 +245,7 @@ export function DungeonEditor() {
     init: RequestInit,
     message: string,
   ) => {
+    combatRevision.current += 1;
     setCombatBusy(true);
     try {
       const state = await api<CombatStateData>(path, init);
