@@ -142,6 +142,7 @@ export function DungeonCanvas({
   return (
     <div className="graph-panel">
       {nodes.length ? (
+        <>
         <ReactFlow
           nodes={displayNodes}
           edges={edges}
@@ -180,6 +181,7 @@ export function DungeonCanvas({
           spacing={spacing}
           onSpacingChange={setSpacing}
         />
+        </>
       ) : (
         <div className="empty-canvas">
           <Map size={28} />
