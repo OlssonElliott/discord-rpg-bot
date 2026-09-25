@@ -6,6 +6,7 @@ import re
 from .attacks import CombatAttackMixin
 from .auto_connect import CombatAutoConnectMixin
 from .death_saves import CombatDeathSaveMixin
+from .defense import CombatDefenseMixin
 from .enemy_management import CombatEnemyManagementMixin
 from .errors import CombatError
 from .landmarks import CombatLandmarkMixin
@@ -23,6 +24,7 @@ class CombatService(
     CombatRulesMixin,
     CombatLifecycleMixin,
     CombatDeathSaveMixin,
+    CombatDefenseMixin,
     CombatAttackMixin,
     CombatEnemyManagementMixin,
     CombatTurnMixin,
@@ -48,13 +50,19 @@ class CombatService(
     @staticmethod
     def _roll_d20(
         *,
+        advantage: bool = False,
         disadvantage: bool = False,
     ) -> tuple[tuple[int, ...], int]:
+        roll_twice = advantage != disadvantage
         rolls = tuple(
             random.randint(1, 20)
-            for _ in range(2 if disadvantage else 1)
+            for _ in range(2 if roll_twice else 1)
         )
-        return rolls, min(rolls) if disadvantage else rolls[0]
+        if advantage and not disadvantage:
+            return rolls, max(rolls)
+        if disadvantage and not advantage:
+            return rolls, min(rolls)
+        return rolls, rolls[0]
 
     @staticmethod
     def _roll_die(sides: int) -> int:
