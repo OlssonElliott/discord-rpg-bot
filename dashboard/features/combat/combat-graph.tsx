@@ -53,6 +53,8 @@ export type CombatEdgeData = {
   label: string;
   showLabel: boolean;
   labelPosition: number;
+  labelOffsetX: number;
+  labelOffsetY: number;
 } & Record<string, unknown>;
 
 type LandmarkHandle =
@@ -191,10 +193,19 @@ export function combatNodes(
   });
 }
 
+type GraphPoint = { x: number; y: number };
+
 type EdgeDraft = {
   edge: Edge<CombatEdgeData>;
-  sourcePoint: { x: number; y: number };
-  targetPoint: { x: number; y: number };
+  sourcePoint: GraphPoint;
+  targetPoint: GraphPoint;
+};
+
+type LabelBounds = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 };
 
 function nodeCenter(node: Node<CombatLandmarkNodeData>) {
@@ -204,6 +215,100 @@ function nodeCenter(node: Node<CombatLandmarkNodeData>) {
     x: node.position.x + width / 2,
     y: node.position.y + height / 2,
   };
+}
+
+function estimatedLabelBounds(
+  draft: EdgeDraft,
+  offset: GraphPoint,
+): LabelBounds | null {
+  const data = draft.edge.data;
+  if (!data?.showLabel || !data.label) return null;
+
+  const position = data.labelPosition ?? 0.5;
+  const anchor = {
+    x: draft.sourcePoint.x
+      + (draft.targetPoint.x - draft.sourcePoint.x) * position
+      + offset.x,
+    y: draft.sourcePoint.y
+      + (draft.targetPoint.y - draft.sourcePoint.y) * position
+      + offset.y,
+  };
+  const width = Math.max(58, data.label.length * 6.4 + 10);
+  const height = 18;
+
+  return {
+    left: anchor.x - width / 2,
+    right: anchor.x + width / 2,
+    top: anchor.y - height / 2,
+    bottom: anchor.y + height / 2,
+  };
+}
+
+function labelBoundsOverlap(
+  first: LabelBounds,
+  second: LabelBounds,
+  padding = 6,
+): boolean {
+  return !(
+    first.right + padding < second.left
+    || second.right + padding < first.left
+    || first.bottom + padding < second.top
+    || second.bottom + padding < first.top
+  );
+}
+
+function labelOffsetCandidates(draft: EdgeDraft): GraphPoint[] {
+  const dx = draft.targetPoint.x - draft.sourcePoint.x;
+  const dy = draft.targetPoint.y - draft.sourcePoint.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const tangent = { x: dx / length, y: dy / length };
+  const normal = { x: -dy / length, y: dx / length };
+  const point = (
+    normalDistance: number,
+    tangentDistance = 0,
+  ): GraphPoint => ({
+    x: normal.x * normalDistance + tangent.x * tangentDistance,
+    y: normal.y * normalDistance + tangent.y * tangentDistance,
+  });
+
+  return [
+    { x: 0, y: 0 },
+    point(18),
+    point(-18),
+    point(34),
+    point(-34),
+    point(18, 28),
+    point(-18, 28),
+    point(18, -28),
+    point(-18, -28),
+    point(34, 28),
+    point(-34, -28),
+  ];
+}
+
+function spreadOverlappingLabels(drafts: EdgeDraft[]): void {
+  const occupied: LabelBounds[] = [];
+
+  for (const draft of [...drafts].sort(
+    (first, second) => first.edge.id.localeCompare(second.edge.id),
+  )) {
+    const data = draft.edge.data;
+    if (!data?.showLabel || !data.label) continue;
+
+    const candidates = labelOffsetCandidates(draft);
+    const chosen = candidates.find((offset) => {
+      const bounds = estimatedLabelBounds(draft, offset);
+      return bounds && !occupied.some(
+        (placed) => labelBoundsOverlap(bounds, placed),
+      );
+    }) ?? candidates[candidates.length - 1];
+
+    data.labelOffsetX = chosen.x;
+    data.labelOffsetY = chosen.y;
+
+    const bounds = estimatedLabelBounds(draft, chosen);
+    if (bounds) occupied.push(bounds);
+  }
 }
 
 function segmentsCross(
@@ -290,6 +395,8 @@ export function combatEdges(
           label,
           showLabel: true,
           labelPosition: 0.5,
+          labelOffsetX: 0,
+          labelOffsetY: 0,
         },
         className: [
           'combat-connection-edge',
@@ -338,6 +445,8 @@ export function combatEdges(
       }
     }
   }
+
+  spreadOverlappingLabels(drafts);
 
   return drafts.map(({ edge }) => edge);
 }
