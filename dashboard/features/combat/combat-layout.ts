@@ -1,18 +1,16 @@
 import type { Node } from '@xyflow/react';
 
+import {
+  FALLBACK_NODE_HEIGHT,
+  FALLBACK_NODE_WIDTH,
+  SNAP_GRID_SIZE,
+  alignNodeCenterToGrid,
+  type Point,
+} from '@/features/graph/graph-layout';
 import type { CombatLandmarkNodeData } from './combat-graph';
 
-export const MIN_SPACING = 70;
-export const MAX_SPACING = 160;
-export const SPACING_STEP = 10;
-export const DEFAULT_SPACING = 100;
-export const SNAP_GRID_SIZE = 28;
-export const FALLBACK_NODE_WIDTH = 178;
-export const FALLBACK_NODE_HEIGHT = 76;
 export const ALIGN_HORIZONTAL_DISTANCE = SNAP_GRID_SIZE * 12;
 export const ALIGN_VERTICAL_DISTANCE = SNAP_GRID_SIZE * 8;
-
-export type Point = { x: number; y: number };
 
 type AlignmentSlot = {
   x: number;
@@ -57,45 +55,6 @@ function alignmentSlots(count: number): AlignmentSlot[] {
     ...position,
     angle: Math.atan2(position.y, position.x),
   }));
-}
-
-export function scaleAround(
-  point: Point,
-  center: Point,
-  scale: number,
-): Point {
-  return {
-    x: center.x + (point.x - center.x) * scale,
-    y: center.y + (point.y - center.y) * scale,
-  };
-}
-
-export function unscaleAround(
-  point: Point,
-  center: Point,
-  scale: number,
-): Point {
-  return {
-    x: center.x + (point.x - center.x) / scale,
-    y: center.y + (point.y - center.y) / scale,
-  };
-}
-
-export function alignDisplayPosition(
-  nodes: Node<CombatLandmarkNodeData>[],
-  nodeId: string,
-  position: Point,
-): Point {
-  const node = nodes.find((candidate) => candidate.id === nodeId);
-  const width = node?.measured?.width ?? FALLBACK_NODE_WIDTH;
-  const height = node?.measured?.height ?? FALLBACK_NODE_HEIGHT;
-  const centerX = position.x + width / 2;
-  const centerY = position.y + height / 2;
-
-  return {
-    x: Math.round(centerX / SNAP_GRID_SIZE) * SNAP_GRID_SIZE - width / 2,
-    y: Math.round(centerY / SNAP_GRID_SIZE) * SNAP_GRID_SIZE - height / 2,
-  };
 }
 
 export function alignedLandmarkNodes(
