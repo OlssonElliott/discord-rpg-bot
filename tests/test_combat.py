@@ -208,6 +208,51 @@ class CombatServiceTests(unittest.TestCase):
             1,
         )
 
+    def test_auto_connect_center_restores_missing_center_routes_as_close(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        target = "feature:stone_pillar"
+        self.service.disconnect_landmarks(
+            44,
+            "room:center",
+            target,
+        )
+
+        scene = self.service.auto_connect_landmark(
+            44,
+            "room:center",
+        )
+        restored = next(
+            route
+            for route in scene.routes
+            if {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+            == {"room:center", target}
+        )
+        self.assertEqual(restored.distance, LandmarkDistance.CLOSE)
+
+    def test_auto_connect_landmark_restores_its_center_route_as_close(self) -> None:
+        self.service.start(44, self.hall.id)
+        target = "feature:stone_pillar"
+        self.service.disconnect_landmarks(
+            44,
+            "room:center",
+            target,
+        )
+
+        scene = self.service.auto_connect_landmark(44, target)
+        restored = next(
+            route
+            for route in scene.routes
+            if {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+            == {"room:center", target}
+        )
+        self.assertEqual(restored.distance, LandmarkDistance.CLOSE)
+
     def test_disconnect_landmark_routes_removes_manual_and_automatic_routes(self) -> None:
         self.service.start(44, self.hall.id)
         self.service.auto_connect_landmark(44, "feature:stone_pillar")
@@ -257,7 +302,7 @@ class CombatServiceTests(unittest.TestCase):
         self.assertTrue(automatic_routes)
         self.assertTrue(
             all(
-                route.distance is not LandmarkDistance.DISTANT
+                route.distance is LandmarkDistance.CLOSE
                 for route in automatic_routes
             )
         )
