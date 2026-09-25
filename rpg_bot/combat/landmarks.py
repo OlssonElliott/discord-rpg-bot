@@ -130,7 +130,7 @@ class CombatLandmarkMixin:
         try:
             self.repository.set_landmark_position(scene.id, landmark_id, x, y)
             landmark = scene.landmark(landmark_id)
-            if landmark is not None and landmark.auto_connect and not landmark.synthetic:
+            if landmark is not None and landmark.auto_connect:
                 self._refresh_auto_routes(scene.id, landmark_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
@@ -182,7 +182,7 @@ class CombatLandmarkMixin:
                 landmark_id,
                 auto_connect,
             )
-            if auto_connect and not landmark.synthetic:
+            if auto_connect:
                 self._refresh_auto_routes(scene.id, landmark_id)
             elif not auto_connect:
                 self.repository.delete_automatic_routes_for_landmark(
@@ -219,10 +219,33 @@ class CombatLandmarkMixin:
         if (
             source is None
             or not source.auto_connect
-            or source.synthetic
             or source.x is None
             or source.y is None
         ):
+            return
+
+        # Rebuild only the system-owned routes for this landmark. Manual
+        # connections are preserved and count toward the desired local degree.
+        self.repository.delete_automatic_routes_for_landmark(
+            scene_id,
+            landmark_id,
+        )
+        scene = self.repository.get_scene(scene_id)
+        if scene is None:
+            return
+        source = scene.landmark(landmark_id)
+        if source is None:
+            return
+
+        connected_ids: set[str] = set()
+        for route in scene.routes:
+            if route.source_landmark_id == source.id:
+                connected_ids.add(route.destination_landmark_id)
+            elif route.destination_landmark_id == source.id:
+                connected_ids.add(route.source_landmark_id)
+
+        missing_connections = max(0, 3 - len(connected_ids))
+        if missing_connections == 0:
             return
 
         candidates = [
@@ -230,6 +253,7 @@ class CombatLandmarkMixin:
             for landmark in scene.landmarks
             if (
                 landmark.id != source.id
+                and landmark.id not in connected_ids
                 and landmark.auto_connect
                 and landmark.x is not None
                 and landmark.y is not None
@@ -242,11 +266,7 @@ class CombatLandmarkMixin:
             )
         )
 
-        self.repository.delete_automatic_routes_for_landmark(
-            scene_id,
-            landmark_id,
-        )
-        for target in candidates[:2]:
+        for target in candidates[:missing_connections]:
             self.repository.set_route(
                 scene_id,
                 source.id,
@@ -303,7 +323,6 @@ class CombatLandmarkMixin:
                 if (
                     candidate is not None
                     and candidate.auto_connect
-                    and not candidate.synthetic
                 ):
                     self._refresh_auto_routes(scene.id, candidate_id)
         except ValueError as error:
