@@ -508,18 +508,6 @@ class CombatLandmarkMixin:
                 pair = frozenset((first.id, second.id))
                 if pair in connected_pairs:
                     continue
-                if any(
-                    segment_source is not None
-                    and segment_target is not None
-                    and self._segments_cross(
-                        first,
-                        second,
-                        segment_source,
-                        segment_target,
-                    )
-                    for segment_source, segment_target in existing_segments
-                ):
-                    continue
                 self.repository.set_route(
                     scene.id,
                     first.id,
@@ -627,11 +615,6 @@ class CombatLandmarkMixin:
             for source, target in self._corner_shortcut_pairs(scene):
                 pair = frozenset((source.id, target.id))
                 if pair in connected_pairs:
-                    continue
-                if any(
-                    self._segments_cross(source, target, first, second)
-                    for first, second in existing_segments
-                ):
                     continue
                 self.repository.set_route(
                     scene.id,
