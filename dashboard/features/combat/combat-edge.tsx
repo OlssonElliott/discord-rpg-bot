@@ -22,6 +22,8 @@ export function CombatConnectionEdge({
   const position = data?.labelPosition ?? 0.5;
   const labelX = sourceX + (targetX - sourceX) * position;
   const labelY = sourceY + (targetY - sourceY) * position;
+  const labelOffsetX = data?.labelOffsetX ?? 0;
+  const labelOffsetY = data?.labelOffsetY ?? 0;
 
   return (
     <>
@@ -37,7 +39,7 @@ export function CombatConnectionEdge({
           <div
             className="combat-edge-label"
             style={{
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              transform: `translate(-50%, -50%) translate(${labelX + labelOffsetX}px, ${labelY + labelOffsetY}px)`,
             }}
           >
             {data.label}
