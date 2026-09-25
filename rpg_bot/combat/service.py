@@ -3,7 +3,6 @@
 import random
 import re
 
-from .models import CombatScene
 from .attacks import CombatAttackMixin
 from .auto_connect import CombatAutoConnectMixin
 from .death_saves import CombatDeathSaveMixin
@@ -11,6 +10,7 @@ from .enemy_management import CombatEnemyManagementMixin
 from .errors import CombatError
 from .landmarks import CombatLandmarkMixin
 from .lifecycle import CombatLifecycleMixin
+from .models import CombatScene
 from .movement import CombatMovementMixin
 from .repository import CombatRepository
 from .rules import CombatRulesMixin
@@ -33,6 +33,7 @@ class CombatService(
     """UI-independent combat scene orchestration."""
 
     CENTER_LANDMARK_ID = "room:center"
+
     def __init__(self, database: Database) -> None:
         self.database = database
         self.world = WorldService(database)
