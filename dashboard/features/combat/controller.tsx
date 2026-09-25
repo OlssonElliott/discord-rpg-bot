@@ -62,13 +62,25 @@ export function CombatWorkspaceController({
         },
         'Landmark cover updated',
       )}
-      onSetLandmarkAutoConnect={(landmarkId, autoConnect) => updateCombat(
-        `/combat/landmarks/${landmarkId}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({ auto_connect: autoConnect }),
-        },
-        autoConnect ? 'Auto connect enabled' : 'Auto connect disabled',
+      onAutoConnectLandmark={(landmarkId) => updateCombat(
+        `/combat/landmarks/${landmarkId}/auto-connect`,
+        { method: 'POST' },
+        'Landmark auto-connected',
+      )}
+      onDisconnectLandmarkRoutes={(landmarkId) => updateCombat(
+        `/combat/landmarks/${landmarkId}/routes`,
+        { method: 'DELETE' },
+        'Landmark connections removed',
+      )}
+      onAutoConnectAll={() => updateCombat(
+        '/combat/routes/auto-connect',
+        { method: 'POST' },
+        'Connections auto-created',
+      )}
+      onDisconnectAllRoutes={() => updateCombat(
+        '/combat/routes/all',
+        { method: 'DELETE' },
+        'All combat connections removed',
       )}
       onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
         `/combat/movement/${combatant.kind}/${combatant.source_id}`,
