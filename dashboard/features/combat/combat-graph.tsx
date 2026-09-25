@@ -39,7 +39,7 @@ function fallbackPosition(index: number) {
 }
 
 export function clamp(value: number) {
-  return Math.min(0.94, Math.max(0.06, value));
+  return Math.min(1, Math.max(0, value));
 }
 
 export const COMBAT_LAYOUT_WIDTH = 1000;
