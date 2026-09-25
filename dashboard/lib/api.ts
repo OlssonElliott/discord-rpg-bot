@@ -207,6 +207,7 @@ export type CombatantData = {
   route_cost: number;
   is_between_landmarks: boolean;
   standard_action_spent: boolean;
+  defending: boolean;
   hp: number | null;
   max_hp: number | null;
   character_status: 'active' | 'downed' | 'stable' | 'recovering' | 'dead' | null;
