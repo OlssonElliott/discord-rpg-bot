@@ -203,9 +203,7 @@ class DashboardAPITests(unittest.TestCase):
             if landmark["id"] == "feature:pillar"
         )
         self.assertEqual(center["cover"], "none")
-        self.assertTrue(center["auto_connect"])
         self.assertEqual(pillar["cover"], "half")
-        self.assertTrue(pillar["auto_connect"])
         self.assertEqual(
             [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
             [("enemy", "Bandit")],
@@ -224,12 +222,6 @@ class DashboardAPITests(unittest.TestCase):
         self.assertIsNone(legacy_bandit["hp"])
         self.assertEqual(legacy_bandit["attributes"], {})
 
-        status, _ = self.api.handle(
-            "PATCH",
-            "/api/combat/landmarks/feature:pillar",
-            {"auto_connect": False},
-        )
-        self.assertEqual(status, 200)
         status, positioned = self.api.handle(
             "PATCH",
             "/api/combat/landmarks/feature:pillar",
@@ -266,7 +258,7 @@ class DashboardAPITests(unittest.TestCase):
         status, with_cover = self.api.handle(
             "PATCH",
             "/api/combat/landmarks/feature:pillar",
-            {"cover": "full", "auto_connect": False},
+            {"cover": "full"},
         )
         self.assertEqual(status, 200)
         pillar = next(
@@ -275,14 +267,6 @@ class DashboardAPITests(unittest.TestCase):
             if landmark["id"] == "feature:pillar"
         )
         self.assertEqual(pillar["cover"], "full")
-        self.assertFalse(pillar["auto_connect"])
-
-        status, _ = self.api.handle(
-            "PATCH",
-            "/api/combat/landmarks/feature:table",
-            {"auto_connect": False},
-        )
-        self.assertEqual(status, 200)
 
         status, routed = self.api.handle(
             "PUT",
@@ -321,7 +305,7 @@ class DashboardAPITests(unittest.TestCase):
             },
         )
         self.assertEqual(delete_route_status, 200)
-        self.assertEqual(len(disconnected["scene"]["routes"]), 4)
+        self.assertEqual(len(disconnected["scene"]["routes"]), 6)
         self.assertEqual(
             {
                 frozenset(
@@ -337,6 +321,8 @@ class DashboardAPITests(unittest.TestCase):
                 frozenset(("room:center", "room:corner:ne")),
                 frozenset(("room:center", "room:corner:sw")),
                 frozenset(("room:center", "room:corner:se")),
+                frozenset(("room:center", "feature:pillar")),
+                frozenset(("room:center", "feature:table")),
             },
         )
 
