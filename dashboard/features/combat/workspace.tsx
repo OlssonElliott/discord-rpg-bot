@@ -139,11 +139,15 @@ type CombatLandmarkNodeData = {
   combatants: CombatantData[];
 } & Record<string, unknown>;
 
-type CornerHandle =
+type LandmarkHandle =
   | 'top-left'
+  | 'top'
   | 'top-right'
+  | 'right'
+  | 'bottom-right'
+  | 'bottom'
   | 'bottom-left'
-  | 'bottom-right';
+  | 'left';
 
 function routeKey(sourceId: string, destinationId: string) {
   return [sourceId, destinationId].sort().join('::');
@@ -156,25 +160,39 @@ function combatantKey(combatant: CombatantData) {
 function connectionHandles(
   source: { x: number; y: number } | undefined,
   target: { x: number; y: number } | undefined,
-): { sourceHandle?: CornerHandle; targetHandle?: CornerHandle } {
+): { sourceHandle?: LandmarkHandle; targetHandle?: LandmarkHandle } {
   if (!source || !target) return {};
 
-  const targetIsRight = target.x >= source.x;
-  const targetIsBelow = target.y >= source.y;
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
 
-  if (targetIsRight && targetIsBelow) {
+  if (absX > absY * 2) {
+    return dx >= 0
+      ? { sourceHandle: 'right', targetHandle: 'left' }
+      : { sourceHandle: 'left', targetHandle: 'right' };
+  }
+
+  if (absY > absX * 2) {
+    return dy >= 0
+      ? { sourceHandle: 'bottom', targetHandle: 'top' }
+      : { sourceHandle: 'top', targetHandle: 'bottom' };
+  }
+
+  if (dx >= 0 && dy >= 0) {
     return {
       sourceHandle: 'bottom-right',
       targetHandle: 'top-left',
     };
   }
-  if (targetIsRight) {
+  if (dx >= 0) {
     return {
       sourceHandle: 'top-right',
       targetHandle: 'bottom-left',
     };
   }
-  if (targetIsBelow) {
+  if (dy >= 0) {
     return {
       sourceHandle: 'bottom-left',
       targetHandle: 'top-right',
@@ -212,24 +230,28 @@ function CombatLandmarkNode({
         position={Position.Top}
         style={{ left: 0 }}
       />
+      <Handle id="top" type="source" position={Position.Top} />
       <Handle
         id="top-right"
         type="source"
         position={Position.Top}
         style={{ left: '100%' }}
       />
-      <Handle
-        id="bottom-left"
-        type="source"
-        position={Position.Bottom}
-        style={{ left: 0 }}
-      />
+      <Handle id="right" type="source" position={Position.Right} />
       <Handle
         id="bottom-right"
         type="source"
         position={Position.Bottom}
         style={{ left: '100%' }}
       />
+      <Handle id="bottom" type="source" position={Position.Bottom} />
+      <Handle
+        id="bottom-left"
+        type="source"
+        position={Position.Bottom}
+        style={{ left: 0 }}
+      />
+      <Handle id="left" type="source" position={Position.Left} />
       <div className="combat-landmark-node__eyebrow">{kind}</div>
       <div className="combat-landmark-node__title">
         <Flag size={14} />
