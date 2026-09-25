@@ -15,6 +15,7 @@ import {
 } from '@xyflow/react';
 
 import {
+  combatEdgeTypes,
   combatNodeTypes,
   type CombatLandmarkNodeData,
 } from './combat-graph';
@@ -277,6 +278,7 @@ export function CombatMap({
         nodes={displayNodes}
         edges={edges}
         nodeTypes={combatNodeTypes}
+        edgeTypes={combatEdgeTypes}
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => onNodeClick(node.id)}
