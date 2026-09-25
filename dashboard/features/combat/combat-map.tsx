@@ -175,6 +175,7 @@ export function CombatMap({
         <MiniMap
           pannable
           zoomable
+          width={224}
           nodeColor="#d39a4a"
           maskColor="rgba(8, 15, 26, 0.72)"
         />
