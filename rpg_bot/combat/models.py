@@ -125,6 +125,7 @@ class CombatantState:
     route_progress: int = 0
     route_cost: int = 0
     standard_action_spent: bool = False
+    defending: bool = False
 
     @property
     def is_between_landmarks(self) -> bool:
