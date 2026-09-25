@@ -852,6 +852,8 @@ class CombatRepository:
                     obstacle = excluded.obstacle,
                     blocked = excluded.blocked,
                     automatic = excluded.automatic
+                WHERE combat_routes.automatic = 1
+                   OR excluded.automatic = 0
                 """,
                 (
                     scene_id,
@@ -862,6 +864,26 @@ class CombatRepository:
                     int(blocked),
                     int(automatic),
                 ),
+            )
+
+    def delete_automatic_routes_for_landmark(
+        self,
+        scene_id: int,
+        landmark_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                DELETE FROM combat_routes
+                WHERE scene_id = ?
+                  AND automatic = 1
+                  AND (
+                    source_landmark_id = ?
+                    OR destination_landmark_id = ?
+                  )
+                """,
+                (scene_id, landmark_id, landmark_id),
             )
 
     def delete_route(
