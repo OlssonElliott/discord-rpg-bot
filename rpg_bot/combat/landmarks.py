@@ -267,39 +267,40 @@ class CombatLandmarkMixin:
         ) <= 0.30
 
     @staticmethod
-    def _perimeter_side(landmark: CombatLandmark) -> str | None:
-        """Return the nearest room edge for a positioned perimeter landmark."""
-        if landmark.x is None or landmark.y is None:
+    def _landmark_side(
+        landmark: CombatLandmark,
+        center: CombatLandmark,
+    ) -> str | None:
+        """Classify a landmark by its dominant direction from Room Center."""
+        if (
+            landmark.x is None
+            or landmark.y is None
+            or center.x is None
+            or center.y is None
+        ):
             return None
-        distances = {
-            "left": landmark.x,
-            "right": 1 - landmark.x,
-            "top": landmark.y,
-            "bottom": 1 - landmark.y,
-        }
-        side, distance = min(
-            distances.items(),
-            key=lambda item: (item[1], item[0]),
-        )
-        return side if distance <= 0.30 else None
+        dx = landmark.x - center.x
+        dy = landmark.y - center.y
+        if abs(dx) >= abs(dy):
+            return "right" if dx >= 0 else "left"
+        return "bottom" if dy >= 0 else "top"
 
     @classmethod
     def _corner_shortcut_pairs(
         cls,
         scene: CombatScene,
     ) -> list[tuple[CombatLandmark, CombatLandmark]]:
-        """Connect the nearest perimeter landmark on each side of every corner.
+        """Return one guaranteed local diagonal around each synthetic corner.
 
-        A northwest corner, for example, links the nearest top-edge landmark
-        to the nearest left-edge landmark. This produces the intended diagonal
-        shortcuts deterministically and does not depend on whole-room angle
-        ordering.
+        For each corner, choose the nearest non-corner landmark on each of the
+        two adjacent room sides. The pair itself is bounded by the corner, so
+        it does not need the generic nearest-neighbour locality heuristic.
         """
         center = scene.landmark(cls.CENTER_LANDMARK_ID)
         if center is None or center.x is None or center.y is None:
             return []
 
-        perimeter_by_side: dict[str, list[CombatLandmark]] = {
+        by_side: dict[str, list[CombatLandmark]] = {
             "left": [],
             "right": [],
             "top": [],
@@ -313,9 +314,9 @@ class CombatLandmarkMixin:
                 or landmark.y is None
             ):
                 continue
-            side = cls._perimeter_side(landmark)
+            side = cls._landmark_side(landmark, center)
             if side is not None:
-                perimeter_by_side[side].append(landmark)
+                by_side[side].append(landmark)
 
         pairs: dict[
             frozenset[str],
@@ -330,15 +331,10 @@ class CombatLandmarkMixin:
             ):
                 continue
 
-            horizontal_side = (
-                "left" if corner.x < center.x else "right"
-            )
-            vertical_side = (
-                "top" if corner.y < center.y else "bottom"
-            )
-
-            horizontal_candidates = perimeter_by_side[horizontal_side]
-            vertical_candidates = perimeter_by_side[vertical_side]
+            horizontal_side = "left" if corner.x < center.x else "right"
+            vertical_side = "top" if corner.y < center.y else "bottom"
+            horizontal_candidates = by_side[horizontal_side]
+            vertical_candidates = by_side[vertical_side]
             if not horizontal_candidates or not vertical_candidates:
                 continue
 
@@ -357,12 +353,6 @@ class CombatLandmarkMixin:
                 ),
             )
             if horizontal.id == vertical.id:
-                continue
-            if not cls._automatic_route_is_local(
-                horizontal,
-                vertical,
-                scene.landmarks,
-            ):
                 continue
 
             pair = frozenset((horizontal.id, vertical.id))
