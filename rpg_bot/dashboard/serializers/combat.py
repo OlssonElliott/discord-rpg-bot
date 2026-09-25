@@ -91,7 +91,6 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "feature_type": landmark.feature_type,
                 "synthetic": landmark.synthetic,
                 "cover": landmark.cover.value,
-                "auto_connect": landmark.auto_connect,
                 "x": landmark.x,
                 "y": landmark.y,
             }
