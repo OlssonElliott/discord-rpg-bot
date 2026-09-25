@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from rpg_bot.combat import (
     CombatantKind,
+    CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
 )
@@ -86,7 +87,8 @@ class CombatServiceTests(unittest.TestCase):
         center = scene.landmark("room:center")
         assert center is not None
         self.assertTrue(center.synthetic)
-        self.assertFalse(center.supports_behind)
+        self.assertEqual(center.cover, CoverLevel.NONE)
+        self.assertTrue(center.auto_connect)
         self.assertEqual((center.x, center.y), (0.5, 0.5))
         expected_corners = {
             "room:corner:nw": (0.12, 0.18),
@@ -98,7 +100,8 @@ class CombatServiceTests(unittest.TestCase):
             corner = scene.landmark(landmark_id)
             assert corner is not None
             self.assertTrue(corner.synthetic)
-            self.assertFalse(corner.supports_behind)
+            self.assertEqual(corner.cover, CoverLevel.NONE)
+            self.assertTrue(corner.auto_connect)
             self.assertEqual(corner.feature_type, "corner")
             self.assertEqual((corner.x, corner.y), expected_position)
         self.assertEqual(
@@ -113,8 +116,10 @@ class CombatServiceTests(unittest.TestCase):
         table = scene.landmark("feature:oak_table")
         assert pillar is not None
         assert table is not None
-        self.assertTrue(pillar.supports_behind)
-        self.assertTrue(table.supports_behind)
+        self.assertEqual(pillar.cover, CoverLevel.HALF)
+        self.assertEqual(table.cover, CoverLevel.HALF)
+        self.assertTrue(pillar.auto_connect)
+        self.assertTrue(table.auto_connect)
         self.assertEqual(len(scene.routes), 4)
         for corner_id in expected_corners:
             self.assertTrue(
@@ -129,7 +134,7 @@ class CombatServiceTests(unittest.TestCase):
                 )
             )
 
-    def test_behind_requires_landmark_support_and_disabling_it_resets_relation(self) -> None:
+    def test_behind_requires_cover_and_removing_cover_resets_relation(self) -> None:
         self.service.start(44, self.hall.id)
 
         with self.assertRaisesRegex(
@@ -151,14 +156,14 @@ class CombatServiceTests(unittest.TestCase):
             "feature:stone_pillar",
             LandmarkRelation.BEHIND,
         )
-        scene = self.service.set_landmark_supports_behind(
+        scene = self.service.set_landmark_cover(
             44,
             "feature:stone_pillar",
-            False,
+            CoverLevel.NONE,
         )
         pillar = scene.landmark("feature:stone_pillar")
         assert pillar is not None
-        self.assertFalse(pillar.supports_behind)
+        self.assertEqual(pillar.cover, CoverLevel.NONE)
         olof = next(
             combatant
             for combatant in scene.combatants
@@ -170,11 +175,39 @@ class CombatServiceTests(unittest.TestCase):
             CombatError,
             "Synthetic room anchors",
         ):
-            self.service.set_landmark_supports_behind(
+            self.service.set_landmark_cover(
                 44,
                 "room:corner:nw",
-                True,
+                CoverLevel.HALF,
             )
+
+    def test_auto_connect_can_be_disabled_for_a_landmark(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        scene = self.service.set_landmark_auto_connect(
+            44,
+            "feature:oak_table",
+            False,
+        )
+        table = scene.landmark("feature:oak_table")
+        assert table is not None
+        self.assertFalse(table.auto_connect)
+
+        scene = self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.CLOSE,
+        )
+        self.assertFalse(
+            any(
+                route.automatic
+                and "feature:oak_table" in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
 
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
