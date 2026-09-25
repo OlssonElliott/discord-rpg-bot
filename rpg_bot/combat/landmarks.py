@@ -266,76 +266,107 @@ class CombatLandmarkMixin:
             1 - landmark.y,
         ) <= 0.30
 
+    @staticmethod
+    def _perimeter_side(landmark: CombatLandmark) -> str | None:
+        """Return the nearest room edge for a positioned perimeter landmark."""
+        if landmark.x is None or landmark.y is None:
+            return None
+        distances = {
+            "left": landmark.x,
+            "right": 1 - landmark.x,
+            "top": landmark.y,
+            "bottom": 1 - landmark.y,
+        }
+        side, distance = min(
+            distances.items(),
+            key=lambda item: (item[1], item[0]),
+        )
+        return side if distance <= 0.30 else None
+
     @classmethod
     def _corner_shortcut_pairs(
         cls,
         scene: CombatScene,
     ) -> list[tuple[CombatLandmark, CombatLandmark]]:
-        """Return bounded diagonal shortcuts around synthetic room corners.
+        """Connect the nearest perimeter landmark on each side of every corner.
 
-        Perimeter landmarks are ordered around Room Center. For each corner,
-        connect the nearest non-corner landmark on either side of that corner.
-        This creates natural diagonal movement around the room without turning
-        the combat graph into a full mesh.
+        A northwest corner, for example, links the nearest top-edge landmark
+        to the nearest left-edge landmark. This produces the intended diagonal
+        shortcuts deterministically and does not depend on whole-room angle
+        ordering.
         """
         center = scene.landmark(cls.CENTER_LANDMARK_ID)
-        if (
-            center is None
-            or center.x is None
-            or center.y is None
-        ):
+        if center is None or center.x is None or center.y is None:
             return []
 
-        perimeter = [
-            landmark
-            for landmark in scene.landmarks
+        perimeter_by_side: dict[str, list[CombatLandmark]] = {
+            "left": [],
+            "right": [],
+            "top": [],
+            "bottom": [],
+        }
+        for landmark in scene.landmarks:
             if (
-                landmark.id != cls.CENTER_LANDMARK_ID
-                and landmark.x is not None
-                and landmark.y is not None
-                and (
-                    landmark.feature_type == "corner"
-                    or cls._near_room_edge(landmark)
-                )
-            )
-        ]
-        if len(perimeter) < 3:
-            return []
-
-        ordered = sorted(
-            perimeter,
-            key=lambda landmark: (
-                math.atan2(
-                    landmark.y - center.y,
-                    landmark.x - center.x,
-                ),
-                landmark.id,
-            ),
-        )
+                landmark.id == cls.CENTER_LANDMARK_ID
+                or landmark.feature_type == "corner"
+                or landmark.x is None
+                or landmark.y is None
+            ):
+                continue
+            side = cls._perimeter_side(landmark)
+            if side is not None:
+                perimeter_by_side[side].append(landmark)
 
         pairs: dict[
             frozenset[str],
             tuple[CombatLandmark, CombatLandmark],
         ] = {}
-        for index, corner in enumerate(ordered):
-            if corner.feature_type != "corner":
-                continue
-            source = ordered[(index - 1) % len(ordered)]
-            target = ordered[(index + 1) % len(ordered)]
+
+        for corner in scene.landmarks:
             if (
-                source.feature_type == "corner"
-                or target.feature_type == "corner"
-                or source.id == target.id
+                corner.feature_type != "corner"
+                or corner.x is None
+                or corner.y is None
             ):
                 continue
+
+            horizontal_side = (
+                "left" if corner.x < center.x else "right"
+            )
+            vertical_side = (
+                "top" if corner.y < center.y else "bottom"
+            )
+
+            horizontal_candidates = perimeter_by_side[horizontal_side]
+            vertical_candidates = perimeter_by_side[vertical_side]
+            if not horizontal_candidates or not vertical_candidates:
+                continue
+
+            horizontal = min(
+                horizontal_candidates,
+                key=lambda landmark: (
+                    cls._distance_between(corner, landmark),
+                    landmark.id,
+                ),
+            )
+            vertical = min(
+                vertical_candidates,
+                key=lambda landmark: (
+                    cls._distance_between(corner, landmark),
+                    landmark.id,
+                ),
+            )
+            if horizontal.id == vertical.id:
+                continue
             if not cls._automatic_route_is_local(
-                source,
-                target,
+                horizontal,
+                vertical,
                 scene.landmarks,
             ):
                 continue
-            pair = frozenset((source.id, target.id))
-            pairs[pair] = (source, target)
+
+            pair = frozenset((horizontal.id, vertical.id))
+            pairs[pair] = (horizontal, vertical)
 
         return [
             pairs[pair]
