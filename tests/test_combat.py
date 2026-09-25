@@ -208,50 +208,56 @@ class CombatServiceTests(unittest.TestCase):
             1,
         )
 
-    def test_auto_connect_center_restores_missing_center_routes_as_close(self) -> None:
-        scene = self.service.start(44, self.hall.id)
-        target = "feature:stone_pillar"
-        self.service.disconnect_landmarks(
-            44,
-            "room:center",
-            target,
-        )
-
-        scene = self.service.auto_connect_landmark(
-            44,
-            "room:center",
-        )
-        restored = next(
-            route
-            for route in scene.routes
-            if {
-                route.source_landmark_id,
-                route.destination_landmark_id,
-            }
-            == {"room:center", target}
-        )
-        self.assertEqual(restored.distance, LandmarkDistance.CLOSE)
-
-    def test_auto_connect_landmark_restores_its_center_route_as_close(self) -> None:
+    def test_auto_connect_works_without_center_or_corner_landmarks(self) -> None:
         self.service.start(44, self.hall.id)
-        target = "feature:stone_pillar"
-        self.service.disconnect_landmarks(
+
+        character_id = str(self.olof.character_id)
+        self.service.move_combatant(
             44,
-            "room:center",
-            target,
+            CombatantKind.CHARACTER,
+            character_id,
+            "feature:stone_pillar",
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            "bandit",
+            "feature:stone_pillar",
         )
 
-        scene = self.service.auto_connect_landmark(44, target)
-        restored = next(
-            route
-            for route in scene.routes
-            if {
-                route.source_landmark_id,
-                route.destination_landmark_id,
-            }
-            == {"room:center", target}
+        for landmark_id in (
+            "room:center",
+            "room:corner:nw",
+            "room:corner:ne",
+            "room:corner:sw",
+            "room:corner:se",
+        ):
+            self.service.remove_landmark(44, landmark_id)
+
+        scene = self.service.auto_connect_all(44)
+
+        self.assertIsNone(scene.landmark("room:center"))
+        self.assertFalse(
+            any(
+                landmark.feature_type == "corner"
+                for landmark in scene.landmarks
+            )
         )
-        self.assertEqual(restored.distance, LandmarkDistance.CLOSE)
+        self.assertTrue(scene.routes)
+        remaining_ids = {landmark.id for landmark in scene.landmarks}
+        self.assertTrue(
+            all(
+                route.source_landmark_id in remaining_ids
+                and route.destination_landmark_id in remaining_ids
+                for route in scene.routes
+            )
+        )
+        self.assertTrue(
+            all(
+                route.distance is LandmarkDistance.CLOSE
+                for route in scene.routes
+            )
+        )
 
     def test_disconnect_landmark_routes_removes_manual_and_automatic_routes(self) -> None:
         self.service.start(44, self.hall.id)
@@ -272,25 +278,23 @@ class CombatServiceTests(unittest.TestCase):
             )
         )
 
-    def test_auto_connect_all_adds_balanced_local_routes(self) -> None:
+    def test_auto_connect_all_adds_local_geometric_routes(self) -> None:
         scene = self.service.start(44, self.hall.id)
         initial_count = len(scene.routes)
 
         scene = self.service.auto_connect_all(44)
 
         self.assertGreater(len(scene.routes), initial_count)
-        non_center_degrees = {
-            landmark.id: sum(
-                landmark.id in {
-                    route.source_landmark_id,
-                    route.destination_landmark_id,
-                }
-                for route in scene.routes
+        automatic_routes = [
+            route for route in scene.routes if route.automatic
+        ]
+        self.assertTrue(automatic_routes)
+        self.assertTrue(
+            all(
+                route.distance is LandmarkDistance.CLOSE
+                for route in automatic_routes
             )
-            for landmark in scene.landmarks
-            if landmark.id != "room:center"
-        }
-        self.assertTrue(all(degree <= 3 for degree in non_center_degrees.values()))
+        )
 
     def test_auto_connect_all_skips_distant_shortcuts(self) -> None:
         scene = self.service.start(44, self.hall.id)
@@ -306,16 +310,6 @@ class CombatServiceTests(unittest.TestCase):
                 for route in automatic_routes
             )
         )
-        self.assertTrue(
-            all(
-                "room:center" not in {
-                    route.source_landmark_id,
-                    route.destination_landmark_id,
-                }
-                for route in automatic_routes
-            )
-        )
-
     def test_auto_connect_all_uses_west_door_as_intermediate_landmark(self) -> None:
         self.world.connect_rooms(
             self.hall.id,
