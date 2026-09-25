@@ -1,7 +1,10 @@
 import {
+  BaseEdge,
+  EdgeLabelRenderer,
   Handle,
   Position,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
 } from '@xyflow/react';
@@ -45,6 +48,12 @@ export const COMBAT_LAYOUT_HEIGHT = 700;
 export type CombatLandmarkNodeData = {
   landmark: CombatLandmarkData;
   combatants: CombatantData[];
+} & Record<string, unknown>;
+
+type CombatEdgeData = {
+  label: string;
+  showLabel: boolean;
+  labelPosition: number;
 } & Record<string, unknown>;
 
 type LandmarkHandle =
@@ -194,7 +203,49 @@ function CombatLandmarkNode({
   );
 }
 
+function CombatConnectionEdge({
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  markerEnd,
+  markerStart,
+  style,
+  interactionWidth,
+  data,
+}: EdgeProps<Edge<CombatEdgeData>>) {
+  const edgePath = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+  const position = data?.labelPosition ?? 0.5;
+  const labelX = sourceX + (targetX - sourceX) * position;
+  const labelY = sourceY + (targetY - sourceY) * position;
+
+  return (
+    <>
+      <BaseEdge
+        path={edgePath}
+        markerEnd={markerEnd}
+        markerStart={markerStart}
+        style={style}
+        interactionWidth={interactionWidth}
+      />
+      {data?.showLabel && data.label && (
+        <EdgeLabelRenderer>
+          <div
+            className="combat-edge-label"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            }}
+          >
+            {data.label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
 export const combatNodeTypes = { landmark: CombatLandmarkNode };
+export const combatEdgeTypes = { combat: CombatConnectionEdge };
 
 export function combatNodes(
   scene: CombatSceneData,
@@ -225,15 +276,54 @@ export function combatNodes(
   });
 }
 
+type EdgeDraft = {
+  edge: Edge<CombatEdgeData>;
+  sourcePoint: { x: number; y: number };
+  targetPoint: { x: number; y: number };
+};
+
+function nodeCenter(node: Node<CombatLandmarkNodeData>) {
+  const width = node.measured?.width ?? 178;
+  const height = node.measured?.height ?? 76;
+  return {
+    x: node.position.x + width / 2,
+    y: node.position.y + height / 2,
+  };
+}
+
+function segmentsCross(
+  firstSource: { x: number; y: number },
+  firstTarget: { x: number; y: number },
+  secondSource: { x: number; y: number },
+  secondTarget: { x: number; y: number },
+): boolean {
+  const orientation = (
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    c: { x: number; y: number },
+  ) => (
+    (b.x - a.x) * (c.y - a.y)
+    - (b.y - a.y) * (c.x - a.x)
+  );
+  const a = orientation(firstSource, firstTarget, secondSource);
+  const b = orientation(firstSource, firstTarget, secondTarget);
+  const c = orientation(secondSource, secondTarget, firstSource);
+  const d = orientation(secondSource, secondTarget, firstTarget);
+  const epsilon = 1e-9;
+  return a * b < -epsilon && c * d < -epsilon;
+}
+
 export function combatEdges(
   scene: CombatSceneData,
   nodes: Node<CombatLandmarkNodeData>[],
   selectedRouteId: string | null,
 ): Edge[] {
+  const nodesById = new globalThis.Map(nodes.map((node) => [node.id, node]));
   const positions = new globalThis.Map(
     nodes.map((node) => [node.id, node.position]),
   );
-  return scene.routes.map((route) => {
+
+  const drafts: EdgeDraft[] = scene.routes.map((route) => {
     const id = routeKey(
       route.source_landmark_id,
       route.destination_landmark_id,
@@ -250,34 +340,91 @@ export function combatEdges(
       ),
     );
     const travellerLabel = travellers
-      .map(
-        (combatant) => (
-          `${combatant.name} ${combatant.route_progress}/${combatant.route_cost}`
-        ),
-      )
+      .map((combatant) => (
+        `${combatant.name} ${combatant.route_progress}/${combatant.route_cost}`
+      ))
       .join(', ');
     const routeLabel = route.blocked
       ? `${route.distance} · move ${route.movement_cost} · blocked`
       : `${route.distance} · move ${route.movement_cost}`;
+    const label = travellerLabel
+      ? `${routeLabel} · ${travellerLabel}`
+      : routeLabel;
+
+    const sourceNode = nodesById.get(route.source_landmark_id);
+    const targetNode = nodesById.get(route.destination_landmark_id);
+    const sourcePoint = sourceNode
+      ? nodeCenter(sourceNode)
+      : positions.get(route.source_landmark_id) ?? { x: 0, y: 0 };
+    const targetPoint = targetNode
+      ? nodeCenter(targetNode)
+      : positions.get(route.destination_landmark_id) ?? { x: 0, y: 0 };
 
     return {
-      id,
-      source: route.source_landmark_id,
-      target: route.destination_landmark_id,
-      ...connectionHandles(
-        positions.get(route.source_landmark_id),
-        positions.get(route.destination_landmark_id),
-      ),
-      type: 'straight',
-      label: travellerLabel
-        ? `${routeLabel} · ${travellerLabel}`
-        : routeLabel,
-      selected: id === selectedRouteId,
-      className: [
-        'combat-connection-edge',
-        route.blocked ? 'combat-connection-edge--blocked' : '',
-        travellers.length ? 'combat-connection-edge--occupied' : '',
-      ].filter(Boolean).join(' '),
+      sourcePoint,
+      targetPoint,
+      edge: {
+        id,
+        source: route.source_landmark_id,
+        target: route.destination_landmark_id,
+        ...connectionHandles(
+          positions.get(route.source_landmark_id),
+          positions.get(route.destination_landmark_id),
+        ),
+        type: 'combat',
+        selected: id === selectedRouteId,
+        data: {
+          label,
+          showLabel: true,
+          labelPosition: 0.5,
+        },
+        className: [
+          'combat-connection-edge',
+          route.blocked ? 'combat-connection-edge--blocked' : '',
+          travellers.length ? 'combat-connection-edge--occupied' : '',
+        ].filter(Boolean).join(' '),
+      },
     };
   });
+
+  for (let i = 0; i < drafts.length; i += 1) {
+    for (let j = i + 1; j < drafts.length; j += 1) {
+      const first = drafts[i];
+      const second = drafts[j];
+      if (
+        first.edge.source === second.edge.source
+        || first.edge.source === second.edge.target
+        || first.edge.target === second.edge.source
+        || first.edge.target === second.edge.target
+      ) {
+        continue;
+      }
+      if (!segmentsCross(
+        first.sourcePoint,
+        first.targetPoint,
+        second.sourcePoint,
+        second.targetPoint,
+      )) {
+        continue;
+      }
+
+      const firstData = first.edge.data;
+      const secondData = second.edge.data;
+      if (!firstData || !secondData) continue;
+
+      if (firstData.label === secondData.label) {
+        if (first.edge.id.localeCompare(second.edge.id) <= 0) {
+          secondData.showLabel = false;
+        } else {
+          firstData.showLabel = false;
+        }
+      } else {
+        const firstEarlier = first.edge.id.localeCompare(second.edge.id) <= 0;
+        firstData.labelPosition = firstEarlier ? 0.34 : 0.66;
+        secondData.labelPosition = firstEarlier ? 0.66 : 0.34;
+      }
+    }
+  }
+
+  return drafts.map(({ edge }) => edge);
 }
