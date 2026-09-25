@@ -389,6 +389,20 @@ class CombatRepository:
             ).fetchone()
             return self._load_scene(connection, row) if row is not None else None
 
+    def get_scene(self, scene_id: int) -> CombatScene | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT id, guild_id, room_id, status, round_number,
+                       current_turn_kind, current_turn_source_id
+                FROM combat_scenes
+                WHERE id = ?
+                """,
+                (scene_id,),
+            ).fetchone()
+            return self._load_scene(connection, row) if row is not None else None
+
     def add_combatant(
         self,
         scene_id: int,
