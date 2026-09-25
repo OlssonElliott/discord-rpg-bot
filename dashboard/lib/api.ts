@@ -162,7 +162,8 @@ export type CombatLandmarkData = {
   source_connection_id: string | null;
   feature_type: string | null;
   synthetic: boolean;
-  supports_behind: boolean;
+  cover: 'none' | 'half' | 'full';
+  auto_connect: boolean;
   x: number | null;
   y: number | null;
 };
@@ -174,6 +175,7 @@ export type CombatRouteData = {
   movement_cost: number;
   obstacle: string | null;
   blocked: boolean;
+  automatic: boolean;
 };
 
 export type CombatantData = {
