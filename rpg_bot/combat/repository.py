@@ -10,7 +10,7 @@ from .models import (
     CombatLandmark,
     CombatLogEntry,
     CombatRoute,
-    CombatRouteEffect,
+    CombatEffect,
     CombatScene,
     CombatStatus,
     CombatantKind,
@@ -898,7 +898,7 @@ class CombatRepository:
         scene_id: int,
         source_landmark_id: str,
         destination_landmark_id: str,
-        effect: CombatRouteEffect,
+        effect: CombatEffect,
     ) -> None:
         source_landmark_id, destination_landmark_id = sorted(
             (source_landmark_id, destination_landmark_id)
@@ -1210,7 +1210,7 @@ class CombatRepository:
         ).fetchall()
         effects_by_route: dict[
             tuple[str, str],
-            list[CombatRouteEffect],
+            list[CombatEffect],
         ] = {}
         for item in effect_rows:
             key = (
@@ -1218,7 +1218,7 @@ class CombatRepository:
                 item["destination_landmark_id"],
             )
             effects_by_route.setdefault(key, []).append(
-                CombatRouteEffect(
+                CombatEffect(
                     id=item["id"],
                     name=item["name"],
                     effect_type=item["effect_type"],
