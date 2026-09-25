@@ -351,8 +351,8 @@ export function CombatWorkspace({
   }, [busy, onConnectLandmarks, scene, selectRoute]);
 
   const saveLandmarkPosition = useCallback(
-    (_event: unknown, node: Node<CombatLandmarkNodeData>) => {
-      void onPositionLandmark(
+    async (_event: unknown, node: Node<CombatLandmarkNodeData>) => {
+      await onPositionLandmark(
         node.id,
         clamp(node.position.x / COMBAT_LAYOUT_WIDTH),
         clamp(node.position.y / COMBAT_LAYOUT_HEIGHT),
