@@ -41,7 +41,12 @@ class CombatLandmarkMixin:
         )
         try:
             self.repository.add_landmark(scene.id, landmark)
-            self._refresh_auto_routes(scene.id, landmark.id)
+            self.repository.set_route(
+                scene.id,
+                self.CENTER_LANDMARK_ID,
+                landmark.id,
+                LandmarkDistance.CLOSE,
+            )
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
@@ -129,9 +134,6 @@ class CombatLandmarkMixin:
         scene = self._require_current(guild_id)
         try:
             self.repository.set_landmark_position(scene.id, landmark_id, x, y)
-            landmark = scene.landmark(landmark_id)
-            if landmark is not None and landmark.auto_connect:
-                self._refresh_auto_routes(scene.id, landmark_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
@@ -164,35 +166,6 @@ class CombatLandmarkMixin:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
-    def set_landmark_auto_connect(
-        self,
-        guild_id: int,
-        landmark_id: str,
-        auto_connect: bool,
-    ) -> CombatScene:
-        if not isinstance(auto_connect, bool):
-            raise CombatError("auto_connect must be a boolean.")
-        scene = self._require_current(guild_id)
-        landmark = scene.landmark(landmark_id)
-        if landmark is None:
-            raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
-        try:
-            self.repository.set_landmark_auto_connect(
-                scene.id,
-                landmark_id,
-                auto_connect,
-            )
-            if auto_connect:
-                self._refresh_auto_routes(scene.id, landmark_id)
-            elif not auto_connect:
-                self.repository.delete_automatic_routes_for_landmark(
-                    scene.id,
-                    landmark_id,
-                )
-        except ValueError as error:
-            raise CombatError(str(error)) from error
-        return self._require_current(guild_id)
-
     @staticmethod
     def _automatic_distance(
         source: CombatLandmark,
@@ -207,35 +180,17 @@ class CombatLandmarkMixin:
             return LandmarkDistance.FAR
         return LandmarkDistance.DISTANT
 
-    def _refresh_auto_routes(
+    def auto_connect_landmark(
         self,
-        scene_id: int,
+        guild_id: int,
         landmark_id: str,
-    ) -> None:
-        scene = self.repository.get_scene(scene_id)
-        if scene is None:
-            return
-        source = scene.landmark(landmark_id)
-        if (
-            source is None
-            or not source.auto_connect
-            or source.x is None
-            or source.y is None
-        ):
-            return
-
-        # Rebuild only the system-owned routes for this landmark. Manual
-        # connections are preserved and count toward the desired local degree.
-        self.repository.delete_automatic_routes_for_landmark(
-            scene_id,
-            landmark_id,
-        )
-        scene = self.repository.get_scene(scene_id)
-        if scene is None:
-            return
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
         source = scene.landmark(landmark_id)
         if source is None:
-            return
+            raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
+        if source.x is None or source.y is None:
+            raise CombatError("Landmark must have a map position before auto-connect.")
 
         connected_ids: set[str] = set()
         for route in scene.routes:
@@ -246,7 +201,7 @@ class CombatLandmarkMixin:
 
         missing_connections = max(0, 3 - len(connected_ids))
         if missing_connections == 0:
-            return
+            return scene
 
         candidates = [
             landmark
@@ -254,7 +209,6 @@ class CombatLandmarkMixin:
             if (
                 landmark.id != source.id
                 and landmark.id not in connected_ids
-                and landmark.auto_connect
                 and landmark.x is not None
                 and landmark.y is not None
             )
@@ -266,14 +220,55 @@ class CombatLandmarkMixin:
             )
         )
 
-        for target in candidates[:missing_connections]:
-            self.repository.set_route(
-                scene_id,
-                source.id,
-                target.id,
-                self._automatic_distance(source, target),
-                automatic=True,
+        try:
+            for target in candidates[:missing_connections]:
+                self.repository.set_route(
+                    scene.id,
+                    source.id,
+                    target.id,
+                    self._automatic_distance(source, target),
+                    automatic=True,
+                )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def auto_connect_all(self, guild_id: int) -> CombatScene:
+        scene = self._require_current(guild_id)
+        for landmark in scene.landmarks:
+            self.auto_connect_landmark(guild_id, landmark.id)
+        return self._require_current(guild_id)
+
+    def disconnect_landmark_routes(
+        self,
+        guild_id: int,
+        landmark_id: str,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if scene.landmark(landmark_id) is None:
+            raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
+        if any(
+            combatant.is_between_landmarks
+            and landmark_id in {
+                combatant.route_source_landmark_id,
+                combatant.route_destination_landmark_id,
+            }
+            for combatant in scene.combatants
+        ):
+            raise CombatError(
+                "Move combatants off this landmark's connections before removing them."
             )
+        self.repository.delete_routes_for_landmark(scene.id, landmark_id)
+        return self._require_current(guild_id)
+
+    def disconnect_all_routes(self, guild_id: int) -> CombatScene:
+        scene = self._require_current(guild_id)
+        if any(combatant.is_between_landmarks for combatant in scene.combatants):
+            raise CombatError(
+                "Move combatants off all connections before removing them."
+            )
+        self.repository.delete_all_routes(scene.id)
+        return self._require_current(guild_id)
 
     def connect_landmarks(
         self,
@@ -318,13 +313,6 @@ class CombatLandmarkMixin:
                 base_blocked=base_blocked,
                 automatic=False,
             )
-            for candidate_id in (source_landmark_id, destination_landmark_id):
-                candidate = scene.landmark(candidate_id)
-                if (
-                    candidate is not None
-                    and candidate.auto_connect
-                ):
-                    self._refresh_auto_routes(scene.id, candidate_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
