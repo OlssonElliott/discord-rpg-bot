@@ -102,6 +102,11 @@ class CombatRoute:
             or any(effect.blocks_movement for effect in self.effects)
         )
 
+    @property
+    def obstacle(self) -> None:
+        """Deprecated compatibility shim for pre-terrain dashboard callers."""
+        return None
+
 
 @dataclass(frozen=True, slots=True)
 class CombatantState:
