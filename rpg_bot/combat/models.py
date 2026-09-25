@@ -51,13 +51,19 @@ class CombatLandmark:
 
 
 @dataclass(frozen=True, slots=True)
-class CombatRouteEffect:
+class CombatEffect:
+    """Effect payload independent of where the effect is placed."""
+
     id: str
     name: str
     effect_type: str
     blocks_movement: bool = False
     movement_cost_modifier: int = 0
     remaining_rounds: int | None = None
+
+
+# Backwards-compatible name while route effects are the only persisted placement.
+CombatRouteEffect = CombatEffect
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +74,7 @@ class CombatRoute:
     terrain: RouteTerrain = RouteTerrain.NORMAL
     base_blocked: bool = False
     automatic: bool = False
-    effects: tuple[CombatRouteEffect, ...] = ()
+    effects: tuple[CombatEffect, ...] = ()
 
     @property
     def base_movement_cost(self) -> int:
