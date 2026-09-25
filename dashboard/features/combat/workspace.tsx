@@ -66,9 +66,13 @@ type CombatWorkspaceProps = {
   onEnd: () => Promise<boolean>;
   onRefresh: () => Promise<void>;
   onPositionLandmark: (landmarkId: string, x: number, y: number) => Promise<boolean>;
-  onSetLandmarkSupportsBehind: (
+  onSetLandmarkCover: (
     landmarkId: string,
-    supportsBehind: boolean,
+    cover: CombatLandmarkData['cover'],
+  ) => Promise<boolean>;
+  onSetLandmarkAutoConnect: (
+    landmarkId: string,
+    autoConnect: boolean,
   ) => Promise<boolean>;
   onMoveCombatant: (
     combatant: CombatantData,
@@ -636,10 +640,10 @@ function CombatantEditor({
   ]);
 
   useEffect(() => {
-    if (relation === 'behind' && !movementLandmark?.supports_behind) {
+    if (relation === 'behind' && movementLandmark?.cover === 'none') {
       setRelation('at');
     }
-  }, [movementLandmark?.supports_behind, relation]);
+  }, [movementLandmark?.cover, relation]);
 
   useEffect(() => {
     const validTarget = scene.combatants.some(
@@ -745,7 +749,7 @@ function CombatantEditor({
         onChange={(event) => setRelation(event.target.value as Relation)}
       >
         <NativeSelectOption value="at">At</NativeSelectOption>
-        {movementLandmark?.supports_behind && (
+        {movementLandmark?.cover !== 'none' && (
           <NativeSelectOption value="behind">Behind</NativeSelectOption>
         )}
       </NativeSelect>
@@ -873,7 +877,8 @@ export function CombatWorkspace({
   onEnd,
   onRefresh,
   onPositionLandmark,
-  onSetLandmarkSupportsBehind,
+  onSetLandmarkCover,
+  onSetLandmarkAutoConnect,
   onMoveCombatant,
   onAddEnemy,
   onRemoveEnemy,
@@ -1361,21 +1366,35 @@ export function CombatWorkspace({
               {selectedLandmark.source_feature_id && (
                 <p className="combat-selection-meta">Snapshot of a room feature.</p>
               )}
+              <label htmlFor="combat-landmark-cover">Cover</label>
+              <NativeSelect
+                id="combat-landmark-cover"
+                value={selectedLandmark.cover}
+                disabled={busy || selectedLandmark.synthetic}
+                onChange={(event) => void onSetLandmarkCover(
+                  selectedLandmark.id,
+                  event.target.value as CombatLandmarkData['cover'],
+                )}
+              >
+                <NativeSelectOption value="none">None</NativeSelectOption>
+                <NativeSelectOption value="half">Half</NativeSelectOption>
+                <NativeSelectOption value="full">Full</NativeSelectOption>
+              </NativeSelect>
               <label className="combat-checkbox">
                 <input
                   type="checkbox"
-                  checked={selectedLandmark.supports_behind}
-                  disabled={busy || selectedLandmark.synthetic}
-                  onChange={(event) => void onSetLandmarkSupportsBehind(
+                  checked={selectedLandmark.auto_connect}
+                  disabled={busy}
+                  onChange={(event) => void onSetLandmarkAutoConnect(
                     selectedLandmark.id,
                     event.target.checked,
                   )}
                 />
-                Supports a Behind position
+                Auto connect
               </label>
               {selectedLandmark.synthetic && (
                 <p className="combat-selection-meta">
-                  Room anchors are movement positions and cannot provide Behind.
+                  Room anchors are movement positions and cannot provide cover.
                 </p>
               )}
               {selectedLandmark.feature_type === 'custom' && (
