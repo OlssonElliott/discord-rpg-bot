@@ -93,6 +93,8 @@ button, input, textarea { font: inherit; }
 .react-flow__controls, .react-flow__minimap { border: 1px solid #2c3a50; border-radius: 8px; overflow: hidden; background: #101927; }
 .react-flow__controls-button { color: #c8d0da; border-bottom-color: #2c3a50; background: #101927; }
 .react-flow__controls-button svg { fill: currentColor; }
+.graph-panel .react-flow__controls-button svg,
+.combat-board .react-flow__controls-button svg { color: #111; fill: #111; }
 .inspector { overflow-y: auto; padding: 16px 22px 32px; border-left: 1px solid #26344a; background: #0f1724; }
 .inspector__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 14px; padding-bottom: 9px; color: #718096; font-size: .64rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; border-bottom: 1px solid #1e2b3e; }
 .inspector__toolbar button { color: #8e9bae; }
