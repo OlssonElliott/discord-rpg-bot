@@ -11,6 +11,7 @@ from .models import (
     CombatScene,
     CombatantKind,
     CombatantState,
+    CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
 )
@@ -67,7 +68,7 @@ class CombatLifecycleMixin:
                 description=feature.description,
                 source_feature_id=feature.id,
                 feature_type=feature.feature_type.value,
-                supports_behind=True,
+                cover=CoverLevel.HALF,
             )
             for feature in self.world.list_room_features(room_id)
         )
