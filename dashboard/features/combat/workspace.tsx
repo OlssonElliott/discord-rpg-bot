@@ -247,22 +247,7 @@ export function CombatWorkspace({
     }
     const nextNodes = combatNodes(scene, selectedLandmarkId);
     const frame = window.requestAnimationFrame(() => {
-      if (draggingLandmarkId) {
-        const currentPositions = new Map(
-          nodes.map((node) => [node.id, node.position]),
-        );
-        const mergedNodes = nextNodes.map((node) => (
-          node.id === draggingLandmarkId && currentPositions.has(node.id)
-            ? {
-                ...node,
-                position: currentPositions.get(node.id)!,
-              }
-            : node
-        ));
-        setNodes(mergedNodes);
-        setEdges(combatEdges(scene, mergedNodes, selectedRouteId));
-        return;
-      }
+      if (draggingLandmarkId) return;
       setNodes(nextNodes);
       setEdges(combatEdges(scene, nextNodes, selectedRouteId));
     });
@@ -294,7 +279,6 @@ export function CombatWorkspace({
     return () => window.cancelAnimationFrame(frame);
   }, [
     draggingLandmarkId,
-    nodes,
     scene,
     selectedCombatantKey,
     selectedLandmarkId,
