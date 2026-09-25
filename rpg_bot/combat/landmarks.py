@@ -41,15 +41,9 @@ class CombatLandmarkMixin:
         )
         try:
             self.repository.add_landmark(scene.id, landmark)
-            self.repository.set_route(
-                scene.id,
-                self.CENTER_LANDMARK_ID,
-                landmark.id,
-                LandmarkDistance.CLOSE,
-            )
         except ValueError as error:
             raise CombatError(str(error)) from error
-        return self._require_current(guild_id)
+        return self.auto_connect_landmark(guild_id, landmark.id)
 
     def disconnect_landmarks(
         self,
@@ -89,8 +83,6 @@ class CombatLandmarkMixin:
         landmark = scene.landmark(landmark_id)
         if landmark is None:
             raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
-        if landmark.feature_type != "custom":
-            raise CombatError("Only manually added combat landmarks can be removed.")
         if any(
             combatant.landmark_id == landmark_id
             or combatant.route_source_landmark_id == landmark_id
