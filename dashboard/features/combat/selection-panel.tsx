@@ -139,20 +139,18 @@ export function SelectionPanel({
             Room anchors are movement positions and cannot provide cover.
           </p>
         )}
-        {selectedLandmark.feature_type === 'custom' && (
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={busy}
-            onClick={() => void onDeleteLandmark(selectedLandmark.id).then(
-              (removed) => {
-                if (removed) onClearLandmarkSelection();
-              },
-            )}
-          >
-            <Trash2 /> Remove landmark
-          </Button>
-        )}
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={busy}
+          onClick={() => void onDeleteLandmark(selectedLandmark.id).then(
+            (removed) => {
+              if (removed) onClearLandmarkSelection();
+            },
+          )}
+        >
+          <Trash2 /> Remove landmark
+        </Button>
       </div>
     );
   }
