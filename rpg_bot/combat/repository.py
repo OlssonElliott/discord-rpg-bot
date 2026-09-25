@@ -69,8 +69,6 @@ class CombatRepository:
                 y REAL,
                 cover TEXT NOT NULL DEFAULT 'none'
                     CHECK (cover IN ('none', 'half', 'full')),
-                auto_connect INTEGER NOT NULL DEFAULT 1
-                    CHECK (auto_connect IN (0, 1)),
                 PRIMARY KEY (scene_id, id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE
             );
@@ -184,13 +182,6 @@ class CombatRepository:
                     "UPDATE combat_landmarks SET cover = 'half' "
                     "WHERE source_feature_id IS NOT NULL"
                 )
-        if "auto_connect" not in landmark_columns:
-            connection.execute(
-                "ALTER TABLE combat_landmarks "
-                "ADD COLUMN auto_connect INTEGER NOT NULL DEFAULT 1 "
-                "CHECK (auto_connect IN (0, 1))"
-            )
-
         route_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(combat_routes)")
@@ -332,8 +323,8 @@ class CombatRepository:
                 INSERT INTO combat_landmarks (
                     scene_id, id, name, description, source_feature_id,
                     source_connection_id, feature_type, synthetic, x, y,
-                    cover, auto_connect
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cover
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -348,7 +339,6 @@ class CombatRepository:
                         landmark.x,
                         landmark.y,
                         landmark.cover.value,
-                        int(landmark.auto_connect),
                     )
                     for landmark in landmarks
                 ],
@@ -763,8 +753,8 @@ class CombatRepository:
                     INSERT INTO combat_landmarks (
                         scene_id, id, name, description, source_feature_id,
                         source_connection_id, feature_type, synthetic, x, y,
-                        cover, auto_connect
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cover
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -778,7 +768,6 @@ class CombatRepository:
                         landmark.x,
                         landmark.y,
                         landmark.cover.value,
-                        int(landmark.auto_connect),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -850,25 +839,6 @@ class CombatRepository:
                     """,
                     (scene_id, landmark_id),
                 )
-
-    def set_landmark_auto_connect(
-        self,
-        scene_id: int,
-        landmark_id: str,
-        auto_connect: bool,
-    ) -> None:
-        with self._connect() as connection:
-            self._ensure_schema(connection)
-            cursor = connection.execute(
-                """
-                UPDATE combat_landmarks
-                SET auto_connect = ?
-                WHERE scene_id = ? AND id = ?
-                """,
-                (int(auto_connect), scene_id, landmark_id),
-            )
-            if cursor.rowcount == 0:
-                raise ValueError(f"Unknown combat landmark '{landmark_id}'.")
 
     def set_route(
         self,
@@ -987,6 +957,36 @@ class CombatRepository:
                 raise ValueError(
                     f"Unknown combat route effect '{effect_id}'."
                 )
+
+    def delete_routes_for_landmark(
+        self,
+        scene_id: int,
+        landmark_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                DELETE FROM combat_routes
+                WHERE scene_id = ?
+                  AND (
+                    source_landmark_id = ?
+                    OR destination_landmark_id = ?
+                  )
+                """,
+                (scene_id, landmark_id, landmark_id),
+            )
+
+    def delete_all_routes(
+        self,
+        scene_id: int,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                "DELETE FROM combat_routes WHERE scene_id = ?",
+                (scene_id,),
+            )
 
     def delete_automatic_routes_for_landmark(
         self,
@@ -1166,7 +1166,7 @@ class CombatRepository:
         landmark_rows = connection.execute(
             """
             SELECT id, name, description, source_feature_id, source_connection_id,
-                   feature_type, synthetic, x, y, cover, auto_connect
+                   feature_type, synthetic, x, y, cover
             FROM combat_landmarks
             WHERE scene_id = ?
             ORDER BY synthetic DESC, name COLLATE NOCASE, id
@@ -1255,7 +1255,6 @@ class CombatRepository:
                     x=item["x"],
                     y=item["y"],
                     cover=CoverLevel(item["cover"]),
-                    auto_connect=bool(item["auto_connect"]),
                 )
                 for item in landmark_rows
             ),
