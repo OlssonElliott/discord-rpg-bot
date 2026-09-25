@@ -74,51 +74,90 @@ export function combatantKey(combatant: CombatantData) {
   return `${combatant.kind}:${combatant.source_id}`;
 }
 
-function connectionHandles(
-  source: { x: number; y: number } | undefined,
-  target: { x: number; y: number } | undefined,
-): { sourceHandle?: LandmarkHandle; targetHandle?: LandmarkHandle } {
-  if (!source || !target) return {};
+const HANDLE_ANGLES: Array<{ handle: LandmarkHandle; angle: number }> = [
+  { handle: 'right', angle: 0 },
+  { handle: 'bottom-right', angle: Math.PI / 4 },
+  { handle: 'bottom', angle: Math.PI / 2 },
+  { handle: 'bottom-left', angle: Math.PI * 3 / 4 },
+  { handle: 'left', angle: Math.PI },
+  { handle: 'top-left', angle: -Math.PI * 3 / 4 },
+  { handle: 'top', angle: -Math.PI / 2 },
+  { handle: 'top-right', angle: -Math.PI / 4 },
+];
 
-  const dx = target.x - source.x;
-  const dy = target.y - source.y;
-  const absX = Math.abs(dx);
-  const absY = Math.abs(dy);
+function angleDistance(first: number, second: number) {
+  const difference = Math.abs(first - second) % (Math.PI * 2);
+  return Math.min(difference, Math.PI * 2 - difference);
+}
 
-  if (absX > absY * 2) {
-    return dx >= 0
-      ? { sourceHandle: 'right', targetHandle: 'left' }
-      : { sourceHandle: 'left', targetHandle: 'right' };
+function routeHandleAssignments(
+  scene: CombatSceneData,
+  positions: Map<string, { x: number; y: number }>,
+): Map<string, { sourceHandle?: LandmarkHandle; targetHandle?: LandmarkHandle }> {
+  const assignments = new Map<
+    string,
+    { sourceHandle?: LandmarkHandle; targetHandle?: LandmarkHandle }
+  >();
+
+  for (const landmark of scene.landmarks) {
+    const sourcePosition = positions.get(landmark.id);
+    if (!sourcePosition) continue;
+
+    const incident = scene.routes
+      .filter(
+        (route) => (
+          route.source_landmark_id === landmark.id
+          || route.destination_landmark_id === landmark.id
+        ),
+      )
+      .map((route) => {
+        const otherId = route.source_landmark_id === landmark.id
+          ? route.destination_landmark_id
+          : route.source_landmark_id;
+        const otherPosition = positions.get(otherId);
+        if (!otherPosition) return null;
+        return {
+          route,
+          key: routeKey(
+            route.source_landmark_id,
+            route.destination_landmark_id,
+          ),
+          angle: Math.atan2(
+            otherPosition.y - sourcePosition.y,
+            otherPosition.x - sourcePosition.x,
+          ),
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+      .sort((first, second) => (
+        first.angle - second.angle
+        || first.key.localeCompare(second.key)
+      ));
+
+    const available = new Set(HANDLE_ANGLES.map(({ handle }) => handle));
+
+    for (const item of incident) {
+      const orderedHandles = HANDLE_ANGLES
+        .slice()
+        .sort((first, second) => (
+          angleDistance(item.angle, first.angle)
+          - angleDistance(item.angle, second.angle)
+        ));
+      const chosen = orderedHandles.find(({ handle }) => available.has(handle))
+        ?? orderedHandles[0];
+      available.delete(chosen.handle);
+
+      const current = assignments.get(item.key) ?? {};
+      if (item.route.source_landmark_id === landmark.id) {
+        current.sourceHandle = chosen.handle;
+      } else {
+        current.targetHandle = chosen.handle;
+      }
+      assignments.set(item.key, current);
+    }
   }
 
-  if (absY > absX * 2) {
-    return dy >= 0
-      ? { sourceHandle: 'bottom', targetHandle: 'top' }
-      : { sourceHandle: 'top', targetHandle: 'bottom' };
-  }
-
-  if (dx >= 0 && dy >= 0) {
-    return {
-      sourceHandle: 'bottom-right',
-      targetHandle: 'top-left',
-    };
-  }
-  if (dx >= 0) {
-    return {
-      sourceHandle: 'top-right',
-      targetHandle: 'bottom-left',
-    };
-  }
-  if (dy >= 0) {
-    return {
-      sourceHandle: 'bottom-left',
-      targetHandle: 'top-right',
-    };
-  }
-  return {
-    sourceHandle: 'top-left',
-    targetHandle: 'bottom-right',
-  };
+  return assignments;
 }
 
 function CombatLandmarkNode({
@@ -322,6 +361,7 @@ export function combatEdges(
   const positions = new globalThis.Map(
     nodes.map((node) => [node.id, node.position]),
   );
+  const handleAssignments = routeHandleAssignments(scene, positions);
 
   const drafts: EdgeDraft[] = scene.routes.map((route) => {
     const id = routeKey(
@@ -367,10 +407,7 @@ export function combatEdges(
         id,
         source: route.source_landmark_id,
         target: route.destination_landmark_id,
-        ...connectionHandles(
-          positions.get(route.source_landmark_id),
-          positions.get(route.destination_landmark_id),
-        ),
+        ...handleAssignments.get(id),
         type: 'combat',
         selected: id === selectedRouteId,
         data: {
