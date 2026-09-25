@@ -36,6 +36,7 @@ const MIN_SPACING = 70;
 const MAX_SPACING = 160;
 const SPACING_STEP = 10;
 const DEFAULT_SPACING = 100;
+const SNAP_GRID: [number, number] = [28, 28];
 
 type Point = { x: number; y: number };
 
@@ -74,6 +75,7 @@ export function CombatMap({
   onPaneClick,
 }: CombatMapProps) {
   const [spacing, setSpacing] = useState(DEFAULT_SPACING);
+  const [snapToGrid, setSnapToGrid] = useState(false);
   const spacingScale = spacing / 100;
   const centerPosition = nodes.find(
     (node) => node.id === 'room:center',
@@ -142,6 +144,8 @@ export function CombatMap({
         connectionMode={ConnectionMode.Loose}
         nodesDraggable={!busy}
         nodesConnectable={!busy}
+        snapToGrid={snapToGrid}
+        snapGrid={SNAP_GRID}
         fitView
         minZoom={0.35}
         maxZoom={1.8}
@@ -156,43 +160,63 @@ export function CombatMap({
         />
         <Controls showInteractive={false} />
       </ReactFlow>
-      <div className="combat-spacing-control">
-        <div className="combat-spacing-control__heading">
-          <span>Spacing</span>
-          <button
-            type="button"
-            onClick={() => setSpacing(DEFAULT_SPACING)}
-            title="Reset spacing to 100%"
+      <div className="combat-map-layout-control">
+        <div className="combat-map-layout-control__title">Map layout</div>
+        <button
+          type="button"
+          className="combat-map-layout-control__snap"
+          aria-pressed={snapToGrid}
+          onClick={() => setSnapToGrid((enabled) => !enabled)}
+        >
+          <span>Snap to grid</span>
+          <span
+            className={[
+              'combat-map-layout-control__switch',
+              snapToGrid ? 'combat-map-layout-control__switch--on' : '',
+            ].filter(Boolean).join(' ')}
+            aria-hidden="true"
           >
-            {spacing}%
-          </button>
-        </div>
-        <div className="combat-spacing-control__controls">
-          <button
-            type="button"
-            aria-label="Decrease map spacing"
-            disabled={spacing <= MIN_SPACING}
-            onClick={() => adjustSpacing(-SPACING_STEP)}
-          >
-            −
-          </button>
-          <input
-            type="range"
-            aria-label="Map spacing"
-            min={MIN_SPACING}
-            max={MAX_SPACING}
-            step={SPACING_STEP}
-            value={spacing}
-            onChange={(event) => setSpacing(Number(event.target.value))}
-          />
-          <button
-            type="button"
-            aria-label="Increase map spacing"
-            disabled={spacing >= MAX_SPACING}
-            onClick={() => adjustSpacing(SPACING_STEP)}
-          >
-            +
-          </button>
+            <span />
+          </span>
+        </button>
+        <div className="combat-spacing-control">
+          <div className="combat-spacing-control__heading">
+            <span>Spacing</span>
+            <button
+              type="button"
+              onClick={() => setSpacing(DEFAULT_SPACING)}
+              title="Reset spacing to 100%"
+            >
+              {spacing}%
+            </button>
+          </div>
+          <div className="combat-spacing-control__controls">
+            <button
+              type="button"
+              aria-label="Decrease map spacing"
+              disabled={spacing <= MIN_SPACING}
+              onClick={() => adjustSpacing(-SPACING_STEP)}
+            >
+              −
+            </button>
+            <input
+              type="range"
+              aria-label="Map spacing"
+              min={MIN_SPACING}
+              max={MAX_SPACING}
+              step={SPACING_STEP}
+              value={spacing}
+              onChange={(event) => setSpacing(Number(event.target.value))}
+            />
+            <button
+              type="button"
+              aria-label="Increase map spacing"
+              disabled={spacing >= MAX_SPACING}
+              onClick={() => adjustSpacing(SPACING_STEP)}
+            >
+              +
+            </button>
+          </div>
         </div>
       </div>
       <div className="combat-board__hint">
