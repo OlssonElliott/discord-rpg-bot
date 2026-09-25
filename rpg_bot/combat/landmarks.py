@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .errors import CombatError
 from .layout import next_open_position
-from .models import CombatLandmark, CombatScene, LandmarkDistance
+from .models import CombatLandmark, CombatScene, CoverLevel, LandmarkDistance
 
 
 class CombatLandmarkMixin:
@@ -34,6 +34,7 @@ class CombatLandmarkMixin:
         )
         try:
             self.repository.add_landmark(scene.id, landmark)
+            self._refresh_auto_routes(scene.id, landmark.id)
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
@@ -121,35 +122,131 @@ class CombatLandmarkMixin:
         scene = self._require_current(guild_id)
         try:
             self.repository.set_landmark_position(scene.id, landmark_id, x, y)
+            landmark = scene.landmark(landmark_id)
+            if landmark is not None and landmark.auto_connect and not landmark.synthetic:
+                self._refresh_auto_routes(scene.id, landmark_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
 
-    def set_landmark_supports_behind(
+    def set_landmark_cover(
         self,
         guild_id: int,
         landmark_id: str,
-        supports_behind: bool,
+        cover: CoverLevel | str,
     ) -> CombatScene:
-        if not isinstance(supports_behind, bool):
-            raise CombatError("supports_behind must be a boolean.")
         scene = self._require_current(guild_id)
         landmark = scene.landmark(landmark_id)
         if landmark is None:
             raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
-        if landmark.synthetic and supports_behind:
-            raise CombatError(
-                "Synthetic room anchors cannot support behind positions."
-            )
         try:
-            self.repository.set_landmark_supports_behind(
+            parsed_cover = (
+                cover if isinstance(cover, CoverLevel) else CoverLevel(cover)
+            )
+        except ValueError as error:
+            raise CombatError(f"Unknown cover level '{cover}'.") from error
+        if landmark.synthetic and parsed_cover is not CoverLevel.NONE:
+            raise CombatError("Synthetic room anchors cannot provide cover.")
+        try:
+            self.repository.set_landmark_cover(
                 scene.id,
                 landmark_id,
-                supports_behind,
+                parsed_cover,
             )
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
+
+    def set_landmark_auto_connect(
+        self,
+        guild_id: int,
+        landmark_id: str,
+        auto_connect: bool,
+    ) -> CombatScene:
+        if not isinstance(auto_connect, bool):
+            raise CombatError("auto_connect must be a boolean.")
+        scene = self._require_current(guild_id)
+        landmark = scene.landmark(landmark_id)
+        if landmark is None:
+            raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
+        try:
+            self.repository.set_landmark_auto_connect(
+                scene.id,
+                landmark_id,
+                auto_connect,
+            )
+            if auto_connect and not landmark.synthetic:
+                self._refresh_auto_routes(scene.id, landmark_id)
+            elif not auto_connect:
+                self.repository.delete_automatic_routes_for_landmark(
+                    scene.id,
+                    landmark_id,
+                )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    @staticmethod
+    def _automatic_distance(
+        source: CombatLandmark,
+        target: CombatLandmark,
+    ) -> LandmarkDistance:
+        assert source.x is not None and source.y is not None
+        assert target.x is not None and target.y is not None
+        distance = math.hypot(target.x - source.x, target.y - source.y)
+        if distance <= 0.30:
+            return LandmarkDistance.CLOSE
+        if distance <= 0.60:
+            return LandmarkDistance.FAR
+        return LandmarkDistance.DISTANT
+
+    def _refresh_auto_routes(
+        self,
+        scene_id: int,
+        landmark_id: str,
+    ) -> None:
+        scene = self.repository.get_scene(scene_id)
+        if scene is None:
+            return
+        source = scene.landmark(landmark_id)
+        if (
+            source is None
+            or not source.auto_connect
+            or source.synthetic
+            or source.x is None
+            or source.y is None
+        ):
+            return
+
+        candidates = [
+            landmark
+            for landmark in scene.landmarks
+            if (
+                landmark.id != source.id
+                and landmark.auto_connect
+                and landmark.x is not None
+                and landmark.y is not None
+            )
+        ]
+        candidates.sort(
+            key=lambda landmark: (
+                math.hypot(landmark.x - source.x, landmark.y - source.y),
+                landmark.id,
+            )
+        )
+
+        self.repository.delete_automatic_routes_for_landmark(
+            scene_id,
+            landmark_id,
+        )
+        for target in candidates[:2]:
+            self.repository.set_route(
+                scene_id,
+                source.id,
+                target.id,
+                self._automatic_distance(source, target),
+                automatic=True,
+            )
 
     def connect_landmarks(
         self,
@@ -187,7 +284,16 @@ class CombatLandmarkMixin:
                 parsed_distance,
                 obstacle=obstacle.strip() if obstacle and obstacle.strip() else None,
                 blocked=blocked,
+                automatic=False,
             )
+            for candidate_id in (source_landmark_id, destination_landmark_id):
+                candidate = scene.landmark(candidate_id)
+                if (
+                    candidate is not None
+                    and candidate.auto_connect
+                    and not candidate.synthetic
+                ):
+                    self._refresh_auto_routes(scene.id, candidate_id)
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)
