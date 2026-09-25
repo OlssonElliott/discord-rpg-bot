@@ -308,6 +308,26 @@ class CombatLandmarkMixin:
         source = scene.landmark(landmark_id)
         assert source is not None
 
+        has_center_route = any(
+            {route.source_landmark_id, route.destination_landmark_id}
+            == {self.CENTER_LANDMARK_ID, source.id}
+            for route in scene.routes
+        )
+        if not has_center_route:
+            try:
+                self.repository.set_route(
+                    scene.id,
+                    self.CENTER_LANDMARK_ID,
+                    source.id,
+                    LandmarkDistance.CLOSE,
+                    automatic=True,
+                )
+            except ValueError as error:
+                raise CombatError(str(error)) from error
+            scene = self._require_current(guild_id)
+            source = scene.landmark(landmark_id)
+            assert source is not None
+
         local_degree = sum(
             source.id in {
                 route.source_landmark_id,
