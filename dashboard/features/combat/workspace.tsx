@@ -467,19 +467,10 @@ export function CombatWorkspace({
   return (
     <section className="combat-workspace">
       <div className="combat-stage">
-        <div className="combat-stage__heading">
-          <div>
-            <p className="kicker">Active encounter</p>
-            <h2>{scene.room_name}</h2>
-            <span>Scene #{scene.id} · drag landmarks to arrange the shared scene</span>
-          </div>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => void onRefresh()}>
-            <RefreshCw /> Refresh
-          </Button>
-        </div>
         <div className="combat-initiative">
           <div className="combat-initiative__heading">
-            <div>
+            <div className="combat-initiative__context">
+              <strong className="combat-initiative__room">{scene.room_name}</strong>
               <span className="combat-initiative__round">
                 Round {scene.round_number}
               </span>
@@ -490,6 +481,14 @@ export function CombatWorkspace({
               </strong>
             </div>
             <div className="combat-initiative__controls">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void onRefresh()}
+              >
+                <RefreshCw /> Refresh
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
