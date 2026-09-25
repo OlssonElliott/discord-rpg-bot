@@ -988,6 +988,20 @@ class CombatRepository:
                 (scene_id,),
             )
 
+    def delete_all_automatic_routes(
+        self,
+        scene_id: int,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                DELETE FROM combat_routes
+                WHERE scene_id = ? AND automatic = 1
+                """,
+                (scene_id,),
+            )
+
     def delete_automatic_routes_for_landmark(
         self,
         scene_id: int,
