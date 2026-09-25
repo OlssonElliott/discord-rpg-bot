@@ -79,13 +79,9 @@ class CombatTurnMixin:
             )
 
             self.repository.reset_defending(
-
                 scene.id,
-
                 first.kind,
-
                 first.source_id,
-
             )
             self.repository.set_turn(
                 scene.id,
@@ -151,13 +147,9 @@ class CombatTurnMixin:
             )
 
             self.repository.reset_defending(
-
                 scene.id,
-
                 target.kind,
-
                 target.source_id,
-
             )
             self.repository.set_turn(
                 scene.id,
@@ -223,13 +215,9 @@ class CombatTurnMixin:
             )
 
             self.repository.reset_defending(
-
                 scene.id,
-
                 target.kind,
-
                 target.source_id,
-
             )
             self.repository.set_turn(
                 scene.id,
@@ -285,13 +273,9 @@ class CombatTurnMixin:
             )
 
             self.repository.reset_defending(
-
                 scene.id,
-
                 parsed_kind,
-
                 source_id,
-
             )
             self.repository.set_turn(
                 scene.id,
