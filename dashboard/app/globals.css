@@ -346,9 +346,17 @@ button, input, textarea { font: inherit; }
 .combat-enemy-adder button { width: 100%; }
 .combat-checkbox { display: flex !important; align-items: center; gap: 7px; margin: 11px 0 !important; }
 .combat-checkbox input { width: 15px; height: 15px; }
-.combat-route-list { display: grid; gap: 5px; margin-top: 13px; }
+.combat-route-groups { display: grid; gap: 6px; margin-top: 13px; }
+.combat-route-group { overflow: hidden; border: 1px solid #26344a; border-radius: 7px; background: #101925; }
+.combat-route-group__toggle { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 8px 9px; color: #c6d0dc; text-align: left; background: #121d2b; }
+.combat-route-group__toggle:hover { color: #f0f3f7; background: #172337; }
+.combat-route-group__toggle > svg { color: #718096; }
+.combat-route-group__name { min-width: 0; overflow: hidden; font-size: .72rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.combat-route-group .combat-route-list { display: grid; gap: 0; margin: 0; padding: 4px; border-top: 1px solid #26344a; }
 .combat-route-list button { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; width: 100%; margin: 0; padding: 7px 6px; color: #abb6c4; font-size: .7rem; text-align: left; border: 1px solid transparent; border-bottom-color: #1e2b3e; border-radius: 5px; }
+.combat-route-list button:last-child { border-bottom-color: transparent; }
 .combat-route-list button:hover, .combat-route-list button.selected { color: #e7edf4; border-color: #3c4c62; background: #172337; }
+.combat-route-list__destination { min-width: 0; margin-right: auto; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .combat-route-list small { flex-basis: 100%; color: #7f8c9c; }
 .combat-route-list svg { color: #d86662; }
 .combat-end { width: 100%; margin-top: 24px; }
