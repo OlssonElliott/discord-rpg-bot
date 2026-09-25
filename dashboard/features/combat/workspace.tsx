@@ -440,12 +440,12 @@ export function CombatWorkspace({
   const selectedRouteSource = selectedRoute
     ? scene.landmarks.find(
       (landmark) => landmark.id === selectedRoute.source_landmark_id,
-    )
+    ) ?? null
     : null;
   const selectedRouteDestination = selectedRoute
     ? scene.landmarks.find(
       (landmark) => landmark.id === selectedRoute.destination_landmark_id,
-    )
+    ) ?? null
     : null;
   const orderedCombatants = scene.combatants;
   const currentCombatant = orderedCombatants.find(
