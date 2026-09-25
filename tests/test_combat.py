@@ -247,6 +247,65 @@ class CombatServiceTests(unittest.TestCase):
         }
         self.assertTrue(all(degree <= 3 for degree in non_center_degrees.values()))
 
+    def test_auto_connect_all_skips_distant_shortcuts(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        scene = self.service.auto_connect_all(44)
+
+        automatic_routes = [
+            route for route in scene.routes if route.automatic
+        ]
+        self.assertTrue(automatic_routes)
+        self.assertTrue(
+            all(
+                route.distance is not LandmarkDistance.DISTANT
+                for route in automatic_routes
+            )
+        )
+        self.assertTrue(
+            all(
+                "room:center" not in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in automatic_routes
+            )
+        )
+
+    def test_auto_connect_all_uses_west_door_as_intermediate_landmark(self) -> None:
+        self.world.connect_rooms(
+            self.hall.id,
+            "west door",
+            self.other.id,
+            return_exit_name="east door",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        west_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.feature_type == "door"
+        )
+        scene = self.service.auto_connect_all(44)
+
+        pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                )
+            )
+            for route in scene.routes
+        }
+        self.assertNotIn(
+            frozenset(("room:corner:nw", "room:corner:sw")),
+            pairs,
+        )
+        self.assertTrue(
+            frozenset((west_door.id, "room:corner:nw")) in pairs
+            or frozenset((west_door.id, "room:corner:sw")) in pairs
+        )
+
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
             self.hall.id,
