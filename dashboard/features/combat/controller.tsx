@@ -54,13 +54,21 @@ export function CombatWorkspaceController({
         },
         'Landmark position saved',
       )}
-      onSetLandmarkSupportsBehind={(landmarkId, supportsBehind) => updateCombat(
+      onSetLandmarkCover={(landmarkId, cover) => updateCombat(
         `/combat/landmarks/${landmarkId}`,
         {
           method: 'PATCH',
-          body: JSON.stringify({ supports_behind: supportsBehind }),
+          body: JSON.stringify({ cover }),
         },
-        supportsBehind ? 'Behind position enabled' : 'Behind position disabled',
+        'Landmark cover updated',
+      )}
+      onSetLandmarkAutoConnect={(landmarkId, autoConnect) => updateCombat(
+        `/combat/landmarks/${landmarkId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ auto_connect: autoConnect }),
+        },
+        autoConnect ? 'Auto connect enabled' : 'Auto connect disabled',
       )}
       onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
         `/combat/movement/${combatant.kind}/${combatant.source_id}`,
