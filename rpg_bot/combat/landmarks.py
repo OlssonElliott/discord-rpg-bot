@@ -167,20 +167,6 @@ class CombatLandmarkMixin:
         return self._require_current(guild_id)
 
     @staticmethod
-    def _automatic_distance(
-        source: CombatLandmark,
-        target: CombatLandmark,
-    ) -> LandmarkDistance:
-        assert source.x is not None and source.y is not None
-        assert target.x is not None and target.y is not None
-        distance = math.hypot(target.x - source.x, target.y - source.y)
-        if distance <= 0.30:
-            return LandmarkDistance.CLOSE
-        if distance <= 0.60:
-            return LandmarkDistance.FAR
-        return LandmarkDistance.DISTANT
-
-    @staticmethod
     def _distance_between(
         source: CombatLandmark,
         target: CombatLandmark,
@@ -260,7 +246,9 @@ class CombatLandmarkMixin:
     ) -> bool:
         if source.id == cls.CENTER_LANDMARK_ID or target.id == cls.CENTER_LANDMARK_ID:
             return False
-        if cls._automatic_distance(source, target) is LandmarkDistance.DISTANT:
+        # Canvas geometry decides whether a shortcut is local, but generated
+        # routes themselves always start as Close and can be adjusted by the DM.
+        if cls._distance_between(source, target) > 0.60:
             return False
         return not any(
             cls._landmark_between(source, target, landmark)
@@ -278,8 +266,37 @@ class CombatLandmarkMixin:
             raise CombatError(f"Unknown combat landmark '{landmark_id}'.")
         if source.x is None or source.y is None:
             raise CombatError("Landmark must have a map position before auto-connect.")
+
         if source.id == self.CENTER_LANDMARK_ID:
-            return scene
+            try:
+                connected_ids = {
+                    (
+                        route.destination_landmark_id
+                        if route.source_landmark_id == self.CENTER_LANDMARK_ID
+                        else route.source_landmark_id
+                    )
+                    for route in scene.routes
+                    if self.CENTER_LANDMARK_ID in {
+                        route.source_landmark_id,
+                        route.destination_landmark_id,
+                    }
+                }
+                for target in scene.landmarks:
+                    if (
+                        target.id == self.CENTER_LANDMARK_ID
+                        or target.id in connected_ids
+                    ):
+                        continue
+                    self.repository.set_route(
+                        scene.id,
+                        self.CENTER_LANDMARK_ID,
+                        target.id,
+                        LandmarkDistance.CLOSE,
+                        automatic=True,
+                    )
+            except ValueError as error:
+                raise CombatError(str(error)) from error
+            return self._require_current(guild_id)
 
         # Rebuild only this landmark's automatic local shortcuts. Manual routes
         # and the default center hub route remain untouched.
@@ -357,7 +374,7 @@ class CombatLandmarkMixin:
                     scene.id,
                     source.id,
                     target.id,
-                    self._automatic_distance(source, target),
+                    LandmarkDistance.CLOSE,
                     automatic=True,
                 )
                 existing_segments.append((source, target))
@@ -369,9 +386,13 @@ class CombatLandmarkMixin:
     def auto_connect_all(self, guild_id: int) -> CombatScene:
         scene = self._require_current(guild_id)
 
-        # Auto-connect all is deterministic: rebuild only generated local
-        # shortcuts while preserving every manual/default route.
+        # Auto-connect all is deterministic: rebuild only generated routes
+        # while preserving every manual/default route.
         self.repository.delete_all_automatic_routes(scene.id)
+        scene = self._require_current(guild_id)
+
+        # Restore any missing spokes in the default center hub first.
+        self.auto_connect_landmark(guild_id, self.CENTER_LANDMARK_ID)
         scene = self._require_current(guild_id)
 
         positioned = [
@@ -442,7 +463,7 @@ class CombatLandmarkMixin:
                     scene.id,
                     source.id,
                     target.id,
-                    self._automatic_distance(source, target),
+                    LandmarkDistance.CLOSE,
                     automatic=True,
                 )
                 local_degrees[source.id] += 1
