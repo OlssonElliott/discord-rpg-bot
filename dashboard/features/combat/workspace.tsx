@@ -11,7 +11,6 @@ import {
 import {
   ChevronDown,
   ChevronRight,
-  CircleAlert,
   Flag,
   RefreshCw,
   Route,
@@ -41,7 +40,6 @@ import {
   clamp,
   combatantKey,
   combatEdges,
-  combatNodeTypes,
   combatNodes,
   routeKey,
   type CombatLandmarkNodeData,
@@ -49,6 +47,7 @@ import {
 import { CombatantEditor } from './combatant-editor';
 import { CombatantInspectDialog } from './combatant-inspect-dialog';
 import { CombatMap } from './combat-map';
+import { ConnectionsPanel } from './connections-panel';
 import { SelectionPanel } from './selection-panel';
 
 type Relation = CombatantData['relation'];
@@ -627,67 +626,15 @@ export function CombatWorkspace({
           title={<><Route size={15} /> Connections</>}
           summary={String(scene.routes.length)}
         >
-          <div className="combat-connection-actions">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => void onAutoConnectAll()}
-            >
-              Auto-connect all
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={busy || !scene.routes.length}
-              onClick={() => {
-                if (!window.confirm('Remove every combat connection?')) return;
-                void onDisconnectAllRoutes().then((removed) => {
-                  if (removed) setSelectedRouteId(null);
-                });
-              }}
-            >
-              Disconnect all
-            </Button>
-          </div>
-          <div className="combat-route-list">
-            {scene.routes.map((route) => {
-              const source = scene.landmarks.find(
-                (item) => item.id === route.source_landmark_id,
-              );
-              const destination = scene.landmarks.find(
-                (item) => item.id === route.destination_landmark_id,
-              );
-              const id = routeKey(
-                route.source_landmark_id,
-                route.destination_landmark_id,
-              );
-              return (
-                <button
-                  type="button"
-                  key={id}
-                  className={id === selectedRouteId ? 'selected' : ''}
-                  onClick={() => selectRoute(
-                    route.source_landmark_id,
-                    route.destination_landmark_id,
-                  )}
-                >
-                  <strong>{source?.name || route.source_landmark_id}</strong>
-                  <span>↔</span>
-                  <strong>{destination?.name || route.destination_landmark_id}</strong>
-                  <Badge variant="outline">{route.distance}</Badge>
-                  <Badge variant="outline">move {route.movement_cost}</Badge>
-                  {route.terrain !== 'normal' && (
-                    <Badge variant="outline">{route.terrain}</Badge>
-                  )}
-                  {route.blocked && <CircleAlert size={14} />}
-                </button>
-              );
-            })}
-            {!scene.routes.length && (
-              <p className="muted-row">No landmark connections yet.</p>
-            )}
-          </div>
+          <ConnectionsPanel
+            scene={scene}
+            selectedRouteId={selectedRouteId}
+            busy={busy}
+            onSelectRoute={selectRoute}
+            onAutoConnectAll={onAutoConnectAll}
+            onDisconnectAllRoutes={onDisconnectAllRoutes}
+            onClearRouteSelection={() => setSelectedRouteId(null)}
+          />
         </CollapsibleCombatSection>
 
         <CollapsibleCombatSection
