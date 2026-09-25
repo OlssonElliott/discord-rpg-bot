@@ -31,6 +31,7 @@ type CombatMapProps = {
   onNodeDragStop: (
     node: Node<CombatLandmarkNodeData>,
   ) => void | Promise<void>;
+  onAutoConnectAll: () => Promise<boolean>;
   onConnect: (connection: Connection) => void;
   onEdgeClick: (sourceId: string, targetId: string) => void;
   onPaneClick: () => void;
@@ -117,6 +118,7 @@ export function CombatMap({
   onNodeClick,
   onNodeDragStart,
   onNodeDragStop,
+  onAutoConnectAll,
   onConnect,
   onEdgeClick,
   onPaneClick,
@@ -267,8 +269,10 @@ export function CombatMap({
     for (const node of alignedNodes) {
       await onNodeDragStop(node);
     }
+    await onAutoConnectAll();
   }, [
     displayNodes,
+    onAutoConnectAll,
     onNodeDragStop,
     spacingScale,
     toLogicalPosition,
