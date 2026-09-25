@@ -86,6 +86,7 @@ type CombatWorkspaceProps = {
     attacker: CombatantData,
     targetId: string,
   ) => Promise<boolean>;
+  onDefend: () => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
   onSetInitiative: (
@@ -155,6 +156,7 @@ export function CombatWorkspace({
   onAddEnemy,
   onRemoveEnemy,
   onAttack,
+  onDefend,
   onNextTurn,
   onPreviousTurn,
   onSetInitiative,
@@ -739,6 +741,7 @@ export function CombatWorkspace({
                 onInspect={(selected) => void inspectCombatant(selected)}
                 onRemoveEnemy={onRemoveEnemy}
                 onAttack={onAttack}
+                onDefend={onDefend}
                 onSetInitiative={onSetInitiative}
               />
             ))}
