@@ -125,11 +125,11 @@ class CombatLandmarkMixin:
         if (
             not math.isfinite(x)
             or not math.isfinite(y)
-            or not (0 <= x <= 1)
-            or not (0 <= y <= 1)
+            or not (-1 <= x <= 2)
+            or not (-1 <= y <= 2)
         ):
             raise CombatError(
-                "Landmark coordinates must be normalized between 0 and 1."
+                "Landmark coordinates must stay within the combat canvas."
             )
         scene = self._require_current(guild_id)
         try:
