@@ -258,7 +258,10 @@ button, input, textarea { font: inherit; }
 .combat-board .react-flow__edge-text { fill: #b8c2cf; font-size: 11px; text-transform: capitalize; }
 .combat-board .react-flow__edge-textbg { fill: #111925; fill-opacity: .92; }
 .combat-edge-label { position: absolute; z-index: 4; padding: 2px 4px; color: #b8c2cf; font-size: 11px; line-height: 1.15; text-transform: capitalize; white-space: nowrap; border-radius: 2px; background: #111925eb; pointer-events: none; }
-.graph-layout-control { position: absolute; right: 14px; bottom: 186px; z-index: 6; width: 224px; padding: 10px 11px 11px; border: 1px solid #2c3a50; border-radius: 9px; background: #0d1522f2; box-shadow: 0 7px 20px #0006; }
+.graph-layout-control,
+.graph-panel .react-flow__minimap,
+.combat-board .react-flow__minimap { width: 224px; }
+.graph-layout-control { position: absolute; right: 14px; bottom: 186px; z-index: 6; padding: 10px 11px 11px; border: 1px solid #2c3a50; border-radius: 9px; background: #0d1522f2; box-shadow: 0 7px 20px #0006; }
 .graph-layout-control__title { margin-bottom: 8px; color: #718096; font-size: .59rem; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
 .graph-layout-control__snap { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 0 0 9px; color: #aab5c3; font-size: .68rem; text-align: left; border-bottom: 1px solid #26344a; background: transparent; }
 .graph-layout-control__snap:hover { color: #edf1f6; }
