@@ -185,6 +185,7 @@ export function CombatWorkspace({
   const [inspectLoading, setInspectLoading] = useState(false);
   const [inspectError, setInspectError] = useState('');
   const [inspectData, setInspectData] = useState<CombatantInspectData | null>(null);
+  const [draggingLandmarkId, setDraggingLandmarkId] = useState<string | null>(null);
 
   useEffect(() => {
     if (scene) return;
@@ -246,6 +247,22 @@ export function CombatWorkspace({
     }
     const nextNodes = combatNodes(scene, selectedLandmarkId);
     const frame = window.requestAnimationFrame(() => {
+      if (draggingLandmarkId) {
+        const currentPositions = new Map(
+          nodes.map((node) => [node.id, node.position]),
+        );
+        const mergedNodes = nextNodes.map((node) => (
+          node.id === draggingLandmarkId && currentPositions.has(node.id)
+            ? {
+                ...node,
+                position: currentPositions.get(node.id)!,
+              }
+            : node
+        ));
+        setNodes(mergedNodes);
+        setEdges(combatEdges(scene, mergedNodes, selectedRouteId));
+        return;
+      }
       setNodes(nextNodes);
       setEdges(combatEdges(scene, nextNodes, selectedRouteId));
     });
@@ -276,6 +293,8 @@ export function CombatWorkspace({
     }
     return () => window.cancelAnimationFrame(frame);
   }, [
+    draggingLandmarkId,
+    nodes,
     scene,
     selectedCombatantKey,
     selectedLandmarkId,
@@ -555,7 +574,14 @@ export function CombatWorkspace({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={selectLandmark}
-          onNodeDragStop={(node) => saveLandmarkPosition(undefined, node)}
+          onNodeDragStart={(nodeId) => setDraggingLandmarkId(nodeId)}
+          onNodeDragStop={async (node) => {
+            try {
+              await saveLandmarkPosition(undefined, node);
+            } finally {
+              setDraggingLandmarkId(null);
+            }
+          }}
           onConnect={connectNodes}
           onEdgeClick={selectRoute}
           onPaneClick={() => {
