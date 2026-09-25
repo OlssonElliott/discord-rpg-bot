@@ -5,6 +5,7 @@ import re
 
 from .models import CombatScene
 from .attacks import CombatAttackMixin
+from .auto_connect import CombatAutoConnectMixin
 from .death_saves import CombatDeathSaveMixin
 from .enemy_management import CombatEnemyManagementMixin
 from .errors import CombatError
@@ -25,6 +26,7 @@ class CombatService(
     CombatAttackMixin,
     CombatEnemyManagementMixin,
     CombatTurnMixin,
+    CombatAutoConnectMixin,
     CombatLandmarkMixin,
     CombatMovementMixin,
 ):
