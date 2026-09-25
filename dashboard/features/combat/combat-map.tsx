@@ -27,6 +27,7 @@ type CombatMapProps = {
   onNodesChange: (changes: NodeChange<Node<CombatLandmarkNodeData>>[]) => void;
   onEdgesChange: (changes: EdgeChange<Edge>[]) => void;
   onNodeClick: (nodeId: string) => void;
+  onNodeDragStart: (nodeId: string) => void;
   onNodeDragStop: (
     node: Node<CombatLandmarkNodeData>,
   ) => void | Promise<void>;
@@ -114,6 +115,7 @@ export function CombatMap({
   onNodesChange,
   onEdgesChange,
   onNodeClick,
+  onNodeDragStart,
   onNodeDragStop,
   onConnect,
   onEdgeClick,
@@ -282,6 +284,7 @@ export function CombatMap({
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => onNodeClick(node.id)}
+        onNodeDragStart={(_, node) => onNodeDragStart(node.id)}
         onNodeDragStop={(_, node) => {
           const displayPosition = snapDisplayPosition(node.id, node.position);
           onNodeDragStop({
