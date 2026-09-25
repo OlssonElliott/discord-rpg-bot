@@ -38,6 +38,7 @@ type DungeonCanvasProps = {
   onNodeSelect: (nodeId: string) => void;
   onEdgeSelect: (edgeId: string) => void;
   onNodeDragStop: (event: unknown, node: Node<RoomNodeData>) => void | Promise<void>;
+  onLayoutComplete: () => void | Promise<void>;
   onConnect: (connection: Connection) => void;
   onCreateRoom: () => void;
   onCreateArea: () => void;
@@ -54,6 +55,7 @@ export function DungeonCanvas({
   onNodeSelect,
   onEdgeSelect,
   onNodeDragStop,
+  onLayoutComplete,
   onConnect,
   onCreateRoom,
   onCreateArea,
@@ -127,8 +129,10 @@ export function DungeonCanvas({
     for (const node of alignedNodes) {
       await onNodeDragStop(undefined, node);
     }
+    await onLayoutComplete();
   }, [
     displayNodes,
+    onLayoutComplete,
     onNodeDragStop,
     onNodesChange,
     spacingScale,
