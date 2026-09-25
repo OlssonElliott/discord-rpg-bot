@@ -351,6 +351,84 @@ class CombatServiceTests(unittest.TestCase):
             or frozenset((west_door.id, "room:corner:sw")) in pairs
         )
 
+    def test_auto_connect_all_adds_bounded_corner_diagonals(self) -> None:
+        south_room = self.world.create_room(
+            "south_room",
+            self.area.id,
+            "South Room",
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "west",
+            self.other.id,
+            return_exit_name="east",
+            connection_type=ConnectionType.DOOR,
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "south",
+            south_room.id,
+            return_exit_name="north",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        west_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.name == "Door: west"
+        )
+        south_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.name == "Door: south"
+        )
+
+        # Put the two room features on the north/south-east perimeter so this
+        # mirrors the common combat layout used by the dashboard.
+        self.service.set_landmark_position(
+            44,
+            "feature:stone_pillar",
+            0.5,
+            0.18,
+        )
+        self.service.set_landmark_position(
+            44,
+            "feature:oak_table",
+            0.80,
+            0.5,
+        )
+
+        scene = self.service.auto_connect_all(44)
+        pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                )
+            )
+            for route in scene.routes
+        }
+
+        expected_diagonals = {
+            frozenset((west_door.id, "feature:stone_pillar")),
+            frozenset(("feature:stone_pillar", "feature:oak_table")),
+            frozenset(("feature:oak_table", south_door.id)),
+            frozenset((south_door.id, west_door.id)),
+        }
+        self.assertTrue(expected_diagonals.issubset(pairs))
+
+        # The corner anchors still remain intermediate points on the perimeter
+        # rather than being skipped by direct corner-to-corner routes.
+        self.assertNotIn(
+            frozenset(("room:corner:nw", "room:corner:ne")),
+            pairs,
+        )
+        self.assertNotIn(
+            frozenset(("room:corner:sw", "room:corner:se")),
+            pairs,
+        )
+
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
             self.hall.id,
