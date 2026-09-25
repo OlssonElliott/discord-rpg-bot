@@ -209,18 +209,13 @@ class CombatLifecycleMixin:
                 tuple(landmarks),
                 tuple(combatants),
             )
-            for landmark_id, _, _, _ in ROOM_CORNER_SPECS:
+            for landmark in landmarks:
+                if landmark.id == self.CENTER_LANDMARK_ID:
+                    continue
                 self.repository.set_route(
                     scene.id,
                     self.CENTER_LANDMARK_ID,
-                    landmark_id,
-                    LandmarkDistance.CLOSE,
-                )
-            for landmark_id in door_landmark_ids:
-                self.repository.set_route(
-                    scene.id,
-                    self.CENTER_LANDMARK_ID,
-                    landmark_id,
+                    landmark.id,
                     LandmarkDistance.CLOSE,
                 )
             self.repository.append_log(
