@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Eye, Skull, Swords, Trash2, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eye, Shield, Skull, Swords, Trash2, Users } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,7 @@ export function CombatantEditor({
   onInspect,
   onRemoveEnemy,
   onAttack,
+  onDefend,
   onSetInitiative,
 }: {
   combatant: CombatantData;
@@ -41,6 +42,7 @@ export function CombatantEditor({
     attacker: CombatantData,
     targetId: string,
   ) => Promise<boolean>;
+  onDefend: () => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
     initiativeScore: number,
@@ -164,6 +166,9 @@ export function CombatantEditor({
           {combatant.is_current_turn && <Badge>Current turn</Badge>}
           {combatant.character_status && (
             <Badge variant="outline">{label(combatant.character_status)}</Badge>
+          )}
+          {combatant.defending && (
+            <Badge variant="outline">Defending</Badge>
           )}
           {combatant.hp != null && combatant.max_hp != null && (
             <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
@@ -292,6 +297,21 @@ export function CombatantEditor({
           >
             <Swords /> Attack
           </Button>
+          {combatant.kind === 'character' && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                busy
+                || !combatant.is_current_turn
+                || incapacitated
+                || combatant.standard_action_spent
+              }
+              onClick={() => void onDefend()}
+            >
+              <Shield /> Defend
+            </Button>
+          )}
         </div>
       <div className="combatant-editor__initiative">
         <span>
