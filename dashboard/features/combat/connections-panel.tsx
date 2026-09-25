@@ -1,6 +1,7 @@
 'use client';
 
-import { CircleAlert } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, CircleAlert } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,6 +28,56 @@ export function ConnectionsPanel({
   onDisconnectAllRoutes,
   onClearRouteSelection,
 }: ConnectionsPanelProps) {
+  const [openLandmarks, setOpenLandmarks] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const routeGroups = useMemo(
+    () => scene.landmarks
+      .map((landmark) => ({
+        landmark,
+        routes: scene.routes.filter(
+          (route) => (
+            route.source_landmark_id === landmark.id
+            || route.destination_landmark_id === landmark.id
+          ),
+        ),
+      }))
+      .filter((group) => group.routes.length > 0)
+      .sort((first, second) => (
+        first.landmark.name.localeCompare(second.landmark.name)
+      )),
+    [scene.landmarks, scene.routes],
+  );
+
+  useEffect(() => {
+    if (!selectedRouteId) return;
+    const route = scene.routes.find(
+      (candidate) => routeKey(
+        candidate.source_landmark_id,
+        candidate.destination_landmark_id,
+      ) === selectedRouteId,
+    );
+    if (!route) return;
+    setOpenLandmarks((current) => {
+      const next = new Set(current);
+      next.add(route.source_landmark_id);
+      next.add(route.destination_landmark_id);
+      return next;
+    });
+  }, [scene.routes, selectedRouteId]);
+
+  const toggleLandmark = (landmarkId: string) => {
+    setOpenLandmarks((current) => {
+      const next = new Set(current);
+      if (next.has(landmarkId)) {
+        next.delete(landmarkId);
+      } else {
+        next.add(landmarkId);
+      }
+      return next;
+    });
+  };
   return (
     <>
       <div className="combat-connection-actions">
@@ -52,38 +103,85 @@ export function ConnectionsPanel({
           Disconnect all
         </Button>
       </div>
-      <div className="combat-route-list">
-        {scene.routes.map((route) => {
-          const source = scene.landmarks.find(
-            (item) => item.id === route.source_landmark_id,
-          );
-          const destination = scene.landmarks.find(
-            (item) => item.id === route.destination_landmark_id,
-          );
-          const id = routeKey(
-            route.source_landmark_id,
-            route.destination_landmark_id,
-          );
+      <div className="combat-route-groups">
+        {routeGroups.map(({ landmark, routes }) => {
+          const open = openLandmarks.has(landmark.id);
           return (
-            <button
-              type="button"
-              key={id}
-              className={id === selectedRouteId ? 'selected' : ''}
-              onClick={() => onSelectRoute(
-                route.source_landmark_id,
-                route.destination_landmark_id,
-              )}
+            <section
+              key={landmark.id}
+              className="combat-route-group"
             >
-              <strong>{source?.name || route.source_landmark_id}</strong>
-              <span>↔</span>
-              <strong>{destination?.name || route.destination_landmark_id}</strong>
-              <Badge variant="outline">{route.distance}</Badge>
-              <Badge variant="outline">move {route.movement_cost}</Badge>
-              {route.terrain !== 'normal' && (
-                <Badge variant="outline">{route.terrain}</Badge>
+              <button
+                type="button"
+                className="combat-route-group__toggle"
+                aria-expanded={open}
+                onClick={() => toggleLandmark(landmark.id)}
+              >
+                <span className="combat-route-group__name">
+                  {landmark.name}
+                </span>
+                <Badge variant="outline">{routes.length}</Badge>
+                {open
+                  ? <ChevronDown size={15} />
+                  : <ChevronRight size={15} />}
+              </button>
+              {open && (
+                <div className="combat-route-list">
+                  {routes
+                    .slice()
+                    .sort((first, second) => {
+                      const firstOtherId = first.source_landmark_id === landmark.id
+                        ? first.destination_landmark_id
+                        : first.source_landmark_id;
+                      const secondOtherId = second.source_landmark_id === landmark.id
+                        ? second.destination_landmark_id
+                        : second.source_landmark_id;
+                      const firstName = scene.landmarks.find(
+                        (item) => item.id === firstOtherId,
+                      )?.name ?? firstOtherId;
+                      const secondName = scene.landmarks.find(
+                        (item) => item.id === secondOtherId,
+                      )?.name ?? secondOtherId;
+                      return firstName.localeCompare(secondName);
+                    })
+                    .map((route) => {
+                      const id = routeKey(
+                        route.source_landmark_id,
+                        route.destination_landmark_id,
+                      );
+                      const otherId = route.source_landmark_id === landmark.id
+                        ? route.destination_landmark_id
+                        : route.source_landmark_id;
+                      const other = scene.landmarks.find(
+                        (item) => item.id === otherId,
+                      );
+                      return (
+                        <button
+                          type="button"
+                          key={id}
+                          className={id === selectedRouteId ? 'selected' : ''}
+                          onClick={() => onSelectRoute(
+                            route.source_landmark_id,
+                            route.destination_landmark_id,
+                          )}
+                        >
+                          <span className="combat-route-list__destination">
+                            ↔ {other?.name || otherId}
+                          </span>
+                          <Badge variant="outline">{route.distance}</Badge>
+                          <Badge variant="outline">
+                            move {route.movement_cost}
+                          </Badge>
+                          {route.terrain !== 'normal' && (
+                            <Badge variant="outline">{route.terrain}</Badge>
+                          )}
+                          {route.blocked && <CircleAlert size={14} />}
+                        </button>
+                      );
+                    })}
+                </div>
               )}
-              {route.blocked && <CircleAlert size={14} />}
-            </button>
+            </section>
           );
         })}
         {!scene.routes.length && (
