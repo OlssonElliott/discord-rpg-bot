@@ -30,6 +30,14 @@ function angularDistance(first: number, second: number): number {
   return Math.min(difference, Math.PI * 2 - difference);
 }
 
+export function alignDisplayPosition(
+  nodes: Node<CombatLandmarkNodeData>[],
+  nodeId: string,
+  position: Point,
+): Point {
+  return alignNodeCenterToGrid(nodes, nodeId, position);
+}
+
 function alignmentSlots(count: number): AlignmentSlot[] {
   const divisions = Math.max(2, Math.ceil(count / 4));
   const coordinates = Array.from(
