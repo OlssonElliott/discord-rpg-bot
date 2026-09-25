@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback, useMemo, useState } from 'react';
 import {
   Background,
   ConnectionMode,
@@ -31,6 +32,35 @@ type CombatMapProps = {
   onPaneClick: () => void;
 };
 
+const MIN_SPACING = 70;
+const MAX_SPACING = 160;
+const SPACING_STEP = 10;
+const DEFAULT_SPACING = 100;
+
+type Point = { x: number; y: number };
+
+function scaleAround(
+  point: Point,
+  center: Point,
+  scale: number,
+): Point {
+  return {
+    x: center.x + (point.x - center.x) * scale,
+    y: center.y + (point.y - center.y) * scale,
+  };
+}
+
+function unscaleAround(
+  point: Point,
+  center: Point,
+  scale: number,
+): Point {
+  return {
+    x: center.x + (point.x - center.x) / scale,
+    y: center.y + (point.y - center.y) / scale,
+  };
+}
+
 export function CombatMap({
   nodes,
   edges,
@@ -43,16 +73,69 @@ export function CombatMap({
   onEdgeClick,
   onPaneClick,
 }: CombatMapProps) {
+  const [spacing, setSpacing] = useState(DEFAULT_SPACING);
+  const spacingScale = spacing / 100;
+  const centerPosition = nodes.find(
+    (node) => node.id === 'room:center',
+  )?.position ?? { x: 500, y: 350 };
+
+  const displayNodes = useMemo(
+    () => nodes.map((node) => ({
+      ...node,
+      position: node.id === 'room:center'
+        ? node.position
+        : scaleAround(node.position, centerPosition, spacingScale),
+    })),
+    [centerPosition.x, centerPosition.y, nodes, spacingScale],
+  );
+
+  const toLogicalPosition = useCallback(
+    (position: Point) => unscaleAround(
+      position,
+      centerPosition,
+      spacingScale,
+    ),
+    [centerPosition.x, centerPosition.y, spacingScale],
+  );
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<Node<CombatLandmarkNodeData>>[]) => {
+      onNodesChange(
+        changes.map((change) => (
+          change.type === 'position' && change.position
+            ? {
+                ...change,
+                position: toLogicalPosition(change.position),
+              }
+            : change
+        )),
+      );
+    },
+    [onNodesChange, toLogicalPosition],
+  );
+
+  const adjustSpacing = useCallback((delta: number) => {
+    setSpacing((current) => Math.min(
+      MAX_SPACING,
+      Math.max(MIN_SPACING, current + delta),
+    ));
+  }, []);
+
   return (
     <div className="combat-board">
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={edges}
         nodeTypes={combatNodeTypes}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => onNodeClick(node.id)}
-        onNodeDragStop={(_, node) => onNodeDragStop(node)}
+        onNodeDragStop={(_, node) => onNodeDragStop({
+          ...node,
+          position: node.id === 'room:center'
+            ? node.position
+            : toLogicalPosition(node.position),
+        })}
         onConnect={onConnect}
         onEdgeClick={(_, edge) => onEdgeClick(edge.source, edge.target)}
         onPaneClick={onPaneClick}
@@ -73,6 +156,45 @@ export function CombatMap({
         />
         <Controls showInteractive={false} />
       </ReactFlow>
+      <div className="combat-spacing-control">
+        <div className="combat-spacing-control__heading">
+          <span>Spacing</span>
+          <button
+            type="button"
+            onClick={() => setSpacing(DEFAULT_SPACING)}
+            title="Reset spacing to 100%"
+          >
+            {spacing}%
+          </button>
+        </div>
+        <div className="combat-spacing-control__controls">
+          <button
+            type="button"
+            aria-label="Decrease map spacing"
+            disabled={spacing <= MIN_SPACING}
+            onClick={() => adjustSpacing(-SPACING_STEP)}
+          >
+            −
+          </button>
+          <input
+            type="range"
+            aria-label="Map spacing"
+            min={MIN_SPACING}
+            max={MAX_SPACING}
+            step={SPACING_STEP}
+            value={spacing}
+            onChange={(event) => setSpacing(Number(event.target.value))}
+          />
+          <button
+            type="button"
+            aria-label="Increase map spacing"
+            disabled={spacing >= MAX_SPACING}
+            onClick={() => adjustSpacing(SPACING_STEP)}
+          >
+            +
+          </button>
+        </div>
+      </div>
       <div className="combat-board__hint">
         Drag landmarks to arrange · Drag a handle to connect · Click a connection to edit
       </div>
