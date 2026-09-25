@@ -69,6 +69,22 @@ def handle_combat_request(
         )
         return 201, _combat_state_data(scene, api.world)
 
+    match = re.fullmatch(r"/api/combat/landmarks/([^/]+)/auto-connect", path)
+    if match and method == "POST":
+        scene = api.combat.auto_connect_landmark(
+            _combat_guild_id(api),
+            match.group(1),
+        )
+        return 200, _combat_state_data(scene, api.world)
+
+    match = re.fullmatch(r"/api/combat/landmarks/([^/]+)/routes", path)
+    if match and method == "DELETE":
+        scene = api.combat.disconnect_landmark_routes(
+            _combat_guild_id(api),
+            match.group(1),
+        )
+        return 200, _combat_state_data(scene, api.world)
+
     match = re.fullmatch(r"/api/combat/landmarks/([^/]+)", path)
     if match and method == "PATCH":
         guild_id = _combat_guild_id(api)
@@ -89,15 +105,9 @@ def handle_combat_request(
                 landmark_id,
                 parse_text(body, "cover"),
             )
-        if "auto_connect" in body:
-            scene = api.combat.set_landmark_auto_connect(
-                guild_id,
-                landmark_id,
-                parse_boolean(body, "auto_connect", default=True),
-            )
         if scene is None:
             raise ValueError(
-                "Landmark PATCH requires position, cover, or auto_connect."
+                "Landmark PATCH requires position or cover."
             )
         return 200, _combat_state_data(scene, api.world)
     if match and method == "DELETE":
@@ -105,6 +115,14 @@ def handle_combat_request(
             _combat_guild_id(api),
             match.group(1),
         )
+        return 200, _combat_state_data(scene, api.world)
+
+    if path == "/api/combat/routes/auto-connect" and method == "POST":
+        scene = api.combat.auto_connect_all(_combat_guild_id(api))
+        return 200, _combat_state_data(scene, api.world)
+
+    if path == "/api/combat/routes/all" and method == "DELETE":
+        scene = api.combat.disconnect_all_routes(_combat_guild_id(api))
         return 200, _combat_state_data(scene, api.world)
 
     if path == "/api/combat/routes" and method == "PUT":
