@@ -43,88 +43,86 @@ class CombatAutoConnectMixin:
         if not nearest_distances:
             return 0.0
 
-        # Large enough to include the diagonal of a regular local cell while
-        # remaining tied to this scene's actual landmark spacing.
-        return max(0.12, median(nearest_distances) * 1.6)
+        # Two nearest-neighbour spacings comfortably includes local diagonals
+        # while the upper bound prevents accidental cross-room shortcuts.
+        return min(
+            0.90,
+            max(0.18, median(nearest_distances) * 2.0),
+        )
 
-    @classmethod
-    def _gabriel_neighbours(
-        cls,
+    @staticmethod
+    def _direction_sector(
         source: CombatLandmark,
         target: CombatLandmark,
-        landmarks: list[CombatLandmark],
-        radius: float,
-    ) -> bool:
-        """Return whether source-target is an unobstructed local graph edge.
-
-        Gabriel-graph geometry gives us cardinal and useful diagonal links
-        without knowing whether a landmark is a corner, center, door, etc.
-        """
-        distance = cls._distance_between(source, target)
-        if distance <= 0 or distance > radius:
-            return False
-
+    ) -> int:
         assert source.x is not None and source.y is not None
         assert target.x is not None and target.y is not None
-        midpoint_x = (source.x + target.x) / 2
-        midpoint_y = (source.y + target.y) / 2
-        radius_squared = (distance / 2) ** 2
-        epsilon = 1e-9
-
-        for candidate in landmarks:
-            if (
-                candidate.id in {source.id, target.id}
-                or candidate.x is None
-                or candidate.y is None
-            ):
-                continue
-            candidate_distance_squared = (
-                (candidate.x - midpoint_x) ** 2
-                + (candidate.y - midpoint_y) ** 2
-            )
-            if candidate_distance_squared < radius_squared - epsilon:
-                return False
-
-        return True
+        angle = math.atan2(
+            target.y - source.y,
+            target.x - source.x,
+        )
+        return round(angle / (math.pi / 4)) % 8
 
     @classmethod
     def _automatic_pairs(
         cls,
         scene: CombatScene,
     ) -> list[tuple[CombatLandmark, CombatLandmark]]:
+        """Build a sparse local graph from nearest neighbours in 8 directions.
+
+        This naturally creates horizontal, vertical and diagonal movement links
+        without assigning any semantic role to particular landmarks.
+        """
         positioned = [
             landmark
             for landmark in scene.landmarks
             if landmark.x is not None and landmark.y is not None
         ]
         radius = cls._connection_radius(positioned)
-        candidates: list[
-            tuple[float, str, str, CombatLandmark, CombatLandmark]
-        ] = []
+        if radius <= 0:
+            return []
 
-        for index, source in enumerate(positioned):
-            for target in positioned[index + 1:]:
-                if not cls._gabriel_neighbours(
-                    source,
-                    target,
-                    positioned,
-                    radius,
-                ):
+        pairs: dict[
+            frozenset[str],
+            tuple[float, CombatLandmark, CombatLandmark],
+        ] = {}
+
+        for source in positioned:
+            nearest_by_sector: dict[
+                int,
+                tuple[float, str, CombatLandmark],
+            ] = {}
+
+            for target in positioned:
+                if target.id == source.id:
                     continue
-                candidates.append(
-                    (
-                        cls._distance_between(source, target),
-                        source.id,
-                        target.id,
-                        source,
-                        target,
-                    )
-                )
+                distance = cls._distance_between(source, target)
+                if distance <= 0 or distance > radius:
+                    continue
 
-        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+                sector = cls._direction_sector(source, target)
+                candidate = (distance, target.id, target)
+                current = nearest_by_sector.get(sector)
+                if current is None or candidate[:2] < current[:2]:
+                    nearest_by_sector[sector] = candidate
+
+            for distance, _, target in nearest_by_sector.values():
+                key = frozenset((source.id, target.id))
+                existing = pairs.get(key)
+                if existing is None or distance < existing[0]:
+                    pairs[key] = (distance, source, target)
+
+        ordered = sorted(
+            pairs.values(),
+            key=lambda item: (
+                item[0],
+                min(item[1].id, item[2].id),
+                max(item[1].id, item[2].id),
+            ),
+        )
         return [
             (source, target)
-            for _, _, _, source, target in candidates
+            for _, source, target in ordered
         ]
 
     def auto_connect_landmark(
