@@ -169,7 +169,13 @@ export function DungeonCanvas({
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#334155" gap={28} size={1} />
-          <MiniMap pannable zoomable nodeColor="#d39a4a" maskColor="rgba(8, 15, 26, 0.72)" />
+          <MiniMap
+            pannable
+            zoomable
+            width={224}
+            nodeColor="#d39a4a"
+            maskColor="rgba(8, 15, 26, 0.72)"
+          />
           <Controls showInteractive={false} />
         </ReactFlow>
         <GraphLayoutControls
