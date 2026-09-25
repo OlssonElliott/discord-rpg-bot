@@ -180,7 +180,7 @@ class CombatServiceTests(unittest.TestCase):
                 CoverLevel.HALF,
             )
 
-    def test_auto_connect_fills_missing_connection_slots(self) -> None:
+    def test_auto_connect_landmark_preserves_manual_routes(self) -> None:
         self.service.start(44, self.hall.id)
         self.service.connect_landmarks(
             44,
@@ -202,11 +202,18 @@ class CombatServiceTests(unittest.TestCase):
             }
         ]
 
-        self.assertEqual(len(pillar_routes), 3)
-        self.assertEqual(
-            sum(route.automatic for route in pillar_routes),
-            1,
+        self.assertTrue(
+            any(
+                {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                == {"feature:stone_pillar", "room:corner:nw"}
+                and not route.automatic
+                for route in pillar_routes
+            )
         )
+        self.assertTrue(any(route.automatic for route in pillar_routes))
 
     def test_auto_connect_works_without_center_or_corner_landmarks(self) -> None:
         self.service.start(44, self.hall.id)
@@ -345,7 +352,7 @@ class CombatServiceTests(unittest.TestCase):
             or frozenset((west_door.id, "room:corner:sw")) in pairs
         )
 
-    def test_auto_connect_all_adds_bounded_corner_diagonals(self) -> None:
+    def test_auto_connect_all_adds_local_diagonals_from_geometry(self) -> None:
         south_room = self.world.create_room(
             "south_room",
             self.area.id,
@@ -420,8 +427,7 @@ class CombatServiceTests(unittest.TestCase):
         }
         self.assertTrue(expected_diagonals.issubset(pairs))
 
-        # The corner anchors still remain intermediate points on the perimeter
-        # rather than being skipped by direct corner-to-corner routes.
+        # Intermediate landmarks still prevent long direct perimeter skips.
         self.assertNotIn(
             frozenset(("room:corner:nw", "room:corner:ne")),
             pairs,
@@ -431,7 +437,7 @@ class CombatServiceTests(unittest.TestCase):
             pairs,
         )
 
-    def test_auto_connect_all_does_not_create_long_corner_diagonals(self) -> None:
+    def test_auto_connect_all_does_not_create_long_geometric_shortcuts(self) -> None:
         south_room = self.world.create_room(
             "south_room_long_diagonal",
             self.area.id,
@@ -459,8 +465,8 @@ class CombatServiceTests(unittest.TestCase):
             if landmark.name == "Door: south"
         )
 
-        # Put one feature far across the room. It must not become a corner
-        # shortcut partner merely because it falls in a broad direction sector.
+        # Put one feature far across the room. Pure geometry should reject
+        # the resulting long shortcut.
         self.service.set_landmark_position(
             44,
             "feature:stone_pillar",
