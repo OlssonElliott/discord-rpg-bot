@@ -167,7 +167,7 @@ export type CombatLandmarkData = {
   y: number | null;
 };
 
-export type CombatRouteEffectData = {
+export type CombatEffectData = {
   id: string;
   name: string;
   effect_type: string;
@@ -175,6 +175,8 @@ export type CombatRouteEffectData = {
   movement_cost_modifier: number;
   remaining_rounds: number | null;
 };
+
+export type CombatRouteEffectData = CombatEffectData;
 
 export type CombatRouteData = {
   source_landmark_id: string;
@@ -185,7 +187,7 @@ export type CombatRouteData = {
   base_blocked: boolean;
   blocked: boolean;
   automatic: boolean;
-  effects: CombatRouteEffectData[];
+  effects: CombatEffectData[];
 };
 
 export type CombatantData = {
