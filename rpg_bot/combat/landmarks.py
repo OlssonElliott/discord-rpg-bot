@@ -266,58 +266,32 @@ class CombatLandmarkMixin:
             1 - landmark.y,
         ) <= 0.30
 
-    @staticmethod
-    def _landmark_side(
-        landmark: CombatLandmark,
-        center: CombatLandmark,
-    ) -> str | None:
-        """Classify a landmark by its dominant direction from Room Center."""
-        if (
-            landmark.x is None
-            or landmark.y is None
-            or center.x is None
-            or center.y is None
-        ):
-            return None
-        dx = landmark.x - center.x
-        dy = landmark.y - center.y
-        if abs(dx) >= abs(dy):
-            return "right" if dx >= 0 else "left"
-        return "bottom" if dy >= 0 else "top"
-
     @classmethod
     def _corner_shortcut_pairs(
         cls,
         scene: CombatScene,
     ) -> list[tuple[CombatLandmark, CombatLandmark]]:
-        """Return one guaranteed local diagonal around each synthetic corner.
+        """Return one local diagonal around each synthetic room corner.
 
-        For each corner, choose the nearest non-corner landmark on each of the
-        two adjacent room sides. The pair itself is bounded by the corner, so
-        it does not need the generic nearest-neighbour locality heuristic.
+        Each corner chooses one nearby landmark along its horizontal arm and
+        one along its vertical arm, both pointing inward toward Room Center.
+        This keeps the intended corner shortcut while preventing long routes
+        across unrelated parts of the room.
         """
         center = scene.landmark(cls.CENTER_LANDMARK_ID)
         if center is None or center.x is None or center.y is None:
             return []
 
-        by_side: dict[str, list[CombatLandmark]] = {
-            "left": [],
-            "right": [],
-            "top": [],
-            "bottom": [],
-        }
-        for landmark in scene.landmarks:
+        candidates = [
+            landmark
+            for landmark in scene.landmarks
             if (
-                landmark.id == cls.CENTER_LANDMARK_ID
-                or landmark.feature_type == "corner"
-                or landmark.x is None
-                or landmark.y is None
-            ):
-                continue
-            side = cls._landmark_side(landmark, center)
-            if side is not None:
-                by_side[side].append(landmark)
-
+                landmark.id != cls.CENTER_LANDMARK_ID
+                and landmark.feature_type != "corner"
+                and landmark.x is not None
+                and landmark.y is not None
+            )
+        ]
         pairs: dict[
             frozenset[str],
             tuple[CombatLandmark, CombatLandmark],
@@ -331,32 +305,70 @@ class CombatLandmarkMixin:
             ):
                 continue
 
-            horizontal_side = "left" if corner.x < center.x else "right"
-            vertical_side = "top" if corner.y < center.y else "bottom"
-            horizontal_candidates = by_side[horizontal_side]
-            vertical_candidates = by_side[vertical_side]
-            if not horizontal_candidates or not vertical_candidates:
+            horizontal_sign = 1 if corner.x < center.x else -1
+            vertical_sign = 1 if corner.y < center.y else -1
+
+            horizontal: list[
+                tuple[float, float, str, CombatLandmark]
+            ] = []
+            vertical: list[
+                tuple[float, float, str, CombatLandmark]
+            ] = []
+
+            for landmark in candidates:
+                assert landmark.x is not None and landmark.y is not None
+                dx = landmark.x - corner.x
+                dy = landmark.y - corner.y
+                distance = cls._distance_between(corner, landmark)
+
+                # Corner shortcuts are deliberately local. A candidate that is
+                # more than roughly half a room away is not part of this corner.
+                if distance > 0.55:
+                    continue
+
+                if (
+                    dx * horizontal_sign > 0
+                    and abs(dx) >= abs(dy)
+                ):
+                    horizontal.append(
+                        (abs(dy), distance, landmark.id, landmark)
+                    )
+
+                if (
+                    dy * vertical_sign > 0
+                    and abs(dy) >= abs(dx)
+                ):
+                    vertical.append(
+                        (abs(dx), distance, landmark.id, landmark)
+                    )
+
+            if not horizontal or not vertical:
                 continue
 
-            horizontal = min(
-                horizontal_candidates,
-                key=lambda landmark: (
-                    cls._distance_between(corner, landmark),
-                    landmark.id,
-                ),
-            )
-            vertical = min(
-                vertical_candidates,
-                key=lambda landmark: (
-                    cls._distance_between(corner, landmark),
-                    landmark.id,
-                ),
-            )
-            if horizontal.id == vertical.id:
+            horizontal.sort(key=lambda item: (item[0], item[1], item[2]))
+            vertical.sort(key=lambda item: (item[0], item[1], item[2]))
+
+            first = horizontal[0][3]
+            second = vertical[0][3]
+            if first.id == second.id:
+                second = next(
+                    (
+                        item[3]
+                        for item in vertical[1:]
+                        if item[3].id != first.id
+                    ),
+                    second,
+                )
+            if first.id == second.id:
                 continue
 
-            pair = frozenset((horizontal.id, vertical.id))
-            pairs[pair] = (horizontal, vertical)
+            # Even if both landmarks are individually near the corner, the
+            # resulting diagonal must still be a genuinely local shortcut.
+            if cls._distance_between(first, second) > 0.65:
+                continue
+
+            pair = frozenset((first.id, second.id))
+            pairs[pair] = (first, second)
 
         return [
             pairs[pair]
