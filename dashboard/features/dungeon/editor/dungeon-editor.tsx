@@ -571,6 +571,7 @@ export function DungeonEditor() {
             setInspectorOpen(true);
           }}
           onNodeDragStop={savePosition}
+          onLayoutComplete={() => loadGraph(areaId)}
           onConnect={onConnect}
           onCreateRoom={() => setAddRoomOpen(true)}
           onCreateArea={() => setAddAreaOpen(true)}
