@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .errors import CombatError
-from .models import CombatScene, CombatantKind, LandmarkRelation
+from .models import CombatScene, CombatantKind, CoverLevel, LandmarkRelation
 from .navigation import movement_legs
 from ..characters.models import CharacterCombatStatus
 
@@ -44,7 +44,7 @@ class CombatMovementMixin:
                 )
             if (
                 parsed_relation is LandmarkRelation.BEHIND
-                and not landmark.supports_behind
+                and landmark.cover is CoverLevel.NONE
             ):
                 raise CombatError(
                     f"{landmark.name} does not support a behind position."
@@ -124,7 +124,7 @@ class CombatMovementMixin:
                 )
             if (
                 parsed_relation is LandmarkRelation.BEHIND
-                and not destination.supports_behind
+                and destination.cover is CoverLevel.NONE
             ):
                 raise CombatError(
                     f"{destination.name} does not support a behind position."
