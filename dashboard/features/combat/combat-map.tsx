@@ -36,7 +36,9 @@ const MIN_SPACING = 70;
 const MAX_SPACING = 160;
 const SPACING_STEP = 10;
 const DEFAULT_SPACING = 100;
-const SNAP_GRID: [number, number] = [28, 28];
+const SNAP_GRID_SIZE = 28;
+const FALLBACK_NODE_WIDTH = 178;
+const FALLBACK_NODE_HEIGHT = 76;
 
 type Point = { x: number; y: number };
 
@@ -91,6 +93,24 @@ export function CombatMap({
     [centerPosition.x, centerPosition.y, nodes, spacingScale],
   );
 
+  const snapDisplayPosition = useCallback(
+    (nodeId: string, position: Point) => {
+      if (!snapToGrid) return position;
+
+      const node = displayNodes.find((candidate) => candidate.id === nodeId);
+      const width = node?.measured?.width ?? FALLBACK_NODE_WIDTH;
+      const height = node?.measured?.height ?? FALLBACK_NODE_HEIGHT;
+      const centerX = position.x + width / 2;
+      const centerY = position.y + height / 2;
+
+      return {
+        x: Math.round(centerX / SNAP_GRID_SIZE) * SNAP_GRID_SIZE - width / 2,
+        y: Math.round(centerY / SNAP_GRID_SIZE) * SNAP_GRID_SIZE - height / 2,
+      };
+    },
+    [displayNodes, snapToGrid],
+  );
+
   const toLogicalPosition = useCallback(
     (position: Point) => unscaleAround(
       position,
@@ -107,13 +127,15 @@ export function CombatMap({
           change.type === 'position' && change.position
             ? {
                 ...change,
-                position: toLogicalPosition(change.position),
+                position: toLogicalPosition(
+                  snapDisplayPosition(change.id, change.position),
+                ),
               }
             : change
         )),
       );
     },
-    [onNodesChange, toLogicalPosition],
+    [onNodesChange, snapDisplayPosition, toLogicalPosition],
   );
 
   const adjustSpacing = useCallback((delta: number) => {
@@ -132,20 +154,21 @@ export function CombatMap({
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => onNodeClick(node.id)}
-        onNodeDragStop={(_, node) => onNodeDragStop({
-          ...node,
-          position: node.id === 'room:center'
-            ? node.position
-            : toLogicalPosition(node.position),
-        })}
+        onNodeDragStop={(_, node) => {
+          const displayPosition = snapDisplayPosition(node.id, node.position);
+          onNodeDragStop({
+            ...node,
+            position: node.id === 'room:center'
+              ? displayPosition
+              : toLogicalPosition(displayPosition),
+          });
+        }}
         onConnect={onConnect}
         onEdgeClick={(_, edge) => onEdgeClick(edge.source, edge.target)}
         onPaneClick={onPaneClick}
         connectionMode={ConnectionMode.Loose}
         nodesDraggable={!busy}
         nodesConnectable={!busy}
-        snapToGrid={snapToGrid}
-        snapGrid={SNAP_GRID}
         fitView
         minZoom={0.35}
         maxZoom={1.8}
