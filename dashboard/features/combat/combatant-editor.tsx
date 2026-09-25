@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Eye, Skull, Swords, Trash2, Users } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Eye, Skull, Swords, Trash2, Users } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,6 +51,8 @@ export function CombatantEditor({
   );
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
+  const [expanded, setExpanded] = useState(combatant.is_current_turn);
+  const wasCurrentTurn = useRef(combatant.is_current_turn);
   const movementLandmark = scene.landmarks.find(
     (landmark) => landmark.id === landmarkId,
   ) ?? null;
@@ -84,6 +86,21 @@ export function CombatantEditor({
     combatant.relation,
     combatant.route_destination_landmark_id,
   ]);
+
+  useEffect(() => {
+    if (combatant.is_current_turn && !wasCurrentTurn.current) {
+      setExpanded(true);
+    } else if (!combatant.is_current_turn && wasCurrentTurn.current) {
+      setExpanded(false);
+    }
+    wasCurrentTurn.current = combatant.is_current_turn;
+  }, [combatant.is_current_turn]);
+
+  useEffect(() => {
+    if (selected) {
+      setExpanded(true);
+    }
+  }, [selected]);
 
   useEffect(() => {
     if (relation === 'behind' && movementLandmark?.cover === 'none') {
@@ -135,21 +152,31 @@ export function CombatantEditor({
         selected ? 'combatant-editor--selected' : '',
       ].filter(Boolean).join(' ')}
     >
-      <div className="combatant-editor__name">
-        {combatant.kind === 'character' ? <Users size={15} /> : <Skull size={15} />}
-        <span>{combatant.name}</span>
-        {combatant.is_current_turn && <Badge>Current turn</Badge>}
-        {combatant.character_status && (
-          <Badge variant="outline">{label(combatant.character_status)}</Badge>
-        )}
-        {combatant.hp != null && combatant.max_hp != null && (
-          <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
-        )}
-        <Badge variant="outline">
-          Move {combatant.movement_remaining}/{combatant.movement_budget}
-        </Badge>
-        <Badge variant="outline">Init {combatant.initiative_score}</Badge>
-      </div>
+      <button
+        type="button"
+        className="combatant-editor__toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}
+      >
+        <span className="combatant-editor__name">
+          {combatant.kind === 'character' ? <Users size={15} /> : <Skull size={15} />}
+          <span>{combatant.name}</span>
+          {combatant.is_current_turn && <Badge>Current turn</Badge>}
+          {combatant.character_status && (
+            <Badge variant="outline">{label(combatant.character_status)}</Badge>
+          )}
+          {combatant.hp != null && combatant.max_hp != null && (
+            <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
+          )}
+          <Badge variant="outline">
+            Move {combatant.movement_remaining}/{combatant.movement_budget}
+          </Badge>
+          <Badge variant="outline">Init {combatant.initiative_score}</Badge>
+        </span>
+        {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+      </button>
+      {expanded && (
+        <>
       {combatant.character_status === 'downed' && (
         <p className="combatant-editor__condition-state">
           Death Save DC {combatant.death_save_dc ?? 10}
@@ -309,6 +336,8 @@ export function CombatantEditor({
           </Button>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }
