@@ -358,6 +358,11 @@ class CombatServiceTests(unittest.TestCase):
         self.assertIsNotNone(custom.x)
         self.assertIsNotNone(custom.y)
 
+        scene = self.service.set_landmark_auto_connect(
+            44,
+            custom.id,
+            False,
+        )
         scene = self.service.connect_landmarks(
             44,
             "room:center",
@@ -404,6 +409,11 @@ class CombatServiceTests(unittest.TestCase):
 
     def test_routes_positions_and_combatant_location_survive_restart(self) -> None:
         scene = self.service.start(44, self.hall.id)
+        self.service.set_landmark_auto_connect(
+            44,
+            "feature:stone_pillar",
+            False,
+        )
         self.service.set_landmark_position(
             44,
             "feature:stone_pillar",
@@ -613,6 +623,11 @@ class CombatServiceTests(unittest.TestCase):
 
     def test_movement_can_end_between_landmarks_and_continue_next_turn(self) -> None:
         self.service.start(44, self.hall.id)
+        self.service.set_landmark_auto_connect(
+            44,
+            "feature:stone_pillar",
+            False,
+        )
         self.service.connect_landmarks(
             44,
             "room:center",
