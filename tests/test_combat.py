@@ -89,7 +89,6 @@ class CombatServiceTests(unittest.TestCase):
         assert center is not None
         self.assertTrue(center.synthetic)
         self.assertEqual(center.cover, CoverLevel.NONE)
-        self.assertTrue(center.auto_connect)
         self.assertEqual((center.x, center.y), (0.5, 0.5))
         expected_corners = {
             "room:corner:nw": (0.12, 0.18),
@@ -102,7 +101,6 @@ class CombatServiceTests(unittest.TestCase):
             assert corner is not None
             self.assertTrue(corner.synthetic)
             self.assertEqual(corner.cover, CoverLevel.NONE)
-            self.assertTrue(corner.auto_connect)
             self.assertEqual(corner.feature_type, "corner")
             self.assertEqual((corner.x, corner.y), expected_position)
         self.assertEqual(
@@ -119,17 +117,17 @@ class CombatServiceTests(unittest.TestCase):
         assert table is not None
         self.assertEqual(pillar.cover, CoverLevel.HALF)
         self.assertEqual(table.cover, CoverLevel.HALF)
-        self.assertTrue(pillar.auto_connect)
-        self.assertTrue(table.auto_connect)
-        self.assertEqual(len(scene.routes), 4)
-        for corner_id in expected_corners:
+        self.assertEqual(len(scene.routes), 6)
+        for landmark in scene.landmarks:
+            if landmark.id == "room:center":
+                continue
             self.assertTrue(
                 any(
                     {
                         route.source_landmark_id,
                         route.destination_landmark_id,
                     }
-                    == {"room:center", corner_id}
+                    == {"room:center", landmark.id}
                     and route.distance is LandmarkDistance.CLOSE
                     for route in scene.routes
                 )
@@ -182,47 +180,8 @@ class CombatServiceTests(unittest.TestCase):
                 CoverLevel.HALF,
             )
 
-    def test_auto_connect_can_be_disabled_for_a_landmark(self) -> None:
-        scene = self.service.start(44, self.hall.id)
-        scene = self.service.set_landmark_auto_connect(
-            44,
-            "feature:oak_table",
-            False,
-        )
-        table = scene.landmark("feature:oak_table")
-        assert table is not None
-        self.assertFalse(table.auto_connect)
-
-        scene = self.service.connect_landmarks(
-            44,
-            "room:center",
-            "feature:stone_pillar",
-            LandmarkDistance.CLOSE,
-        )
-        self.assertFalse(
-            any(
-                route.automatic
-                and "feature:oak_table" in {
-                    route.source_landmark_id,
-                    route.destination_landmark_id,
-                }
-                for route in scene.routes
-            )
-        )
-
     def test_auto_connect_fills_missing_connection_slots(self) -> None:
-        scene = self.service.start(44, self.hall.id)
-        self.service.set_landmark_auto_connect(
-            44,
-            "feature:stone_pillar",
-            False,
-        )
-        self.service.connect_landmarks(
-            44,
-            "feature:stone_pillar",
-            "room:center",
-            LandmarkDistance.CLOSE,
-        )
+        self.service.start(44, self.hall.id)
         self.service.connect_landmarks(
             44,
             "feature:stone_pillar",
@@ -230,10 +189,9 @@ class CombatServiceTests(unittest.TestCase):
             LandmarkDistance.CLOSE,
         )
 
-        scene = self.service.set_landmark_auto_connect(
+        scene = self.service.auto_connect_landmark(
             44,
             "feature:stone_pillar",
-            True,
         )
         pillar_routes = [
             route
@@ -249,6 +207,45 @@ class CombatServiceTests(unittest.TestCase):
             sum(route.automatic for route in pillar_routes),
             1,
         )
+
+    def test_disconnect_landmark_routes_removes_manual_and_automatic_routes(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.auto_connect_landmark(44, "feature:stone_pillar")
+
+        scene = self.service.disconnect_landmark_routes(
+            44,
+            "feature:stone_pillar",
+        )
+
+        self.assertFalse(
+            any(
+                "feature:stone_pillar" in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
+
+    def test_auto_connect_all_adds_balanced_local_routes(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        initial_count = len(scene.routes)
+
+        scene = self.service.auto_connect_all(44)
+
+        self.assertGreater(len(scene.routes), initial_count)
+        non_center_degrees = {
+            landmark.id: sum(
+                landmark.id in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+            for landmark in scene.landmarks
+            if landmark.id != "room:center"
+        }
+        self.assertTrue(all(degree <= 3 for degree in non_center_degrees.values()))
 
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
@@ -282,7 +279,7 @@ class CombatServiceTests(unittest.TestCase):
                 abs(feature.x - door.x) < 0.20
                 and abs(feature.y - door.y) < 0.14
             )
-        self.assertEqual(len(scene.routes), 5)
+        self.assertEqual(len(scene.routes), 7)
         door_route = next(
             route
             for route in scene.routes
@@ -340,7 +337,7 @@ class CombatServiceTests(unittest.TestCase):
         }
 
         self.assertEqual(len(doors), 4)
-        self.assertEqual(len(scene.routes), 8)
+        self.assertEqual(len(scene.routes), 10)
         for exit_name, (_, expected_position) in exits.items():
             door = doors[exit_name]
             self.assertEqual((door.x, door.y), expected_position)
@@ -399,25 +396,14 @@ class CombatServiceTests(unittest.TestCase):
         self.assertIsNotNone(custom.x)
         self.assertIsNotNone(custom.y)
 
-        scene = self.service.set_landmark_auto_connect(
-            44,
-            custom.id,
-            False,
-        )
-        scene = self.service.connect_landmarks(
-            44,
-            "room:center",
-            custom.id,
-            LandmarkDistance.CLOSE,
-        )
-        self.assertEqual(len(scene.routes), 5)
+        self.assertEqual(len(scene.routes), 7)
 
         scene = self.service.disconnect_landmarks(
             44,
             "room:center",
             custom.id,
         )
-        self.assertEqual(len(scene.routes), 4)
+        self.assertEqual(len(scene.routes), 6)
 
         scene = self.service.remove_landmark(44, custom.id)
         self.assertIsNone(scene.landmark(custom.id))
@@ -450,11 +436,6 @@ class CombatServiceTests(unittest.TestCase):
 
     def test_routes_positions_and_combatant_location_survive_restart(self) -> None:
         scene = self.service.start(44, self.hall.id)
-        self.service.set_landmark_auto_connect(
-            44,
-            "feature:stone_pillar",
-            False,
-        )
         self.service.set_landmark_position(
             44,
             "feature:stone_pillar",
@@ -484,7 +465,7 @@ class CombatServiceTests(unittest.TestCase):
         pillar = reopened.landmark("feature:stone_pillar")
         assert pillar is not None
         self.assertEqual((pillar.x, pillar.y), (0.25, 0.35))
-        self.assertEqual(len(reopened.routes), 5)
+        self.assertEqual(len(reopened.routes), 6)
         pillar_route = next(
             route
             for route in reopened.routes
@@ -666,11 +647,6 @@ class CombatServiceTests(unittest.TestCase):
 
     def test_movement_can_end_between_landmarks_and_continue_next_turn(self) -> None:
         self.service.start(44, self.hall.id)
-        self.service.set_landmark_auto_connect(
-            44,
-            "feature:stone_pillar",
-            False,
-        )
         self.service.connect_landmarks(
             44,
             "room:center",
