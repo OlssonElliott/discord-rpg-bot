@@ -168,14 +168,25 @@ export type CombatLandmarkData = {
   y: number | null;
 };
 
+export type CombatRouteEffectData = {
+  id: string;
+  name: string;
+  effect_type: string;
+  blocks_movement: boolean;
+  movement_cost_modifier: number;
+  remaining_rounds: number | null;
+};
+
 export type CombatRouteData = {
   source_landmark_id: string;
   destination_landmark_id: string;
   distance: 'close' | 'far' | 'distant';
   movement_cost: number;
-  obstacle: string | null;
+  terrain: 'normal' | 'difficult';
+  base_blocked: boolean;
   blocked: boolean;
   automatic: boolean;
+  effects: CombatRouteEffectData[];
 };
 
 export type CombatantData = {

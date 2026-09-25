@@ -99,8 +99,8 @@ type CombatWorkspaceProps = {
     sourceId: string,
     destinationId: string,
     distance: Distance,
-    obstacle: string,
-    blocked: boolean,
+    terrain: 'normal' | 'difficult',
+    baseBlocked: boolean,
   ) => Promise<boolean>;
   onDeleteLandmark: (landmarkId: string) => Promise<boolean>;
   onDeleteConnection: (
@@ -898,8 +898,8 @@ export function CombatWorkspace({
   const [routeSource, setRouteSource] = useState('');
   const [routeDestination, setRouteDestination] = useState('');
   const [routeDistance, setRouteDistance] = useState<Distance>('close');
-  const [routeObstacle, setRouteObstacle] = useState('');
-  const [routeBlocked, setRouteBlocked] = useState(false);
+  const [routeTerrain, setRouteTerrain] = useState<'normal' | 'difficult'>('normal');
+  const [routeBaseBlocked, setRouteBaseBlocked] = useState(false);
   const [enemyTemplateId, setEnemyTemplateId] = useState('');
   const [enemyLandmarkId, setEnemyLandmarkId] = useState('room:center');
   const [enemyQuantity, setEnemyQuantity] = useState(1);
@@ -1028,8 +1028,8 @@ export function CombatWorkspace({
     setRouteSource(route.source_landmark_id);
     setRouteDestination(route.destination_landmark_id);
     setRouteDistance(route.distance);
-    setRouteObstacle(route.obstacle || '');
-    setRouteBlocked(route.blocked);
+    setRouteTerrain(route.terrain);
+    setRouteBaseBlocked(route.base_blocked);
   }, [scene]);
 
   const selectLandmark = useCallback((landmarkId: string) => {
@@ -1062,13 +1062,13 @@ export function CombatWorkspace({
     setRouteSource(candidate.source);
     setRouteDestination(candidate.target);
     setRouteDistance('close');
-    setRouteObstacle('');
-    setRouteBlocked(false);
+    setRouteTerrain('normal');
+    setRouteBaseBlocked(false);
     void onConnectLandmarks(
       candidate.source,
       candidate.target,
       'close',
-      '',
+      'normal',
       false,
     ).then((saved) => {
       if (saved) {
@@ -1436,21 +1436,49 @@ export function CombatWorkspace({
                 <NativeSelectOption value="far">Far</NativeSelectOption>
                 <NativeSelectOption value="distant">Distant</NativeSelectOption>
               </NativeSelect>
-              <label htmlFor="combat-route-obstacle">Obstacle or risk</label>
-              <Input
-                id="combat-route-obstacle"
-                placeholder="Rubble, fire, open ground…"
-                value={routeObstacle}
-                onChange={(event) => setRouteObstacle(event.target.value)}
-              />
+              <label htmlFor="combat-route-terrain">Terrain</label>
+              <NativeSelect
+                id="combat-route-terrain"
+                value={routeTerrain}
+                onChange={(event) => setRouteTerrain(
+                  event.target.value as 'normal' | 'difficult',
+                )}
+              >
+                <NativeSelectOption value="normal">Normal</NativeSelectOption>
+                <NativeSelectOption value="difficult">
+                  Difficult terrain
+                </NativeSelectOption>
+              </NativeSelect>
               <label className="combat-checkbox">
                 <input
                   type="checkbox"
-                  checked={routeBlocked}
-                  onChange={(event) => setRouteBlocked(event.target.checked)}
+                  checked={routeBaseBlocked}
+                  onChange={(event) => setRouteBaseBlocked(event.target.checked)}
                 />
-                Connection is blocked
+                Base route is blocked
               </label>
+              {selectedRoute.blocked && !selectedRoute.base_blocked && (
+                <p className="combat-selection-meta">
+                  Currently blocked by an active effect.
+                </p>
+              )}
+              {!!selectedRoute.effects.length && (
+                <div className="combat-route-effects">
+                  <strong>Active effects</strong>
+                  {selectedRoute.effects.map((effect) => (
+                    <p key={effect.id} className="combat-selection-meta">
+                      {effect.name}
+                      {effect.blocks_movement ? ' · Blocks movement' : ''}
+                      {effect.movement_cost_modifier
+                        ? ` · Move ${effect.movement_cost_modifier > 0 ? '+' : ''}${effect.movement_cost_modifier}`
+                        : ''}
+                      {effect.remaining_rounds != null
+                        ? ` · ${effect.remaining_rounds} rounds`
+                        : ''}
+                    </p>
+                  ))}
+                </div>
+              )}
               <div className="combat-connection-actions">
                 <Button
                   size="sm"
@@ -1459,8 +1487,8 @@ export function CombatWorkspace({
                     routeSource,
                     routeDestination,
                     routeDistance,
-                    routeObstacle,
-                    routeBlocked,
+                    routeTerrain,
+                    routeBaseBlocked,
                   )}
                 >
                   Save connection

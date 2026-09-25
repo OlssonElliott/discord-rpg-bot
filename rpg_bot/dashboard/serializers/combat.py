@@ -103,9 +103,21 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "destination_landmark_id": route.destination_landmark_id,
                 "distance": route.distance.value,
                 "movement_cost": route.movement_cost,
-                "obstacle": route.obstacle,
+                "terrain": route.terrain.value,
+                "base_blocked": route.base_blocked,
                 "blocked": route.blocked,
                 "automatic": route.automatic,
+                "effects": [
+                    {
+                        "id": effect.id,
+                        "name": effect.name,
+                        "effect_type": effect.effect_type,
+                        "blocks_movement": effect.blocks_movement,
+                        "movement_cost_modifier": effect.movement_cost_modifier,
+                        "remaining_rounds": effect.remaining_rounds,
+                    }
+                    for effect in route.effects
+                ],
             }
             for route in scene.routes
         ],

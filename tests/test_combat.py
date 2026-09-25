@@ -8,6 +8,7 @@ from rpg_bot.combat import (
     CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
+    RouteTerrain,
 )
 from rpg_bot.combat.service import CombatError, CombatService
 from rpg_bot.database import Database
@@ -425,7 +426,7 @@ class CombatServiceTests(unittest.TestCase):
             "room:center",
             "feature:stone_pillar",
             LandmarkDistance.CLOSE,
-            obstacle="Fallen rubble",
+            terrain=RouteTerrain.DIFFICULT,
         )
         self.service.move_combatant(
             44,
@@ -460,7 +461,9 @@ class CombatServiceTests(unittest.TestCase):
             pillar_route.distance,
             LandmarkDistance.CLOSE,
         )
-        self.assertEqual(pillar_route.obstacle, "Fallen rubble")
+        self.assertEqual(pillar_route.terrain, RouteTerrain.DIFFICULT)
+        self.assertFalse(pillar_route.base_blocked)
+        self.assertEqual(pillar_route.movement_cost, 2)
         olof = next(
             item
             for item in reopened.combatants

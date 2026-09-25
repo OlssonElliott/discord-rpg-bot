@@ -15,6 +15,11 @@ class LandmarkDistance(str, Enum):
     DISTANT = "distant"
 
 
+class RouteTerrain(str, Enum):
+    NORMAL = "normal"
+    DIFFICULT = "difficult"
+
+
 class CombatantKind(str, Enum):
     CHARACTER = "character"
     ENEMY = "enemy"
@@ -47,21 +52,50 @@ class CombatLandmark:
 
 
 @dataclass(frozen=True, slots=True)
+class CombatRouteEffect:
+    id: str
+    name: str
+    effect_type: str
+    blocks_movement: bool = False
+    movement_cost_modifier: int = 0
+    remaining_rounds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CombatRoute:
     source_landmark_id: str
     destination_landmark_id: str
     distance: LandmarkDistance
-    obstacle: str | None = None
-    blocked: bool = False
+    terrain: RouteTerrain = RouteTerrain.NORMAL
+    base_blocked: bool = False
     automatic: bool = False
+    effects: tuple[CombatRouteEffect, ...] = ()
 
     @property
-    def movement_cost(self) -> int:
+    def base_movement_cost(self) -> int:
         return {
             LandmarkDistance.CLOSE: 1,
             LandmarkDistance.FAR: 3,
             LandmarkDistance.DISTANT: 5,
         }[self.distance]
+
+    @property
+    def movement_cost(self) -> int:
+        cost = self.base_movement_cost
+        if self.terrain is RouteTerrain.DIFFICULT:
+            cost *= 2
+        cost += sum(
+            effect.movement_cost_modifier
+            for effect in self.effects
+        )
+        return max(1, cost)
+
+    @property
+    def blocked(self) -> bool:
+        return (
+            self.base_blocked
+            or any(effect.blocks_movement for effect in self.effects)
+        )
 
 
 @dataclass(frozen=True, slots=True)

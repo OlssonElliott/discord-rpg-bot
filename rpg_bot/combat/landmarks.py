@@ -7,7 +7,14 @@ from uuid import uuid4
 
 from .errors import CombatError
 from .layout import next_open_position
-from .models import CombatLandmark, CombatScene, CoverLevel, LandmarkDistance
+from .models import (
+    CombatLandmark,
+    CombatRouteEffect,
+    CombatScene,
+    CoverLevel,
+    LandmarkDistance,
+    RouteTerrain,
+)
 
 
 class CombatLandmarkMixin:
@@ -255,8 +262,8 @@ class CombatLandmarkMixin:
         destination_landmark_id: str,
         distance: LandmarkDistance | str,
         *,
-        obstacle: str | None = None,
-        blocked: bool = False,
+        terrain: RouteTerrain | str = RouteTerrain.NORMAL,
+        base_blocked: bool = False,
     ) -> CombatScene:
         scene = self._require_current(guild_id)
         route_ids = {source_landmark_id, destination_landmark_id}
@@ -277,13 +284,18 @@ class CombatLandmarkMixin:
                 if isinstance(distance, LandmarkDistance)
                 else LandmarkDistance(distance)
             )
+            parsed_terrain = (
+                terrain
+                if isinstance(terrain, RouteTerrain)
+                else RouteTerrain(terrain)
+            )
             self.repository.set_route(
                 scene.id,
                 source_landmark_id,
                 destination_landmark_id,
                 parsed_distance,
-                obstacle=obstacle.strip() if obstacle and obstacle.strip() else None,
-                blocked=blocked,
+                terrain=parsed_terrain,
+                base_blocked=base_blocked,
                 automatic=False,
             )
             for candidate_id in (source_landmark_id, destination_landmark_id):
@@ -294,6 +306,62 @@ class CombatLandmarkMixin:
                     and not candidate.synthetic
                 ):
                     self._refresh_auto_routes(scene.id, candidate_id)
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def add_route_effect(
+        self,
+        guild_id: int,
+        source_landmark_id: str,
+        destination_landmark_id: str,
+        name: str,
+        effect_type: str,
+        *,
+        blocks_movement: bool = False,
+        movement_cost_modifier: int = 0,
+        remaining_rounds: int | None = None,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        name = name.strip()
+        effect_type = effect_type.strip()
+        if not name:
+            raise CombatError("Route effect name is required.")
+        if not effect_type:
+            raise CombatError("Route effect type is required.")
+        if remaining_rounds is not None and remaining_rounds <= 0:
+            raise CombatError("Effect duration must be greater than zero.")
+
+        effect = CombatRouteEffect(
+            id=f"route-effect:{uuid4().hex}",
+            name=name,
+            effect_type=effect_type,
+            blocks_movement=blocks_movement,
+            movement_cost_modifier=movement_cost_modifier,
+            remaining_rounds=remaining_rounds,
+        )
+        try:
+            self.repository.add_route_effect(
+                scene.id,
+                source_landmark_id,
+                destination_landmark_id,
+                effect,
+            )
+        except ValueError as error:
+            raise CombatError(str(error)) from error
+        return self._require_current(guild_id)
+
+    def remove_route_effect(
+        self,
+        guild_id: int,
+        effect_id: str,
+    ) -> CombatScene:
+        scene = self._require_current(guild_id)
+        try:
+            self.repository.delete_route_effect(
+                scene.id,
+                effect_id,
+            )
         except ValueError as error:
             raise CombatError(str(error)) from error
         return self._require_current(guild_id)

@@ -291,8 +291,8 @@ class DashboardAPITests(unittest.TestCase):
                 "source_landmark_id": "feature:pillar",
                 "destination_landmark_id": "feature:table",
                 "distance": "close",
-                "obstacle": "Fallen rubble",
-                "blocked": False,
+                "terrain": "difficult",
+                "base_blocked": False,
             },
         )
         self.assertEqual(status, 200)
@@ -308,7 +308,9 @@ class DashboardAPITests(unittest.TestCase):
                 "feature:table",
             }
         )
-        self.assertEqual(feature_route["obstacle"], "Fallen rubble")
+        self.assertEqual(feature_route["terrain"], "difficult")
+        self.assertFalse(feature_route["base_blocked"])
+        self.assertFalse(feature_route["blocked"])
 
         delete_route_status, disconnected = self.api.handle(
             "DELETE",

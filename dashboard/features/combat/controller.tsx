@@ -127,7 +127,7 @@ export function CombatWorkspaceController({
         },
         `${combatant.name}'s initiative updated`,
       )}
-      onConnectLandmarks={(sourceId, destinationId, distance, obstacle, blocked) => updateCombat(
+      onConnectLandmarks={(sourceId, destinationId, distance, terrain, baseBlocked) => updateCombat(
         '/combat/routes',
         {
           method: 'PUT',
@@ -135,8 +135,8 @@ export function CombatWorkspaceController({
             source_landmark_id: sourceId,
             destination_landmark_id: destinationId,
             distance,
-            obstacle,
-            blocked,
+            terrain,
+            base_blocked: baseBlocked,
           }),
         },
         'Combat connection saved',

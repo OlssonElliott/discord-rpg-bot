@@ -113,8 +113,8 @@ def handle_combat_request(
             parse_text(body, "source_landmark_id"),
             parse_text(body, "destination_landmark_id"),
             parse_text(body, "distance"),
-            obstacle=parse_optional_text(body, "obstacle"),
-            blocked=parse_boolean(body, "blocked", default=False),
+            terrain=parse_text(body, "terrain"),
+            base_blocked=parse_boolean(body, "base_blocked", default=False),
         )
         return 200, _combat_state_data(scene, api.world)
     if path == "/api/combat/routes" and method == "DELETE":

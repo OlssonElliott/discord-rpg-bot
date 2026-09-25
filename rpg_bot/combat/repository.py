@@ -10,6 +10,7 @@ from .models import (
     CombatLandmark,
     CombatLogEntry,
     CombatRoute,
+    CombatRouteEffect,
     CombatScene,
     CombatStatus,
     CombatantKind,
@@ -17,6 +18,7 @@ from .models import (
     CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
+    RouteTerrain,
 )
 
 
@@ -78,8 +80,9 @@ class CombatRepository:
                 source_landmark_id TEXT NOT NULL,
                 destination_landmark_id TEXT NOT NULL,
                 distance TEXT NOT NULL CHECK (distance IN ('close', 'far', 'distant')),
-                obstacle TEXT,
-                blocked INTEGER NOT NULL DEFAULT 0 CHECK (blocked IN (0, 1)),
+                terrain TEXT NOT NULL DEFAULT 'normal'
+                    CHECK (terrain IN ('normal', 'difficult')),
+                base_blocked INTEGER NOT NULL DEFAULT 0 CHECK (base_blocked IN (0, 1)),
                 automatic INTEGER NOT NULL DEFAULT 0 CHECK (automatic IN (0, 1)),
                 PRIMARY KEY (scene_id, source_landmark_id, destination_landmark_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
@@ -87,6 +90,30 @@ class CombatRepository:
                     REFERENCES combat_landmarks(scene_id, id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, destination_landmark_id)
                     REFERENCES combat_landmarks(scene_id, id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS combat_route_effects (
+                scene_id INTEGER NOT NULL,
+                id TEXT NOT NULL,
+                source_landmark_id TEXT NOT NULL,
+                destination_landmark_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                effect_type TEXT NOT NULL,
+                blocks_movement INTEGER NOT NULL DEFAULT 0
+                    CHECK (blocks_movement IN (0, 1)),
+                movement_cost_modifier INTEGER NOT NULL DEFAULT 0,
+                remaining_rounds INTEGER
+                    CHECK (remaining_rounds IS NULL OR remaining_rounds > 0),
+                PRIMARY KEY (scene_id, id),
+                FOREIGN KEY (
+                    scene_id,
+                    source_landmark_id,
+                    destination_landmark_id
+                ) REFERENCES combat_routes(
+                    scene_id,
+                    source_landmark_id,
+                    destination_landmark_id
+                ) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS combatants (
@@ -174,6 +201,22 @@ class CombatRepository:
                 "ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0 "
                 "CHECK (automatic IN (0, 1))"
             )
+        if "terrain" not in route_columns:
+            connection.execute(
+                "ALTER TABLE combat_routes "
+                "ADD COLUMN terrain TEXT NOT NULL DEFAULT 'normal' "
+                "CHECK (terrain IN ('normal', 'difficult'))"
+            )
+        if "base_blocked" not in route_columns:
+            connection.execute(
+                "ALTER TABLE combat_routes "
+                "ADD COLUMN base_blocked INTEGER NOT NULL DEFAULT 0 "
+                "CHECK (base_blocked IN (0, 1))"
+            )
+            if "blocked" in route_columns:
+                connection.execute(
+                    "UPDATE combat_routes SET base_blocked = blocked"
+                )
 
         scene_columns = {
             row["name"]
@@ -834,8 +877,8 @@ class CombatRepository:
         destination_landmark_id: str,
         distance: LandmarkDistance,
         *,
-        obstacle: str | None = None,
-        blocked: bool = False,
+        terrain: RouteTerrain = RouteTerrain.NORMAL,
+        base_blocked: bool = False,
         automatic: bool = False,
     ) -> None:
         if source_landmark_id == destination_landmark_id:
@@ -858,13 +901,13 @@ class CombatRepository:
                 """
                 INSERT INTO combat_routes (
                     scene_id, source_landmark_id, destination_landmark_id,
-                    distance, obstacle, blocked, automatic
+                    distance, terrain, base_blocked, automatic
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(scene_id, source_landmark_id, destination_landmark_id)
                 DO UPDATE SET
                     distance = excluded.distance,
-                    obstacle = excluded.obstacle,
-                    blocked = excluded.blocked,
+                    terrain = excluded.terrain,
+                    base_blocked = excluded.base_blocked,
                     automatic = excluded.automatic
                 WHERE combat_routes.automatic = 1
                    OR excluded.automatic = 0
@@ -874,11 +917,76 @@ class CombatRepository:
                     source_landmark_id,
                     destination_landmark_id,
                     distance.value,
-                    obstacle,
-                    int(blocked),
+                    terrain.value,
+                    int(base_blocked),
                     int(automatic),
                 ),
             )
+
+    def add_route_effect(
+        self,
+        scene_id: int,
+        source_landmark_id: str,
+        destination_landmark_id: str,
+        effect: CombatRouteEffect,
+    ) -> None:
+        source_landmark_id, destination_landmark_id = sorted(
+            (source_landmark_id, destination_landmark_id)
+        )
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if connection.execute(
+                """
+                SELECT 1 FROM combat_routes
+                WHERE scene_id = ?
+                  AND source_landmark_id = ?
+                  AND destination_landmark_id = ?
+                """,
+                (scene_id, source_landmark_id, destination_landmark_id),
+            ).fetchone() is None:
+                raise ValueError("That combat connection does not exist.")
+
+            connection.execute(
+                """
+                INSERT INTO combat_route_effects (
+                    scene_id, id,
+                    source_landmark_id, destination_landmark_id,
+                    name, effect_type,
+                    blocks_movement, movement_cost_modifier,
+                    remaining_rounds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scene_id,
+                    effect.id,
+                    source_landmark_id,
+                    destination_landmark_id,
+                    effect.name,
+                    effect.effect_type,
+                    int(effect.blocks_movement),
+                    effect.movement_cost_modifier,
+                    effect.remaining_rounds,
+                ),
+            )
+
+    def delete_route_effect(
+        self,
+        scene_id: int,
+        effect_id: str,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                DELETE FROM combat_route_effects
+                WHERE scene_id = ? AND id = ?
+                """,
+                (scene_id, effect_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combat route effect '{effect_id}'."
+                )
 
     def delete_automatic_routes_for_landmark(
         self,
@@ -1068,13 +1176,43 @@ class CombatRepository:
         route_rows = connection.execute(
             """
             SELECT source_landmark_id, destination_landmark_id,
-                   distance, obstacle, blocked, automatic
+                   distance, terrain, base_blocked, automatic
             FROM combat_routes
             WHERE scene_id = ?
             ORDER BY source_landmark_id, destination_landmark_id
             """,
             (scene_id,),
         ).fetchall()
+        effect_rows = connection.execute(
+            """
+            SELECT id, source_landmark_id, destination_landmark_id,
+                   name, effect_type, blocks_movement,
+                   movement_cost_modifier, remaining_rounds
+            FROM combat_route_effects
+            WHERE scene_id = ?
+            ORDER BY id
+            """,
+            (scene_id,),
+        ).fetchall()
+        effects_by_route: dict[
+            tuple[str, str],
+            list[CombatRouteEffect],
+        ] = {}
+        for item in effect_rows:
+            key = (
+                item["source_landmark_id"],
+                item["destination_landmark_id"],
+            )
+            effects_by_route.setdefault(key, []).append(
+                CombatRouteEffect(
+                    id=item["id"],
+                    name=item["name"],
+                    effect_type=item["effect_type"],
+                    blocks_movement=bool(item["blocks_movement"]),
+                    movement_cost_modifier=item["movement_cost_modifier"],
+                    remaining_rounds=item["remaining_rounds"],
+                )
+            )
         combatant_rows = connection.execute(
             """
             SELECT kind, source_id, name, landmark_id, relation,
@@ -1126,9 +1264,18 @@ class CombatRepository:
                     item["source_landmark_id"],
                     item["destination_landmark_id"],
                     LandmarkDistance(item["distance"]),
-                    item["obstacle"],
-                    bool(item["blocked"]),
+                    RouteTerrain(item["terrain"]),
+                    bool(item["base_blocked"]),
                     bool(item["automatic"]),
+                    tuple(
+                        effects_by_route.get(
+                            (
+                                item["source_landmark_id"],
+                                item["destination_landmark_id"],
+                            ),
+                            (),
+                        )
+                    ),
                 )
                 for item in route_rows
             ),
