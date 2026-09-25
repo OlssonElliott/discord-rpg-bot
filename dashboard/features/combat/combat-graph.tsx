@@ -39,7 +39,10 @@ function fallbackPosition(index: number) {
 }
 
 export function clamp(value: number) {
-  return Math.min(1, Math.max(0, value));
+  // Combat layout is an unbounded graph visually. Keep a generous persisted
+  // margin around the original 0..1 room box instead of treating its edges
+  // as hard movement walls for the editor.
+  return Math.min(2, Math.max(-1, value));
 }
 
 export const COMBAT_LAYOUT_WIDTH = 1000;
