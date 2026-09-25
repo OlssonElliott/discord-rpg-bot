@@ -224,6 +224,12 @@ class DashboardAPITests(unittest.TestCase):
         self.assertIsNone(legacy_bandit["hp"])
         self.assertEqual(legacy_bandit["attributes"], {})
 
+        status, _ = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"auto_connect": False},
+        )
+        self.assertEqual(status, 200)
         status, positioned = self.api.handle(
             "PATCH",
             "/api/combat/landmarks/feature:pillar",
@@ -270,6 +276,13 @@ class DashboardAPITests(unittest.TestCase):
         )
         self.assertEqual(pillar["cover"], "full")
         self.assertFalse(pillar["auto_connect"])
+
+        status, _ = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:table",
+            {"auto_connect": False},
+        )
+        self.assertEqual(status, 200)
 
         status, routed = self.api.handle(
             "PUT",
