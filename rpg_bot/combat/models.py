@@ -25,6 +25,12 @@ class LandmarkRelation(str, Enum):
     BEHIND = "behind"
 
 
+class CoverLevel(str, Enum):
+    NONE = "none"
+    HALF = "half"
+    FULL = "full"
+
+
 @dataclass(frozen=True, slots=True)
 class CombatLandmark:
     id: str
@@ -36,7 +42,8 @@ class CombatLandmark:
     synthetic: bool = False
     x: float | None = None
     y: float | None = None
-    supports_behind: bool = False
+    cover: CoverLevel = CoverLevel.NONE
+    auto_connect: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +53,7 @@ class CombatRoute:
     distance: LandmarkDistance
     obstacle: str | None = None
     blocked: bool = False
+    automatic: bool = False
 
     @property
     def movement_cost(self) -> int:
