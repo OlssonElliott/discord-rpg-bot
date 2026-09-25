@@ -437,6 +437,59 @@ class CombatServiceTests(unittest.TestCase):
             pairs,
         )
 
+    def test_auto_connect_all_does_not_create_long_corner_diagonals(self) -> None:
+        south_room = self.world.create_room(
+            "south_room_long_diagonal",
+            self.area.id,
+            "South Room",
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "west",
+            self.other.id,
+            return_exit_name="east",
+            connection_type=ConnectionType.DOOR,
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "south",
+            south_room.id,
+            return_exit_name="north",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        south_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.name == "Door: south"
+        )
+
+        # Put one feature far across the room. It must not become a corner
+        # shortcut partner merely because it falls in a broad direction sector.
+        self.service.set_landmark_position(
+            44,
+            "feature:stone_pillar",
+            0.80,
+            0.18,
+        )
+
+        scene = self.service.auto_connect_all(44)
+        pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                )
+            )
+            for route in scene.routes
+        }
+
+        self.assertNotIn(
+            frozenset((south_door.id, "feature:stone_pillar")),
+            pairs,
+        )
+
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
             self.hall.id,
