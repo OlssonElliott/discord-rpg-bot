@@ -336,7 +336,9 @@ class CombatAttackMixin:
         recovering = (
             character_state.status is CharacterCombatStatus.RECOVERING
         )
+        defending = target.defending
         defense_rolls, defense_roll = self._roll_d20(
+            advantage=defending,
             disadvantage=recovering,
         )
         defense_total = defense_roll + defense_modifier
@@ -411,19 +413,27 @@ class CombatAttackMixin:
                 attacker.source_id,
                 True,
             )
+            if defending:
+                self.repository.set_defending(
+                    scene.id,
+                    target.kind,
+                    target.source_id,
+                    False,
+                )
 
             defense_label = defense_method.replace("_", " ")
             defense_roll_text = (
                 f"{'/'.join(str(value) for value in defense_rolls)} "
                 f"-> {defense_roll}"
-                if recovering
+                if len(defense_rolls) > 1
                 else str(defense_roll)
             )
+            defend_text = " with Defend Advantage" if defending else ""
             if defended:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
                     f"{template.attack_profile}. "
-                    f"{target.name} automatically used {defense_label}: "
+                    f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
                     f"{defense_total} vs Attack DC {template.attack_dc}, "
                     f"defended."
@@ -432,7 +442,7 @@ class CombatAttackMixin:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
                     f"{template.attack_profile}. "
-                    f"{target.name} automatically used {defense_label}: "
+                    f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
                     f"{defense_total} vs Attack DC {template.attack_dc}, "
                     f"failed. {final_damage} damage "
