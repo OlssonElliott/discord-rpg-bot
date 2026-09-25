@@ -107,6 +107,11 @@ export function CombatWorkspaceController({
         { method: 'DELETE' },
         'Enemy removed from combat',
       )}
+      onDefend={() => updateCombat(
+        '/combat/actions/defend',
+        { method: 'POST' },
+        'Defend prepared',
+      )}
       onAttack={(attacker, targetId) => updateCombat(
         attacker.kind === 'character'
           ? '/combat/actions/attack'
