@@ -55,6 +55,13 @@ type AlignmentSlot = {
   angle: number;
 };
 
+const CORNER_ALIGNMENT_SLOTS: Record<string, Point> = {
+  'room:corner:nw': { x: -1, y: -1 },
+  'room:corner:ne': { x: 1, y: -1 },
+  'room:corner:se': { x: 1, y: 1 },
+  'room:corner:sw': { x: -1, y: 1 },
+};
+
 function angularDistance(first: number, second: number): number {
   const difference = Math.abs(first - second) % (Math.PI * 2);
   return Math.min(difference, Math.PI * 2 - difference);
@@ -216,23 +223,47 @@ export function CombatMap({
     };
 
     const availableSlots = alignmentSlots(outerNodes.length);
-    const nodesByAngle = outerNodes
-      .map((node) => {
-        const width = node.measured?.width ?? FALLBACK_NODE_WIDTH;
-        const height = node.measured?.height ?? FALLBACK_NODE_HEIGHT;
-        return {
-          node,
-          width,
-          height,
-          angle: Math.atan2(
-            node.position.y + height / 2 - centerPoint.y,
-            node.position.x + width / 2 - centerPoint.x,
-          ),
-        };
-      })
+    const nodeItems = outerNodes.map((node) => {
+      const width = node.measured?.width ?? FALLBACK_NODE_WIDTH;
+      const height = node.measured?.height ?? FALLBACK_NODE_HEIGHT;
+      return {
+        node,
+        width,
+        height,
+        angle: Math.atan2(
+          node.position.y + height / 2 - centerPoint.y,
+          node.position.x + width / 2 - centerPoint.x,
+        ),
+      };
+    });
+
+    const assignments: Array<
+      (typeof nodeItems)[number] & { slot: AlignmentSlot }
+    > = [];
+
+    // Synthetic room corners are semantic anchors, not generic perimeter nodes.
+    // Keep them in their actual corners so the automatic diagonal topology
+    // remains stable after Align landmarks.
+    for (const item of nodeItems) {
+      const fixed = CORNER_ALIGNMENT_SLOTS[item.node.id];
+      if (!fixed) continue;
+      const slotIndex = availableSlots.findIndex(
+        (slot) => slot.x === fixed.x && slot.y === fixed.y,
+      );
+      if (slotIndex < 0) continue;
+      const [slot] = availableSlots.splice(slotIndex, 1);
+      assignments.push({ ...item, slot });
+    }
+
+    const assignedIds = new Set(
+      assignments.map(({ node }) => node.id),
+    );
+    const remainingNodes = nodeItems
+      .filter(({ node }) => !assignedIds.has(node.id))
       .sort((first, second) => first.angle - second.angle);
 
-    const assignments = nodesByAngle.map((item) => {
+    for (const item of remainingNodes) {
+      if (!availableSlots.length) break;
       const closestIndex = availableSlots.reduce(
         (bestIndex, slot, index) => (
           angularDistance(item.angle, slot.angle)
@@ -243,8 +274,8 @@ export function CombatMap({
         0,
       );
       const [slot] = availableSlots.splice(closestIndex, 1);
-      return { ...item, slot };
-    });
+      assignments.push({ ...item, slot });
+    }
 
     const alignedNodes = assignments.map(({
       node,
