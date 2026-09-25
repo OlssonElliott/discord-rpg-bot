@@ -14,6 +14,7 @@ from .models import (
     CombatStatus,
     CombatantKind,
     CombatantState,
+    CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
 )
@@ -64,8 +65,10 @@ class CombatRepository:
                 synthetic INTEGER NOT NULL DEFAULT 0 CHECK (synthetic IN (0, 1)),
                 x REAL,
                 y REAL,
-                supports_behind INTEGER NOT NULL DEFAULT 0
-                    CHECK (supports_behind IN (0, 1)),
+                cover TEXT NOT NULL DEFAULT 'none'
+                    CHECK (cover IN ('none', 'half', 'full')),
+                auto_connect INTEGER NOT NULL DEFAULT 1
+                    CHECK (auto_connect IN (0, 1)),
                 PRIMARY KEY (scene_id, id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE
             );
@@ -77,6 +80,7 @@ class CombatRepository:
                 distance TEXT NOT NULL CHECK (distance IN ('close', 'far', 'distant')),
                 obstacle TEXT,
                 blocked INTEGER NOT NULL DEFAULT 0 CHECK (blocked IN (0, 1)),
+                automatic INTEGER NOT NULL DEFAULT 0 CHECK (automatic IN (0, 1)),
                 PRIMARY KEY (scene_id, source_landmark_id, destination_landmark_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, source_landmark_id)
@@ -137,15 +141,38 @@ class CombatRepository:
             connection.execute(
                 "ALTER TABLE combat_landmarks ADD COLUMN source_connection_id TEXT"
             )
-        if "supports_behind" not in landmark_columns:
+        if "cover" not in landmark_columns:
             connection.execute(
                 "ALTER TABLE combat_landmarks "
-                "ADD COLUMN supports_behind INTEGER NOT NULL DEFAULT 0 "
-                "CHECK (supports_behind IN (0, 1))"
+                "ADD COLUMN cover TEXT NOT NULL DEFAULT 'none' "
+                "CHECK (cover IN ('none', 'half', 'full'))"
             )
+            if "supports_behind" in landmark_columns:
+                connection.execute(
+                    "UPDATE combat_landmarks SET cover = 'half' "
+                    "WHERE supports_behind = 1"
+                )
+            else:
+                connection.execute(
+                    "UPDATE combat_landmarks SET cover = 'half' "
+                    "WHERE source_feature_id IS NOT NULL"
+                )
+        if "auto_connect" not in landmark_columns:
             connection.execute(
-                "UPDATE combat_landmarks SET supports_behind = 1 "
-                "WHERE source_feature_id IS NOT NULL"
+                "ALTER TABLE combat_landmarks "
+                "ADD COLUMN auto_connect INTEGER NOT NULL DEFAULT 1 "
+                "CHECK (auto_connect IN (0, 1))"
+            )
+
+        route_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(combat_routes)")
+        }
+        if "automatic" not in route_columns:
+            connection.execute(
+                "ALTER TABLE combat_routes "
+                "ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0 "
+                "CHECK (automatic IN (0, 1))"
             )
 
         scene_columns = {
@@ -262,8 +289,8 @@ class CombatRepository:
                 INSERT INTO combat_landmarks (
                     scene_id, id, name, description, source_feature_id,
                     source_connection_id, feature_type, synthetic, x, y,
-                    supports_behind
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cover, auto_connect
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -277,7 +304,8 @@ class CombatRepository:
                         int(landmark.synthetic),
                         landmark.x,
                         landmark.y,
-                        int(landmark.supports_behind),
+                        landmark.cover.value,
+                        int(landmark.auto_connect),
                     )
                     for landmark in landmarks
                 ],
@@ -678,8 +706,8 @@ class CombatRepository:
                     INSERT INTO combat_landmarks (
                         scene_id, id, name, description, source_feature_id,
                         source_connection_id, feature_type, synthetic, x, y,
-                        supports_behind
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cover, auto_connect
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -692,7 +720,8 @@ class CombatRepository:
                         int(landmark.synthetic),
                         landmark.x,
                         landmark.y,
-                        int(landmark.supports_behind),
+                        landmark.cover.value,
+                        int(landmark.auto_connect),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -737,25 +766,25 @@ class CombatRepository:
             if cursor.rowcount == 0:
                 raise ValueError(f"Unknown combat landmark '{landmark_id}'.")
 
-    def set_landmark_supports_behind(
+    def set_landmark_cover(
         self,
         scene_id: int,
         landmark_id: str,
-        supports_behind: bool,
+        cover: CoverLevel,
     ) -> None:
         with self._connect() as connection:
             self._ensure_schema(connection)
             cursor = connection.execute(
                 """
                 UPDATE combat_landmarks
-                SET supports_behind = ?
+                SET cover = ?
                 WHERE scene_id = ? AND id = ?
                 """,
-                (int(supports_behind), scene_id, landmark_id),
+                (cover.value, scene_id, landmark_id),
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"Unknown combat landmark '{landmark_id}'.")
-            if not supports_behind:
+            if cover is CoverLevel.NONE:
                 connection.execute(
                     """
                     UPDATE combatants
@@ -764,6 +793,25 @@ class CombatRepository:
                     """,
                     (scene_id, landmark_id),
                 )
+
+    def set_landmark_auto_connect(
+        self,
+        scene_id: int,
+        landmark_id: str,
+        auto_connect: bool,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combat_landmarks
+                SET auto_connect = ?
+                WHERE scene_id = ? AND id = ?
+                """,
+                (int(auto_connect), scene_id, landmark_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Unknown combat landmark '{landmark_id}'.")
 
     def set_route(
         self,
@@ -774,6 +822,7 @@ class CombatRepository:
         *,
         obstacle: str | None = None,
         blocked: bool = False,
+        automatic: bool = False,
     ) -> None:
         if source_landmark_id == destination_landmark_id:
             raise ValueError("A combat route needs two different landmarks.")
@@ -795,13 +844,14 @@ class CombatRepository:
                 """
                 INSERT INTO combat_routes (
                     scene_id, source_landmark_id, destination_landmark_id,
-                    distance, obstacle, blocked
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    distance, obstacle, blocked, automatic
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(scene_id, source_landmark_id, destination_landmark_id)
                 DO UPDATE SET
                     distance = excluded.distance,
                     obstacle = excluded.obstacle,
-                    blocked = excluded.blocked
+                    blocked = excluded.blocked,
+                    automatic = excluded.automatic
                 """,
                 (
                     scene_id,
@@ -810,6 +860,7 @@ class CombatRepository:
                     distance.value,
                     obstacle,
                     int(blocked),
+                    int(automatic),
                 ),
             )
 
@@ -971,7 +1022,7 @@ class CombatRepository:
         landmark_rows = connection.execute(
             """
             SELECT id, name, description, source_feature_id, source_connection_id,
-                   feature_type, synthetic, x, y, supports_behind
+                   feature_type, synthetic, x, y, cover, auto_connect
             FROM combat_landmarks
             WHERE scene_id = ?
             ORDER BY synthetic DESC, name COLLATE NOCASE, id
@@ -981,7 +1032,7 @@ class CombatRepository:
         route_rows = connection.execute(
             """
             SELECT source_landmark_id, destination_landmark_id,
-                   distance, obstacle, blocked
+                   distance, obstacle, blocked, automatic
             FROM combat_routes
             WHERE scene_id = ?
             ORDER BY source_landmark_id, destination_landmark_id
@@ -1029,7 +1080,8 @@ class CombatRepository:
                     synthetic=bool(item["synthetic"]),
                     x=item["x"],
                     y=item["y"],
-                    supports_behind=bool(item["supports_behind"]),
+                    cover=CoverLevel(item["cover"]),
+                    auto_connect=bool(item["auto_connect"]),
                 )
                 for item in landmark_rows
             ),
@@ -1040,6 +1092,7 @@ class CombatRepository:
                     LandmarkDistance(item["distance"]),
                     item["obstacle"],
                     bool(item["blocked"]),
+                    bool(item["automatic"]),
                 )
                 for item in route_rows
             ),
