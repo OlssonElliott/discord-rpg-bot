@@ -48,7 +48,6 @@ class CombatLandmark:
     x: float | None = None
     y: float | None = None
     cover: CoverLevel = CoverLevel.NONE
-    auto_connect: bool = True
 
 
 @dataclass(frozen=True, slots=True)
