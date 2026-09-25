@@ -2,11 +2,6 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
-  Background,
-  ConnectionMode,
-  Controls,
-  MiniMap,
-  ReactFlow,
   useEdgesState,
   useNodesState,
   type Connection,
@@ -24,7 +19,6 @@ import {
   Shield,
   Skull,
   Swords,
-  Trash2,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -54,6 +48,8 @@ import {
 } from './combat-graph';
 import { CombatantEditor } from './combatant-editor';
 import { CombatantInspectDialog } from './combatant-inspect-dialog';
+import { CombatMap } from './combat-map';
+import { SelectionPanel } from './selection-panel';
 
 type Relation = CombatantData['relation'];
 type Distance = 'close' | 'far' | 'distant';
@@ -554,42 +550,21 @@ export function CombatWorkspace({
             )}
           </div>
         </div>
-        <div className="combat-board">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={combatNodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => selectLandmark(node.id)}
-            onNodeDragStop={saveLandmarkPosition}
-            onConnect={connectNodes}
-            onEdgeClick={(_, edge) => selectRoute(edge.source, edge.target)}
-            onPaneClick={() => {
-              setSelectedLandmarkId(null);
-              setSelectedRouteId(null);
-            }}
-            connectionMode={ConnectionMode.Loose}
-            nodesDraggable={!busy}
-            nodesConnectable={!busy}
-            fitView
-            minZoom={0.35}
-            maxZoom={1.8}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background color="#334155" gap={28} size={1} />
-            <MiniMap
-              pannable
-              zoomable
-              nodeColor="#d39a4a"
-              maskColor="rgba(8, 15, 26, 0.72)"
-            />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-          <div className="combat-board__hint">
-            Drag landmarks to arrange · Drag a handle to connect · Click a connection to edit
-          </div>
-        </div>
+        <CombatMap
+          nodes={nodes}
+          edges={edges}
+          busy={busy}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onNodeClick={selectLandmark}
+          onNodeDragStop={(node) => saveLandmarkPosition(undefined, node)}
+          onConnect={connectNodes}
+          onEdgeClick={selectRoute}
+          onPaneClick={() => {
+            setSelectedLandmarkId(null);
+            setSelectedRouteId(null);
+          }}
+        />
       </div>
 
       <aside className="combat-control-panel">
@@ -620,187 +595,30 @@ export function CombatWorkspace({
             )
           }
         >
-          {selectedLandmark ? (
-            <div className="combat-selection-section">
-              <div className="combat-selection-title">
-                <strong className="combat-selection-name">{selectedLandmark.name}</strong>
-                <Badge variant="outline">
-                  {selectedLandmark.synthetic
-                    ? 'Anchor'
-                    : selectedLandmark.source_connection_id
-                      ? 'Door'
-                      : selectedLandmark.source_feature_id
-                        ? selectedLandmark.feature_type || 'Room feature'
-                        : 'Custom'}
-                </Badge>
-              </div>
-              <p className="combat-selection-description">
-                {selectedLandmark.description || 'No description.'}
-              </p>
-              {selectedLandmark.source_connection_id && (
-                <p className="combat-selection-meta">Linked to the room exit.</p>
-              )}
-              {selectedLandmark.source_feature_id && (
-                <p className="combat-selection-meta">Snapshot of a room feature.</p>
-              )}
-              <label htmlFor="combat-landmark-cover">Cover</label>
-              <NativeSelect
-                id="combat-landmark-cover"
-                value={selectedLandmark.cover}
-                disabled={busy || selectedLandmark.synthetic}
-                onChange={(event) => void onSetLandmarkCover(
-                  selectedLandmark.id,
-                  event.target.value as CombatLandmarkData['cover'],
-                )}
-              >
-                <NativeSelectOption value="none">None</NativeSelectOption>
-                <NativeSelectOption value="half">Half</NativeSelectOption>
-                <NativeSelectOption value="full">Full</NativeSelectOption>
-              </NativeSelect>
-              <div className="combat-connection-actions">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => void onAutoConnectLandmark(selectedLandmark.id)}
-                >
-                  Auto-connect
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  disabled={busy}
-                  onClick={() => void onDisconnectLandmarkRoutes(
-                    selectedLandmark.id,
-                  ).then((removed) => {
-                    if (removed) setSelectedRouteId(null);
-                  })}
-                >
-                  Disconnect all
-                </Button>
-              </div>
-              {selectedLandmark.synthetic && (
-                <p className="combat-selection-meta">
-                  Room anchors are movement positions and cannot provide cover.
-                </p>
-              )}
-              {selectedLandmark.feature_type === 'custom' && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void onDeleteLandmark(selectedLandmark.id).then(
-                    (removed) => {
-                      if (removed) setSelectedLandmarkId(null);
-                    },
-                  )}
-                >
-                  <Trash2 /> Remove landmark
-                </Button>
-              )}
-            </div>
-          ) : selectedRoute ? (
-            <div className="combat-selection-section">
-              <div className="combat-route-card">
-                <strong>
-                  {selectedRouteSource?.name || selectedRoute.source_landmark_id}
-                </strong>
-                <span>↔</span>
-                <strong>
-                  {selectedRouteDestination?.name || selectedRoute.destination_landmark_id}
-                </strong>
-              </div>
-              <p className="combat-selection-meta">
-                Movement cost: {selectedRoute.movement_cost}
-              </p>
-              <label htmlFor="combat-route-distance">Distance</label>
-              <NativeSelect
-                id="combat-route-distance"
-                value={routeDistance}
-                onChange={(event) => setRouteDistance(event.target.value as Distance)}
-              >
-                <NativeSelectOption value="close">Close</NativeSelectOption>
-                <NativeSelectOption value="far">Far</NativeSelectOption>
-                <NativeSelectOption value="distant">Distant</NativeSelectOption>
-              </NativeSelect>
-              <label htmlFor="combat-route-terrain">Terrain</label>
-              <NativeSelect
-                id="combat-route-terrain"
-                value={routeTerrain}
-                onChange={(event) => setRouteTerrain(
-                  event.target.value as 'normal' | 'difficult',
-                )}
-              >
-                <NativeSelectOption value="normal">Normal</NativeSelectOption>
-                <NativeSelectOption value="difficult">
-                  Difficult terrain
-                </NativeSelectOption>
-              </NativeSelect>
-              <label className="combat-checkbox">
-                <input
-                  type="checkbox"
-                  checked={routeBaseBlocked}
-                  onChange={(event) => setRouteBaseBlocked(event.target.checked)}
-                />
-                Base route is blocked
-              </label>
-              {selectedRoute.blocked && !selectedRoute.base_blocked && (
-                <p className="combat-selection-meta">
-                  Currently blocked by an active effect.
-                </p>
-              )}
-              {!!selectedRoute.effects.length && (
-                <div className="combat-route-effects">
-                  <strong>Active effects</strong>
-                  {selectedRoute.effects.map((effect) => (
-                    <p key={effect.id} className="combat-selection-meta">
-                      {effect.name}
-                      {effect.blocks_movement ? ' · Blocks movement' : ''}
-                      {effect.movement_cost_modifier
-                        ? ` · Move ${effect.movement_cost_modifier > 0 ? '+' : ''}${effect.movement_cost_modifier}`
-                        : ''}
-                      {effect.remaining_rounds != null
-                        ? ` · ${effect.remaining_rounds} rounds`
-                        : ''}
-                    </p>
-                  ))}
-                </div>
-              )}
-              <div className="combat-connection-actions">
-                <Button
-                  size="sm"
-                  disabled={!canSaveRoute || busy}
-                  onClick={() => void onConnectLandmarks(
-                    routeSource,
-                    routeDestination,
-                    routeDistance,
-                    routeTerrain,
-                    routeBaseBlocked,
-                  )}
-                >
-                  Save connection
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  disabled={busy}
-                  onClick={() => void onDeleteConnection(
-                    selectedRoute.source_landmark_id,
-                    selectedRoute.destination_landmark_id,
-                  ).then((removed) => {
-                    if (removed) setSelectedRouteId(null);
-                  })}
-                >
-                  <Trash2 /> Remove
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <p className="combat-selection-description">
-              Select a landmark or connection to inspect it. Drag between landmark
-              handles to create a new close connection.
-            </p>
-          )}
+          <SelectionPanel
+            selectedLandmark={selectedLandmark}
+            selectedRoute={selectedRoute}
+            selectedRouteSource={selectedRouteSource}
+            selectedRouteDestination={selectedRouteDestination}
+            busy={busy}
+            routeSource={routeSource}
+            routeDestination={routeDestination}
+            routeDistance={routeDistance}
+            routeTerrain={routeTerrain}
+            routeBaseBlocked={routeBaseBlocked}
+            canSaveRoute={Boolean(canSaveRoute)}
+            onSetRouteDistance={setRouteDistance}
+            onSetRouteTerrain={setRouteTerrain}
+            onSetRouteBaseBlocked={setRouteBaseBlocked}
+            onSetLandmarkCover={onSetLandmarkCover}
+            onAutoConnectLandmark={onAutoConnectLandmark}
+            onDisconnectLandmarkRoutes={onDisconnectLandmarkRoutes}
+            onDeleteLandmark={onDeleteLandmark}
+            onConnectLandmarks={onConnectLandmarks}
+            onDeleteConnection={onDeleteConnection}
+            onClearLandmarkSelection={() => setSelectedLandmarkId(null)}
+            onClearRouteSelection={() => setSelectedRouteId(null)}
+          />
         </CollapsibleCombatSection>
 
         <CollapsibleCombatSection
