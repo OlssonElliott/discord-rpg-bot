@@ -90,7 +90,8 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "source_connection_id": landmark.source_connection_id,
                 "feature_type": landmark.feature_type,
                 "synthetic": landmark.synthetic,
-                "supports_behind": landmark.supports_behind,
+                "cover": landmark.cover.value,
+                "auto_connect": landmark.auto_connect,
                 "x": landmark.x,
                 "y": landmark.y,
             }
@@ -104,6 +105,7 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "movement_cost": route.movement_cost,
                 "obstacle": route.obstacle,
                 "blocked": route.blocked,
+                "automatic": route.automatic,
             }
             for route in scene.routes
         ],
