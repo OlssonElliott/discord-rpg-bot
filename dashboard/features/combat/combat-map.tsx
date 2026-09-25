@@ -19,16 +19,16 @@ import {
   combatNodeTypes,
   type CombatLandmarkNodeData,
 } from './combat-graph';
+import { GraphLayoutControls } from '@/features/graph/graph-layout-controls';
 import {
   DEFAULT_SPACING,
-  MAX_SPACING,
-  MIN_SPACING,
-  SPACING_STEP,
-  alignDisplayPosition,
-  alignedLandmarkNodes,
   scaleAround,
   unscaleAround,
   type Point,
+} from '@/features/graph/graph-layout';
+import {
+  alignDisplayPosition,
+  alignedLandmarkNodes,
 } from './combat-layout';
 
 type CombatMapProps = {
@@ -122,13 +122,6 @@ export function CombatMap({
     [onNodesChange, snapDisplayPosition, toLogicalPosition],
   );
 
-  const adjustSpacing = useCallback((delta: number) => {
-    setSpacing((current) => Math.min(
-      MAX_SPACING,
-      Math.max(MIN_SPACING, current + delta),
-    ));
-  }, []);
-
   const alignLandmarks = useCallback(async () => {
     const alignedNodes = alignedLandmarkNodes(
       displayNodes,
@@ -187,73 +180,15 @@ export function CombatMap({
         />
         <Controls showInteractive={false} />
       </ReactFlow>
-      <div className="combat-map-layout-control">
-        <div className="combat-map-layout-control__title">Map layout</div>
-        <button
-          type="button"
-          className="combat-map-layout-control__snap"
-          aria-pressed={snapToGrid}
-          onClick={() => setSnapToGrid((enabled) => !enabled)}
-        >
-          <span>Snap to grid</span>
-          <span
-            className={[
-              'combat-map-layout-control__switch',
-              snapToGrid ? 'combat-map-layout-control__switch--on' : '',
-            ].filter(Boolean).join(' ')}
-            aria-hidden="true"
-          >
-            <span />
-          </span>
-        </button>
-        <button
-          type="button"
-          className="combat-map-layout-control__align"
-          disabled={busy || displayNodes.length <= 1}
-          onClick={() => void alignLandmarks()}
-        >
-          Align landmarks
-        </button>
-        <div className="combat-spacing-control">
-          <div className="combat-spacing-control__heading">
-            <span>Spacing</span>
-            <button
-              type="button"
-              onClick={() => setSpacing(DEFAULT_SPACING)}
-              title="Reset spacing to 100%"
-            >
-              {spacing}%
-            </button>
-          </div>
-          <div className="combat-spacing-control__controls">
-            <button
-              type="button"
-              aria-label="Decrease map spacing"
-              disabled={spacing <= MIN_SPACING}
-              onClick={() => adjustSpacing(-SPACING_STEP)}
-            >
-              −
-            </button>
-            <input
-              type="range"
-              aria-label="Map spacing"
-              min={MIN_SPACING}
-              max={MAX_SPACING}
-              step={SPACING_STEP}
-              value={spacing}
-              onChange={(event) => setSpacing(Number(event.target.value))}
-            />
-            <button
-              type="button"
-              aria-label="Increase map spacing"
-              disabled={spacing >= MAX_SPACING}
-              onClick={() => adjustSpacing(SPACING_STEP)}
-            >
-              +
-            </button>
-          </div>
-        </div>
-      </div>
+      <GraphLayoutControls
+        snapToGrid={snapToGrid}
+        onSnapToGridChange={setSnapToGrid}
+        alignLabel="Align landmarks"
+        alignDisabled={busy || displayNodes.length <= 1}
+        onAlign={alignLandmarks}
+        spacing={spacing}
+        onSpacingChange={setSpacing}
+      />
       <div className="combat-board__hint">
         Drag landmarks to arrange · Drag a handle to connect · Click a connection to edit
       </div>
