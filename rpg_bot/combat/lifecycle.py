@@ -99,8 +99,6 @@ class CombatLifecycleMixin:
             if direction is not None:
                 direction_counts[direction] = direction_counts.get(direction, 0) + 1
         direction_indices: dict[str, int] = {}
-        door_landmark_ids: list[str] = []
-
         for connection, exit_name, adjacent_room_id, direction in door_specs:
             adjacent_room = self.world.get_room(adjacent_room_id)
             connection_key = connection.connection_id or f"{room_id}:{len(landmarks)}"
@@ -129,7 +127,6 @@ class CombatLifecycleMixin:
                     y=y,
                 )
             )
-            door_landmark_ids.append(landmark_id)
 
         occupied_landmarks = [
             landmark
