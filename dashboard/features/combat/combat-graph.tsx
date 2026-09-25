@@ -217,6 +217,39 @@ function nodeCenter(node: Node<CombatLandmarkNodeData>) {
   };
 }
 
+function nodeHandlePoint(
+  node: Node<CombatLandmarkNodeData>,
+  handle: LandmarkHandle | undefined,
+): GraphPoint {
+  const width = node.measured?.width ?? 178;
+  const height = node.measured?.height ?? 76;
+  const left = node.position.x;
+  const top = node.position.y;
+  const centerX = left + width / 2;
+  const centerY = top + height / 2;
+
+  switch (handle) {
+    case 'top-left':
+      return { x: left, y: top };
+    case 'top':
+      return { x: centerX, y: top };
+    case 'top-right':
+      return { x: left + width, y: top };
+    case 'right':
+      return { x: left + width, y: centerY };
+    case 'bottom-right':
+      return { x: left + width, y: top + height };
+    case 'bottom':
+      return { x: centerX, y: top + height };
+    case 'bottom-left':
+      return { x: left, y: top + height };
+    case 'left':
+      return { x: left, y: centerY };
+    default:
+      return nodeCenter(node);
+  }
+}
+
 function estimatedLabelBounds(
   draft: EdgeDraft,
   offset: GraphPoint,
@@ -233,8 +266,8 @@ function estimatedLabelBounds(
       + (draft.targetPoint.y - draft.sourcePoint.y) * position
       + offset.y,
   };
-  const width = Math.max(58, data.label.length * 6.4 + 10);
-  const height = 18;
+  const width = Math.max(64, data.label.length * 6.8 + 14);
+  const height = 20;
 
   return {
     left: anchor.x - width / 2,
@@ -273,16 +306,22 @@ function labelOffsetCandidates(draft: EdgeDraft): GraphPoint[] {
 
   return [
     { x: 0, y: 0 },
-    point(18),
-    point(-18),
-    point(34),
-    point(-34),
-    point(18, 28),
-    point(-18, 28),
-    point(18, -28),
-    point(-18, -28),
-    point(34, 28),
-    point(-34, -28),
+    point(24),
+    point(-24),
+    point(44),
+    point(-44),
+    point(64),
+    point(-64),
+    point(24, 34),
+    point(-24, 34),
+    point(24, -34),
+    point(-24, -34),
+    point(44, 42),
+    point(-44, 42),
+    point(44, -42),
+    point(-44, -42),
+    point(64, 52),
+    point(-64, -52),
   ];
 }
 
@@ -374,11 +413,12 @@ export function combatEdges(
 
     const sourceNode = nodesById.get(route.source_landmark_id);
     const targetNode = nodesById.get(route.destination_landmark_id);
+    const handles = handleAssignments.get(id);
     const sourcePoint = sourceNode
-      ? nodeCenter(sourceNode)
+      ? nodeHandlePoint(sourceNode, handles?.sourceHandle)
       : positions.get(route.source_landmark_id) ?? { x: 0, y: 0 };
     const targetPoint = targetNode
-      ? nodeCenter(targetNode)
+      ? nodeHandlePoint(targetNode, handles?.targetHandle)
       : positions.get(route.destination_landmark_id) ?? { x: 0, y: 0 };
 
     return {
@@ -388,7 +428,7 @@ export function combatEdges(
         id,
         source: route.source_landmark_id,
         target: route.destination_landmark_id,
-        ...handleAssignments.get(id),
+        ...handles,
         type: 'combat',
         selected: id === selectedRouteId,
         data: {
