@@ -83,15 +83,21 @@ def handle_combat_request(
                 parse_number(body, "x"),
                 parse_number(body, "y"),
             )
-        if "supports_behind" in body:
-            scene = api.combat.set_landmark_supports_behind(
+        if "cover" in body:
+            scene = api.combat.set_landmark_cover(
                 guild_id,
                 landmark_id,
-                parse_boolean(body, "supports_behind", default=False),
+                parse_text(body, "cover"),
+            )
+        if "auto_connect" in body:
+            scene = api.combat.set_landmark_auto_connect(
+                guild_id,
+                landmark_id,
+                parse_boolean(body, "auto_connect", default=True),
             )
         if scene is None:
             raise ValueError(
-                "Landmark PATCH requires position or supports_behind."
+                "Landmark PATCH requires position, cover, or auto_connect."
             )
         return 200, _combat_state_data(scene, api.world)
     if match and method == "DELETE":
