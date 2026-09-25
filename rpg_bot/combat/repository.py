@@ -134,6 +134,8 @@ class CombatRepository:
                 route_cost INTEGER NOT NULL DEFAULT 0 CHECK (route_cost >= 0),
                 standard_action_spent INTEGER NOT NULL DEFAULT 0
                     CHECK (standard_action_spent IN (0, 1)),
+                defending INTEGER NOT NULL DEFAULT 0
+                    CHECK (defending IN (0, 1)),
                 PRIMARY KEY (scene_id, kind, source_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, landmark_id)
@@ -270,6 +272,10 @@ class CombatRepository:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN standard_action_spent INTEGER NOT NULL DEFAULT 0"
             )
+        if "defending" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN defending INTEGER NOT NULL DEFAULT 0"
+            )
 
         # Older combat scenes may still contain relations that are no longer
         # part of the combat model. Treat those positions as simply being at
@@ -357,8 +363,8 @@ class CombatRepository:
                     initiative_roll, initiative_score, acted_this_round,
                     movement_budget, movement_remaining,
                     route_source_landmark_id, route_destination_landmark_id,
-                    route_progress, route_cost, standard_action_spent
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    route_progress, route_cost, standard_action_spent, defending
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -378,6 +384,7 @@ class CombatRepository:
                         combatant.route_progress,
                         combatant.route_cost,
                         int(combatant.standard_action_spent),
+                        int(combatant.defending),
                     )
                     for combatant in combatants
                 ],
@@ -632,6 +639,41 @@ class CombatRepository:
         source_id: str,
     ) -> None:
         self.set_standard_action_spent(
+            scene_id,
+            kind,
+            source_id,
+            False,
+        )
+
+    def set_defending(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        defending: bool,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET defending = ?
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (int(defending), scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
+    def reset_defending(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+    ) -> None:
+        self.set_defending(
             scene_id,
             kind,
             source_id,
@@ -1233,7 +1275,7 @@ class CombatRepository:
                    initiative_roll, initiative_score, acted_this_round,
                    movement_budget, movement_remaining,
                    route_source_landmark_id, route_destination_landmark_id,
-                   route_progress, route_cost, standard_action_spent
+                   route_progress, route_cost, standard_action_spent, defending
             FROM combatants
             WHERE scene_id = ?
             ORDER BY initiative_score DESC, initiative_roll DESC,
@@ -1309,6 +1351,7 @@ class CombatRepository:
                     item["route_progress"],
                     item["route_cost"],
                     bool(item["standard_action_spent"]),
+                    bool(item["defending"]),
                 )
                 for item in combatant_rows
             ),
