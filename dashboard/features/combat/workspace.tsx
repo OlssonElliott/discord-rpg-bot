@@ -566,6 +566,7 @@ export function CombatWorkspace({
               setDraggingLandmarkId(null);
             }
           }}
+          onAutoConnectAll={onAutoConnectAll}
           onConnect={connectNodes}
           onEdgeClick={selectRoute}
           onPaneClick={() => {
