@@ -202,8 +202,10 @@ class DashboardAPITests(unittest.TestCase):
             for landmark in scene["landmarks"]
             if landmark["id"] == "feature:pillar"
         )
-        self.assertFalse(center["supports_behind"])
-        self.assertTrue(pillar["supports_behind"])
+        self.assertEqual(center["cover"], "none")
+        self.assertTrue(center["auto_connect"])
+        self.assertEqual(pillar["cover"], "half")
+        self.assertTrue(pillar["auto_connect"])
         self.assertEqual(
             [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
             [("enemy", "Bandit")],
@@ -235,18 +237,18 @@ class DashboardAPITests(unittest.TestCase):
         )
         self.assertEqual((pillar["x"], pillar["y"]), (0.25, 0.35))
 
-        status, no_behind = self.api.handle(
+        status, no_cover = self.api.handle(
             "PATCH",
             "/api/combat/landmarks/feature:pillar",
-            {"supports_behind": False},
+            {"cover": "none"},
         )
         self.assertEqual(status, 200)
         pillar = next(
             landmark
-            for landmark in no_behind["scene"]["landmarks"]
+            for landmark in no_cover["scene"]["landmarks"]
             if landmark["id"] == "feature:pillar"
         )
-        self.assertFalse(pillar["supports_behind"])
+        self.assertEqual(pillar["cover"], "none")
 
         invalid_move_status, _ = self.api.handle(
             "PATCH",
@@ -255,18 +257,19 @@ class DashboardAPITests(unittest.TestCase):
         )
         self.assertEqual(invalid_move_status, 400)
 
-        status, with_behind = self.api.handle(
+        status, with_cover = self.api.handle(
             "PATCH",
             "/api/combat/landmarks/feature:pillar",
-            {"supports_behind": True},
+            {"cover": "full", "auto_connect": False},
         )
         self.assertEqual(status, 200)
         pillar = next(
             landmark
-            for landmark in with_behind["scene"]["landmarks"]
+            for landmark in with_cover["scene"]["landmarks"]
             if landmark["id"] == "feature:pillar"
         )
-        self.assertTrue(pillar["supports_behind"])
+        self.assertEqual(pillar["cover"], "full")
+        self.assertFalse(pillar["auto_connect"])
 
         status, routed = self.api.handle(
             "PUT",
