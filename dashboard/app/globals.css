@@ -257,6 +257,15 @@ button, input, textarea { font: inherit; }
 .combat-connection-edge--blocked .react-flow__edge-path { stroke: #aa5656; stroke-dasharray: 4 5; }
 .combat-board .react-flow__edge-text { fill: #b8c2cf; font-size: 11px; text-transform: capitalize; }
 .combat-board .react-flow__edge-textbg { fill: #111925; fill-opacity: .92; }
+.combat-spacing-control { position: absolute; right: 14px; bottom: 166px; z-index: 6; width: 200px; padding: 8px 9px; border: 1px solid #2c3a50; border-radius: 8px; background: #0d1522ed; box-shadow: 0 7px 20px #0006; }
+.combat-spacing-control__heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; color: #8d9bad; font-size: .63rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.combat-spacing-control__heading button { padding: 1px 4px; color: #d9a04d; font-size: .62rem; font-weight: 800; border-radius: 4px; }
+.combat-spacing-control__heading button:hover { background: #263345; }
+.combat-spacing-control__controls { display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px; align-items: center; gap: 6px; }
+.combat-spacing-control__controls button { display: grid; width: 24px; height: 24px; place-items: center; padding: 0; color: #e8edf3; font-size: 1rem; line-height: 1; border: 1px solid #34445b; border-radius: 5px; background: #141f2e; }
+.combat-spacing-control__controls button:hover:not(:disabled) { border-color: #64748b; background: #1c2a3d; }
+.combat-spacing-control__controls button:disabled { color: #536174; cursor: default; opacity: .55; }
+.combat-spacing-control__controls input[type='range'] { width: 100%; accent-color: #d39a4a; cursor: pointer; }
 .combat-board__hint { position: absolute; left: 50%; bottom: 10px; z-index: 5; max-width: calc(100% - 220px); padding: 6px 8px; color: #667487; font-size: .68rem; text-align: center; border: 1px solid #26344a; border-radius: 6px; background: #0d1522dd; pointer-events: none; transform: translateX(-50%); }
 .combat-control-panel { padding: 22px; overflow-y: auto; border-left: 1px solid #26344a; background: #0f1724; }
 .combat-control-panel__heading { display: flex; align-items: center; justify-content: space-between; }
