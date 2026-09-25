@@ -291,7 +291,9 @@ button, input, textarea { font: inherit; }
 .combatant-editor { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) 110px; gap: 6px; padding: 9px; border: 1px solid #26344a; border-radius: 8px; background: #111927; }
 .combatant-editor--current { border-color: #b78540; background: #191b20; box-shadow: inset 3px 0 #d39a4a; }
 .combatant-editor--selected { outline: 1px solid #617590; outline-offset: 1px; }
-.combatant-editor__name { grid-column: 1 / -1; display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px; color: #dce2e9; font-size: .77rem; }
+.combatant-editor__toggle { display: flex; grid-column: 1 / -1 !important; width: 100%; min-width: 0; align-items: center; gap: 7px; padding: 0; color: inherit; text-align: left; background: transparent; }
+.combatant-editor__toggle > svg { flex: 0 0 auto; color: #718096; }
+.combatant-editor__name { display: flex; min-width: 0; flex: 1; align-items: center; flex-wrap: wrap; gap: 6px; color: #dce2e9; font-size: .77rem; }
 .combatant-editor__name > span { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .combatant-editor__name > .badge { flex: 0 0 auto; white-space: nowrap; }
 .combatant-editor__movement-state { grid-column: 1 / -1; margin: 0 0 2px; padding: 6px 8px; color: #c6a76d; font-size: .64rem; line-height: 1.35; border: 1px solid #4c3e29; border-radius: 6px; background: #1b1711; }
