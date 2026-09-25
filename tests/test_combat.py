@@ -398,6 +398,14 @@ class CombatServiceTests(unittest.TestCase):
             0.80,
             0.5,
         )
+        # A manually drawn crossing route is visual topology, not a wall.
+        # It must not suppress the bounded diagonals around the room corners.
+        self.service.connect_landmarks(
+            44,
+            "room:corner:nw",
+            "room:corner:se",
+            LandmarkDistance.CLOSE,
+        )
 
         scene = self.service.auto_connect_all(44)
         pairs = {
