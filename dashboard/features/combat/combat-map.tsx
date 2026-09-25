@@ -26,7 +26,9 @@ type CombatMapProps = {
   onNodesChange: (changes: NodeChange<Node<CombatLandmarkNodeData>>[]) => void;
   onEdgesChange: (changes: EdgeChange<Edge>[]) => void;
   onNodeClick: (nodeId: string) => void;
-  onNodeDragStop: (node: Node<CombatLandmarkNodeData>) => void;
+  onNodeDragStop: (
+    node: Node<CombatLandmarkNodeData>,
+  ) => void | Promise<void>;
   onConnect: (connection: Connection) => void;
   onEdgeClick: (sourceId: string, targetId: string) => void;
   onPaneClick: () => void;
@@ -93,10 +95,8 @@ export function CombatMap({
     [centerPosition.x, centerPosition.y, nodes, spacingScale],
   );
 
-  const snapDisplayPosition = useCallback(
+  const alignDisplayPosition = useCallback(
     (nodeId: string, position: Point) => {
-      if (!snapToGrid) return position;
-
       const node = displayNodes.find((candidate) => candidate.id === nodeId);
       const width = node?.measured?.width ?? FALLBACK_NODE_WIDTH;
       const height = node?.measured?.height ?? FALLBACK_NODE_HEIGHT;
@@ -108,7 +108,16 @@ export function CombatMap({
         y: Math.round(centerY / SNAP_GRID_SIZE) * SNAP_GRID_SIZE - height / 2,
       };
     },
-    [displayNodes, snapToGrid],
+    [displayNodes],
+  );
+
+  const snapDisplayPosition = useCallback(
+    (nodeId: string, position: Point) => (
+      snapToGrid
+        ? alignDisplayPosition(nodeId, position)
+        : position
+    ),
+    [alignDisplayPosition, snapToGrid],
   );
 
   const toLogicalPosition = useCallback(
@@ -144,6 +153,26 @@ export function CombatMap({
       Math.max(MIN_SPACING, current + delta),
     ));
   }, []);
+
+  const alignLandmarks = useCallback(async () => {
+    const alignedNodes = displayNodes
+      .filter((node) => node.id !== 'room:center')
+      .map((node) => ({
+        ...node,
+        position: toLogicalPosition(
+          alignDisplayPosition(node.id, node.position),
+        ),
+      }));
+
+    for (const node of alignedNodes) {
+      await onNodeDragStop(node);
+    }
+  }, [
+    alignDisplayPosition,
+    displayNodes,
+    onNodeDragStop,
+    toLogicalPosition,
+  ]);
 
   return (
     <div className="combat-board">
@@ -201,6 +230,14 @@ export function CombatMap({
           >
             <span />
           </span>
+        </button>
+        <button
+          type="button"
+          className="combat-map-layout-control__align"
+          disabled={busy || displayNodes.length <= 1}
+          onClick={() => void alignLandmarks()}
+        >
+          Align landmarks
         </button>
         <div className="combat-spacing-control">
           <div className="combat-spacing-control__heading">
