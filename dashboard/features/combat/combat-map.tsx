@@ -22,14 +22,13 @@ import {
 import { GraphLayoutControls } from '@/features/graph/graph-layout-controls';
 import {
   DEFAULT_SPACING,
+  alignNodeCenterToGrid,
+  alignedGridNodes,
+  graphCenter,
   scaleAround,
   unscaleAround,
   type Point,
 } from '@/features/graph/graph-layout';
-import {
-  alignDisplayPosition,
-  alignedLandmarkNodes,
-} from './combat-layout';
 
 type CombatMapProps = {
   nodes: Node<CombatLandmarkNodeData>[];
@@ -65,23 +64,26 @@ export function CombatMap({
   const [spacing, setSpacing] = useState(DEFAULT_SPACING);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const spacingScale = spacing / 100;
-  const centerPosition = nodes.find(
-    (node) => node.id === 'room:center',
-  )?.position ?? { x: 500, y: 350 };
+  const centerPosition = useMemo(
+    () => graphCenter(nodes),
+    [nodes],
+  );
 
   const displayNodes = useMemo(
     () => nodes.map((node) => ({
       ...node,
-      position: node.id === 'room:center'
-        ? node.position
-        : scaleAround(node.position, centerPosition, spacingScale),
+      position: scaleAround(
+        node.position,
+        centerPosition,
+        spacingScale,
+      ),
     })),
     [centerPosition.x, centerPosition.y, nodes, spacingScale],
   );
 
   const alignNodePosition = useCallback(
     (nodeId: string, position: Point) => (
-      alignDisplayPosition(displayNodes, nodeId, position)
+      alignNodeCenterToGrid(displayNodes, nodeId, position)
     ),
     [displayNodes],
   );
@@ -123,7 +125,7 @@ export function CombatMap({
   );
 
   const alignLandmarks = useCallback(async () => {
-    const alignedNodes = alignedLandmarkNodes(
+    const alignedNodes = alignedGridNodes(
       displayNodes,
       spacingScale,
       toLogicalPosition,
@@ -155,9 +157,7 @@ export function CombatMap({
           const displayPosition = snapDisplayPosition(node.id, node.position);
           onNodeDragStop({
             ...node,
-            position: node.id === 'room:center'
-              ? displayPosition
-              : toLogicalPosition(displayPosition),
+            position: toLogicalPosition(displayPosition),
           });
         }}
         onConnect={onConnect}
