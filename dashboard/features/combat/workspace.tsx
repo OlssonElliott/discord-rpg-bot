@@ -70,10 +70,10 @@ type CombatWorkspaceProps = {
     landmarkId: string,
     cover: CombatLandmarkData['cover'],
   ) => Promise<boolean>;
-  onSetLandmarkAutoConnect: (
-    landmarkId: string,
-    autoConnect: boolean,
-  ) => Promise<boolean>;
+  onAutoConnectLandmark: (landmarkId: string) => Promise<boolean>;
+  onDisconnectLandmarkRoutes: (landmarkId: string) => Promise<boolean>;
+  onAutoConnectAll: () => Promise<boolean>;
+  onDisconnectAllRoutes: () => Promise<boolean>;
   onMoveCombatant: (
     combatant: CombatantData,
     landmarkId: string,
@@ -878,7 +878,10 @@ export function CombatWorkspace({
   onRefresh,
   onPositionLandmark,
   onSetLandmarkCover,
-  onSetLandmarkAutoConnect,
+  onAutoConnectLandmark,
+  onDisconnectLandmarkRoutes,
+  onAutoConnectAll,
+  onDisconnectAllRoutes,
   onMoveCombatant,
   onAddEnemy,
   onRemoveEnemy,
@@ -1380,18 +1383,28 @@ export function CombatWorkspace({
                 <NativeSelectOption value="half">Half</NativeSelectOption>
                 <NativeSelectOption value="full">Full</NativeSelectOption>
               </NativeSelect>
-              <label className="combat-checkbox">
-                <input
-                  type="checkbox"
-                  checked={selectedLandmark.auto_connect}
+              <div className="combat-connection-actions">
+                <Button
+                  size="sm"
+                  variant="outline"
                   disabled={busy}
-                  onChange={(event) => void onSetLandmarkAutoConnect(
+                  onClick={() => void onAutoConnectLandmark(selectedLandmark.id)}
+                >
+                  Auto-connect
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void onDisconnectLandmarkRoutes(
                     selectedLandmark.id,
-                    event.target.checked,
-                  )}
-                />
-                Auto connect
-              </label>
+                  ).then((removed) => {
+                    if (removed) setSelectedRouteId(null);
+                  })}
+                >
+                  Disconnect all
+                </Button>
+              </div>
               {selectedLandmark.synthetic && (
                 <p className="combat-selection-meta">
                   Room anchors are movement positions and cannot provide cover.
@@ -1522,6 +1535,29 @@ export function CombatWorkspace({
           title={<><Route size={15} /> Connections</>}
           summary={String(scene.routes.length)}
         >
+          <div className="combat-connection-actions">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void onAutoConnectAll()}
+            >
+              Auto-connect all
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={busy || !scene.routes.length}
+              onClick={() => {
+                if (!window.confirm('Remove every combat connection?')) return;
+                void onDisconnectAllRoutes().then((removed) => {
+                  if (removed) setSelectedRouteId(null);
+                });
+              }}
+            >
+              Disconnect all
+            </Button>
+          </div>
           <div className="combat-route-list">
             {scene.routes.map((route) => {
               const source = scene.landmarks.find(
@@ -1549,7 +1585,9 @@ export function CombatWorkspace({
                   <strong>{destination?.name || route.destination_landmark_id}</strong>
                   <Badge variant="outline">{route.distance}</Badge>
                   <Badge variant="outline">move {route.movement_cost}</Badge>
-                  {route.obstacle && <small>{route.obstacle}</small>}
+                  {route.terrain !== 'normal' && (
+                    <Badge variant="outline">{route.terrain}</Badge>
+                  )}
                   {route.blocked && <CircleAlert size={14} />}
                 </button>
               );
