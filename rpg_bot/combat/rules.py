@@ -20,22 +20,38 @@ class CombatRulesMixin:
         template = self.world.get_enemy_template(enemy.template_id)
         return template.insight if template is not None else 0
 
+    def _character_load_state(self, character_id: int) -> str:
+        inventory = self.database.get_character_inventory(character_id)
+        capacity = max(1, inventory.carry_capacity())
+        weight = inventory.current_weight(self.world.catalog)
+        if weight > capacity:
+            return "over_encumbered"
+        if weight * 4 > capacity * 3:
+            return "encumbered"
+        return "normal"
+
     def _character_movement_budget(self, character_id: int) -> int:
-        strength = self.database.get_character_attribute(
+        dexterity = self.database.get_character_attribute(
             character_id,
-            "strength",
+            "dexterity",
         )
-        return max(1, 3 + (strength - 10) // 2)
+        dexterity_modifier = (dexterity - 10) // 2
+        movement = max(1, 2 + dexterity_modifier // 2)
+
+        load_state = self._character_load_state(character_id)
+        if load_state == "over_encumbered":
+            return 1
+        if load_state == "encumbered":
+            movement -= 1
+        return max(1, movement)
 
     def _enemy_movement_budget(self, enemy_id: str) -> int:
         enemy = self.world.get_enemy(enemy_id)
         if enemy is None:
-            return 3
+            return 2
         template = self.world.get_enemy_template(enemy.template_id)
-        return max(
-            1,
-            3 + (template.strength if template is not None else 0),
-        )
+        dexterity_modifier = template.dexterity if template is not None else 0
+        return max(1, 2 + dexterity_modifier // 2)
 
     def _character_by_source_id(self, source_id: str):
         try:
