@@ -112,6 +112,11 @@ export function CombatWorkspaceController({
         { method: 'POST' },
         'Defend prepared',
       )}
+      onDash={() => updateCombat(
+        '/combat/actions/dash',
+        { method: 'POST' },
+        'Dash used',
+      )}
       onUseItem={(itemInstanceId) => updateCombat(
         '/combat/actions/use-item',
         {
