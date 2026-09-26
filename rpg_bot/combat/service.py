@@ -9,6 +9,7 @@ from .death_saves import CombatDeathSaveMixin
 from .defense import CombatDefenseMixin
 from .enemy_management import CombatEnemyManagementMixin
 from .errors import CombatError
+from .items import CombatItemMixin
 from .landmarks import CombatLandmarkMixin
 from .lifecycle import CombatLifecycleMixin
 from .models import CombatScene
@@ -25,6 +26,7 @@ class CombatService(
     CombatLifecycleMixin,
     CombatDeathSaveMixin,
     CombatDefenseMixin,
+    CombatItemMixin,
     CombatAttackMixin,
     CombatEnemyManagementMixin,
     CombatTurnMixin,
