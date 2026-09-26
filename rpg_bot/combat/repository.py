@@ -477,7 +477,7 @@ class CombatRepository:
                     route_source_landmark_id, route_destination_landmark_id,
                     route_progress, route_cost, standard_action_spent, defending,
                     dashed, heavy_exertion, damage_taken
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -591,7 +591,7 @@ class CombatRepository:
                         route_source_landmark_id, route_destination_landmark_id,
                         route_progress, route_cost, standard_action_spent,
                         defending, dashed, heavy_exertion, damage_taken
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
