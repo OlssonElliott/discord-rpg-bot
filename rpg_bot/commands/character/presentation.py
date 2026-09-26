@@ -99,6 +99,7 @@ def character_sheet_embed(
         colour=discord.Colour.blurple(),
     )
     embed.add_field(name="HP", value=f"**{character.hp}/{character.max_hp}**", inline=True)
+    embed.add_field(name="Hunger", value=f"**{character.hunger}/100**", inline=True)
     embed.add_field(name="Stance", value=character.stance.display_name, inline=True)
 
     if character.attributes:
