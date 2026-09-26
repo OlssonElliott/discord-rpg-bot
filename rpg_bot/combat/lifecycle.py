@@ -229,7 +229,7 @@ class CombatLifecycleMixin:
                     scene.id,
                     self.CENTER_LANDMARK_ID,
                     landmark.id,
-                    LandmarkDistance.CLOSE,
+                    LandmarkDistance.NEAR,
                 )
             self.repository.append_log(
                 scene.id,
