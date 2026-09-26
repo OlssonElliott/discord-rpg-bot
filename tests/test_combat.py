@@ -1125,6 +1125,180 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(olof.movement_remaining, 0)
 
+    def test_move_toward_combatant_reaches_route_position_and_allows_melee(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        scene = self.service.move_combatant_toward(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "feature:stone_pillar",
+        )
+        goblin_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(goblin_state.is_between_landmarks)
+        self.assertEqual(
+            (goblin_state.route_progress, goblin_state.route_cost),
+            (2, 4),
+        )
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        olof_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        goblin_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(olof_state.is_between_landmarks)
+        self.assertEqual(
+            {
+                olof_state.route_source_landmark_id,
+                olof_state.route_destination_landmark_id,
+            },
+            {
+                goblin_state.route_source_landmark_id,
+                goblin_state.route_destination_landmark_id,
+            },
+        )
+        self.assertEqual(
+            olof_state.route_progress,
+            goblin_state.route_progress,
+        )
+        self.assertEqual(olof_state.movement_remaining, 0)
+
+        with patch(
+            "rpg_bot.combat.service.random.randint",
+            side_effect=[15, 4],
+        ):
+            _, result = self.service.attack_enemy(44, goblin.id)
+
+        self.assertTrue(result.hit)
+
+    def test_move_toward_combatant_stops_short_when_movement_is_insufficient(self) -> None:
+        runner = self.database.create_character(
+            9,
+            "Runner",
+            14,
+            attributes={
+                "Strength": 10,
+                "Dexterity": 14,
+                "Arcana": 10,
+                "Vitality": 10,
+                "Insight": 10,
+                "Personality": 10,
+            },
+        )
+        assert runner.character_id is not None
+        self.world.place_character(runner.character_id, self.hall.id)
+
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+        )
+        scene = self.service.move_combatant_toward(
+            44,
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+            "feature:stone_pillar",
+        )
+        runner_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(runner.character_id)
+        )
+        self.assertEqual(
+            (runner_state.route_progress, runner_state.route_cost),
+            (3, 4),
+        )
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+        )
+        olof_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(olof_state.is_between_landmarks)
+        self.assertEqual(
+            (olof_state.route_progress, olof_state.route_cost),
+            (2, 4),
+        )
+        self.assertEqual(olof_state.movement_remaining, 0)
+
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+        )
+        olof_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(
+            (olof_state.route_progress, olof_state.route_cost),
+            (3, 4),
+        )
+        self.assertEqual(olof_state.movement_remaining, 1)
+
     def test_player_attack_uses_equipped_weapon_and_spends_standard_action(self) -> None:
         skeleton = self.world.place_enemy(
             self.hall.id,
