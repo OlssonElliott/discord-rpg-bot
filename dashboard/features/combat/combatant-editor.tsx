@@ -80,6 +80,9 @@ export function CombatantEditor({
   const [itemInstanceId, setItemInstanceId] = useState(
     combatant.usable_items[0]?.id || '',
   );
+  const selectedItem = combatant.usable_items.find(
+    (item) => item.id === itemInstanceId,
+  );
 
   useEffect(() => {
     setLandmarkId(
@@ -349,6 +352,15 @@ export function CombatantEditor({
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
+              {selectedItem && (
+                <small className="combatant-editor__item-effect">
+                  {selectedItem.affected_stat === 'hp'
+                    ? `Restores ${selectedItem.affected_amount} HP`
+                    : selectedItem.affected_stat === 'hunger'
+                      ? `Reduces Hunger by ${selectedItem.affected_amount}`
+                      : `Affects ${label(selectedItem.affected_stat)} by ${selectedItem.affected_amount}`}
+                </small>
+              )}
               <Button
                 size="sm"
                 variant="outline"
