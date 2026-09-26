@@ -14,6 +14,7 @@ from ..parsing.request import (
 from ..serializers.common import (
     _container_data,
     _enemy_data,
+    _enemy_inventory_data,
     _graph_data,
     _legacy_enemy_data,
     _room_feature_data,
@@ -100,7 +101,14 @@ def handle_world_request(
                         )
                         continue
                     enemy_data.append(
-                        _enemy_data(enemy, template)
+                        _enemy_data(
+                            enemy,
+                            template,
+                            inventory=_enemy_inventory_data(
+                                api.world,
+                                enemy,
+                            ),
+                        )
                     )
             node["enemies"] = enemy_data
 
