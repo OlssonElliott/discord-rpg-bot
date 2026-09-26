@@ -208,6 +208,14 @@ export type CombatantData = {
   is_between_landmarks: boolean;
   standard_action_spent: boolean;
   defending: boolean;
+  usable_items: {
+    id: string;
+    template_id: string;
+    name: string;
+    quantity: number;
+    affected_stat: string;
+    affected_amount: number;
+  }[];
   hp: number | null;
   max_hp: number | null;
   character_status: 'active' | 'downed' | 'stable' | 'recovering' | 'dead' | null;
