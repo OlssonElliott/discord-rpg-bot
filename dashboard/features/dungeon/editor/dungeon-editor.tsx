@@ -585,6 +585,7 @@ export function DungeonEditor() {
           rooms={graph?.nodes ?? []}
           connections={graph?.connections ?? []}
           characters={characters}
+          catalogItems={catalogItems}
           mutate={mutate}
           onClose={() => setInspectorOpen(false)}
           onAddContent={(kind) => {
