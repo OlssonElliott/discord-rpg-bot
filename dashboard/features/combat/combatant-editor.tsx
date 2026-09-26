@@ -254,46 +254,102 @@ export function CombatantEditor({
     combatant.landmark_id,
     ...directLandmarkTargets.map((target) => target.id),
   ]);
-  const localRouteKeys = new Set(
-    scene.routes
-      .filter((route) => (
-        !route.blocked
-        && (
-          localLandmarkIds.has(route.source_landmark_id)
-          || localLandmarkIds.has(route.destination_landmark_id)
-        )
-      ))
-      .map((route) => [
-        route.source_landmark_id,
-        route.destination_landmark_id,
-      ].sort().join('::')),
-  );
-  if (
-    combatant.route_source_landmark_id
-    && combatant.route_destination_landmark_id
-  ) {
-    localRouteKeys.add([
-      combatant.route_source_landmark_id,
-      combatant.route_destination_landmark_id,
-    ].sort().join('::'));
+
+  const localRouteKeys = new Set<string>();
+  if (combatant.is_between_landmarks) {
+    if (
+      combatant.route_source_landmark_id
+      && combatant.route_destination_landmark_id
+    ) {
+      localRouteKeys.add([
+        combatant.route_source_landmark_id,
+        combatant.route_destination_landmark_id,
+      ].sort().join('::'));
+    }
+  } else {
+    for (const route of scene.routes) {
+      if (route.blocked) continue;
+      if (
+        route.source_landmark_id === combatant.landmark_id
+        || route.destination_landmark_id === combatant.landmark_id
+      ) {
+        localRouteKeys.add([
+          route.source_landmark_id,
+          route.destination_landmark_id,
+        ].sort().join('::'));
+      }
+    }
   }
 
-  const movementCombatantTargets = scene.combatants.filter((candidate) => {
+  const movementCostToCombatant = (target: CombatantData) => {
+    if (sameCombatPosition(combatant, target)) return 0;
+
+    if (!target.is_between_landmarks) {
+      return directLandmarkTargets.find(
+        (candidate) => candidate.id === target.landmark_id,
+      )?.cost ?? null;
+    }
+
+    const targetRouteKey = [
+      target.route_source_landmark_id || '',
+      target.route_destination_landmark_id || '',
+    ].sort().join('::');
+    if (!localRouteKeys.has(targetRouteKey)) return null;
+
     if (
-      candidate.kind === combatant.kind
-      && candidate.source_id === combatant.source_id
+      combatant.is_between_landmarks
+      && [
+        combatant.route_source_landmark_id || '',
+        combatant.route_destination_landmark_id || '',
+      ].sort().join('::') === targetRouteKey
+      && combatant.route_cost === target.route_cost
     ) {
-      return false;
+      const canonicalStart = [
+        combatant.route_source_landmark_id || '',
+        combatant.route_destination_landmark_id || '',
+      ].sort()[0];
+      const combatantProgress = (
+        combatant.route_source_landmark_id === canonicalStart
+          ? combatant.route_progress
+          : combatant.route_cost - combatant.route_progress
+      );
+      const targetProgress = (
+        target.route_source_landmark_id === canonicalStart
+          ? target.route_progress
+          : target.route_cost - target.route_progress
+      );
+      return Math.abs(targetProgress - combatantProgress);
     }
-    if (candidate.is_between_landmarks) {
-      const key = [
-        candidate.route_source_landmark_id || '',
-        candidate.route_destination_landmark_id || '',
-      ].sort().join('::');
-      return localRouteKeys.has(key);
+
+    if (!combatant.is_between_landmarks) {
+      if (
+        target.route_source_landmark_id === combatant.landmark_id
+      ) {
+        return target.route_progress;
+      }
+      if (
+        target.route_destination_landmark_id === combatant.landmark_id
+      ) {
+        return target.route_cost - target.route_progress;
+      }
     }
-    return localLandmarkIds.has(candidate.landmark_id);
-  });
+
+    return null;
+  };
+
+  const movementCombatantTargets = scene.combatants
+    .map((candidate) => ({
+      combatant: candidate,
+      cost: movementCostToCombatant(candidate),
+    }))
+    .filter((entry) => (
+      !(
+        entry.combatant.kind === combatant.kind
+        && entry.combatant.source_id === combatant.source_id
+      )
+      && entry.cost != null
+      && entry.cost > 0
+    ));
 
   const selectedMovementCombatant = movementTarget.startsWith('combatant:')
     ? scene.combatants.find(
@@ -410,12 +466,12 @@ export function CombatantEditor({
           )}
           {movementCombatantTargets.length > 0 && (
             <NativeSelectOptGroup label="Combatants">
-              {movementCombatantTargets.map((target) => (
+              {movementCombatantTargets.map(({ combatant: target, cost }) => (
                 <NativeSelectOption
                   key={`${target.kind}:${target.source_id}`}
                   value={`combatant:${target.kind}:${target.source_id}`}
                 >
-                  {target.name}
+                  {target.name} · Move {cost}
                   {target.is_between_landmarks
                     ? ` · path ${target.route_progress}/${target.route_cost}`
                     : ''}
