@@ -20,6 +20,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import {
   apiAssetUrl,
+  type CatalogItem,
   type CharacterSummary,
   type ConnectionData,
   type RoomData,
@@ -27,11 +28,12 @@ import {
 import { edgeId } from '../editor/graph';
 import type { ContentKind, PlacedContainer } from '../types';
 
-export function RoomInspector({ room, connections, rooms, characters, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onPlaceCharacter, onStartCombat, onDelete, onSelectConnection }: {
+export function RoomInspector({ room, connections, rooms, characters, catalogItems, onSave, onUploadImage, onRemoveImage, onAddContent, onEditContainer, onAddRoomFeature, onEditRoomFeature, onRemoveContent, onAddEnemyItem, onRemoveEnemyItem, onPlaceCharacter, onStartCombat, onDelete, onSelectConnection }: {
   room: RoomData;
   connections: ConnectionData[];
   rooms: RoomData[];
   characters: CharacterSummary[];
+  catalogItems: CatalogItem[];
   onSave: (name: string, description: string) => Promise<boolean>;
   onUploadImage: (file: File) => Promise<boolean>;
   onRemoveImage: () => Promise<boolean>;
@@ -46,6 +48,8 @@ export function RoomInspector({ room, connections, rooms, characters, onSave, on
     feature_type: string;
   }) => void;
   onRemoveContent: (kind: ContentKind, id: string) => Promise<boolean>;
+  onAddEnemyItem: (enemyId: string, itemId: string, quantity: number) => Promise<boolean>;
+  onRemoveEnemyItem: (enemyId: string, itemId: string) => Promise<boolean>;
   onPlaceCharacter: (characterId: number) => Promise<boolean>;
   onStartCombat: () => Promise<boolean>;
   onDelete: () => void;
@@ -54,6 +58,9 @@ export function RoomInspector({ room, connections, rooms, characters, onSave, on
   const [name, setName] = useState(room.name);
   const [description, setDescription] = useState(room.description);
   const [characterId, setCharacterId] = useState('');
+  const [enemyInventoryId, setEnemyInventoryId] = useState(room.enemies[0]?.id || '');
+  const [enemyItemId, setEnemyItemId] = useState('');
+  const [enemyItemQuantity, setEnemyItemQuantity] = useState(1);
   const [imageBusy, setImageBusy] = useState(false);
   const [imageError, setImageError] = useState('');
   const imageInput = useRef<HTMLInputElement>(null);
@@ -198,6 +205,77 @@ export function RoomInspector({ room, connections, rooms, characters, onSave, on
           <p className="muted-row">No selectable characters exist yet.</p>
         )}
       </div>
+      {room.enemies.length > 0 && (
+        <div className="inspector__section">
+          <h3>Enemy inventory</h3>
+          <NativeSelect
+            value={enemyInventoryId}
+            onChange={(event) => setEnemyInventoryId(event.target.value)}
+          >
+            {room.enemies.map((enemy) => (
+              <NativeSelectOption key={enemy.id} value={enemy.id}>
+                {enemy.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <NativeSelect
+            value={enemyItemId}
+            onChange={(event) => setEnemyItemId(event.target.value)}
+          >
+            <NativeSelectOption value="">Choose item…</NativeSelectOption>
+            {catalogItems.map((item) => (
+              <NativeSelectOption key={item.id} value={item.id}>
+                {item.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <Input
+            type="number"
+            min={1}
+            value={enemyItemQuantity}
+            onChange={(event) => setEnemyItemQuantity(Number(event.target.value))}
+          />
+          <Button
+            size="sm"
+            disabled={
+              !enemyInventoryId
+              || !enemyItemId
+              || !Number.isInteger(enemyItemQuantity)
+              || enemyItemQuantity < 1
+            }
+            onClick={async () => {
+              if (await onAddEnemyItem(
+                enemyInventoryId,
+                enemyItemId,
+                enemyItemQuantity,
+              )) {
+                setEnemyItemId('');
+                setEnemyItemQuantity(1);
+              }
+            }}
+          >
+            Add item
+          </Button>
+          {room.enemies
+            .find((enemy) => enemy.id === enemyInventoryId)
+            ?.inventory.map((item) => (
+              <p key={item.id}>
+                <Sparkles size={15} />
+                {item.name}
+                <strong>×{item.quantity}</strong>
+                <button
+                  className="remove-content"
+                  type="button"
+                  title={`Remove ${item.name}`}
+                  aria-label={`Remove ${item.name}`}
+                  onClick={() => void onRemoveEnemyItem(enemyInventoryId, item.id)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </p>
+            ))}
+        </div>
+      )}
       <div className="inspector__section content-summary">
         <h3>Room contents</h3>
         {room.players.map((item) => <p key={item.id}><Users size={15} />{item.name}</p>)}
