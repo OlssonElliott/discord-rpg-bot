@@ -260,26 +260,7 @@ export function CombatWorkspace({
     const frame = window.requestAnimationFrame(() => {
       if (draggingLandmarkId) return;
       setNodes(nextNodes);
-      setEdges(combatEdges(
-        scene,
-        nextNodes,
-        selectedRouteId,
-        busy,
-        (targetKind, targetSourceId) => {
-          const current = scene.combatants.find(
-            (combatant) => combatant.is_current_turn,
-          );
-          const target = scene.combatants.find(
-            (combatant) => (
-              combatant.kind === targetKind
-              && combatant.source_id === targetSourceId
-            ),
-          );
-          if (current && target) {
-            void onMoveTowardCombatant(current, target);
-          }
-        },
-      ));
+      setEdges(combatEdges(scene, nextNodes, selectedRouteId));
     });
     if (
       selectedLandmarkId
@@ -308,9 +289,7 @@ export function CombatWorkspace({
     }
     return () => window.cancelAnimationFrame(frame);
   }, [
-    busy,
     draggingLandmarkId,
-    onMoveTowardCombatant,
     scene,
     selectedCombatantKey,
     selectedLandmarkId,
