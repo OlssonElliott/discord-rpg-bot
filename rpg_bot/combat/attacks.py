@@ -12,7 +12,7 @@ from .models import (
     DamageRoll,
     EnemyAttackResult,
 )
-from .navigation import same_combat_position
+from .navigation import same_combat_position, tactical_distance
 from ..inventory import DamagePart
 from ..characters.models import CharacterCombatStatus
 from ..world.enemies import EnemyStatus
@@ -52,11 +52,6 @@ class CombatAttackMixin:
             raise CombatError(
                 f"Enemy '{target_enemy_id}' is not in the active combat."
             )
-        if not same_combat_position(attacker, target):
-            raise CombatError(
-                f"{target.name} is not within melee range of {attacker.name}."
-            )
-
         enemy = self.world.get_enemy(target_enemy_id)
         if enemy is None:
             raise CombatError(
@@ -89,6 +84,25 @@ class CombatAttackMixin:
 
         weapon = self._equipped_attack_weapon(character_id)
         weapon_name = weapon.name if weapon is not None else "Unarmed"
+        weapon_range = weapon.range if weapon is not None else 0
+        if weapon_range <= 0:
+            if not same_combat_position(attacker, target):
+                raise CombatError(
+                    f"{target.name} is not within melee range of "
+                    f"{attacker.name}."
+                )
+        else:
+            distance = tactical_distance(scene, attacker, target)
+            if distance is None:
+                raise CombatError(
+                    f"No clear route reaches {target.name}."
+                )
+            if distance > weapon_range:
+                raise CombatError(
+                    f"{target.name} is out of range "
+                    f"({distance}/{weapon_range})."
+                )
+
         attack_attribute = self._weapon_attack_attribute(weapon)
         attribute_score = self.database.get_character_attribute(
             character_id,
@@ -292,11 +306,6 @@ class CombatAttackMixin:
             raise CombatError(
                 f"Character '{target_character_id}' is not in the active combat."
             )
-        if not same_combat_position(attacker, target):
-            raise CombatError(
-                f"{target.name} is not within melee range of {attacker.name}."
-            )
-
         enemy = self.world.get_enemy(attacker.source_id)
         if enemy is None:
             raise CombatError(
@@ -311,6 +320,36 @@ class CombatAttackMixin:
             raise CombatError(
                 f"Enemy template '{enemy.template_id}' does not exist."
             )
+
+        enemy_weapon = None
+        if template.main_hand_item_id is not None:
+            try:
+                candidate = self.world.catalog.get(
+                    template.main_hand_item_id
+                )
+                if candidate.item_type.value == "weapon":
+                    enemy_weapon = candidate
+            except ValueError:
+                enemy_weapon = None
+
+        weapon_range = enemy_weapon.range if enemy_weapon is not None else 0
+        if weapon_range <= 0:
+            if not same_combat_position(attacker, target):
+                raise CombatError(
+                    f"{target.name} is not within melee range of "
+                    f"{attacker.name}."
+                )
+        else:
+            distance = tactical_distance(scene, attacker, target)
+            if distance is None:
+                raise CombatError(
+                    f"No clear route reaches {target.name}."
+                )
+            if distance > weapon_range:
+                raise CombatError(
+                    f"{target.name} is out of range "
+                    f"({distance}/{weapon_range})."
+                )
 
         character = self._character_by_source_id(target.source_id)
         assert character.character_id is not None
