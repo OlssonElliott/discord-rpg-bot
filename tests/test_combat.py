@@ -15,7 +15,7 @@ from rpg_bot.database import Database
 from rpg_bot.world.dungeon import ConnectionType
 from rpg_bot.inventory import EquipmentSlot
 from rpg_bot.characters.models import CharacterCombatStatus
-from rpg_bot.world import EntityKind
+from rpg_bot.world import EntityKind, InventoryHolder
 from rpg_bot.world.service import WorldService
 
 
@@ -1192,6 +1192,62 @@ class CombatServiceTests(unittest.TestCase):
             any(
                 combatant.source_id == goblin.id
                 for combatant in restarted.combatants
+            )
+        )
+
+    def test_enemy_can_use_health_potion_from_inventory(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        template = self.world.get_enemy_template(goblin.template_id)
+        assert template is not None
+        self.world.update_enemy(
+            goblin.id,
+            name=goblin.name,
+            description=goblin.description,
+            current_hp=max(1, template.max_hp - 5),
+            status=goblin.status,
+        )
+        self.world.place_catalog_item(
+            InventoryHolder.entity(goblin.id),
+            "health_potion",
+            2,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        scene = self.service.use_item(44, "health_potion")
+
+        updated = self.world.get_enemy(goblin.id)
+        assert updated is not None
+        self.assertEqual(updated.current_hp, template.max_hp)
+        inventory = self.world.inventory(
+            InventoryHolder.entity(goblin.id)
+        )
+        potion = next(
+            stack
+            for stack in inventory
+            if stack.item.id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(actor.standard_action_spent)
+        self.assertTrue(
+            any(
+                entry.event_type == "item_used"
+                and "Health Potion" in entry.message
+                and "recovered 5 HP" in entry.message
+                for entry in scene.log_entries
             )
         )
 
