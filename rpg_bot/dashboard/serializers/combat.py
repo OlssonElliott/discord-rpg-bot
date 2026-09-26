@@ -3,12 +3,51 @@
 from typing import Any
 
 from ...combat import AttackResult, CombatScene, EnemyAttackResult
+from ...inventory import ItemType
 from ...world import InventoryHolder
 from ...world.service import WorldService
 from .common import _catalog_item_summary
 
 
 JsonObject = dict[str, Any]
+
+
+def _combatant_usable_items_data(
+    world: WorldService,
+    kind: str,
+    source_id: str,
+) -> list[JsonObject]:
+    if kind != "character":
+        return []
+    try:
+        character_id = int(source_id)
+    except ValueError:
+        return []
+
+    inventory = world.database.get_character_inventory(character_id)
+    usable: list[JsonObject] = []
+    for item in inventory.items:
+        try:
+            template = world.catalog.get(item.template_id)
+        except ValueError:
+            continue
+        if (
+            template.item_type is not ItemType.CONSUMABLE
+            or template.affected_stat != "hp"
+            or template.affected_amount is None
+        ):
+            continue
+        usable.append(
+            {
+                "id": item.instance_id,
+                "template_id": template.template_id,
+                "name": template.name,
+                "quantity": item.quantity,
+                "affected_stat": template.affected_stat,
+                "affected_amount": template.affected_amount,
+            }
+        )
+    return usable
 
 
 def _combatant_vitals_data(
@@ -139,6 +178,11 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "is_between_landmarks": combatant.is_between_landmarks,
                 "standard_action_spent": combatant.standard_action_spent,
                 "defending": combatant.defending,
+                "usable_items": _combatant_usable_items_data(
+                    world,
+                    combatant.kind.value,
+                    combatant.source_id,
+                ),
                 **_combatant_vitals_data(
                     world,
                     combatant.kind.value,
