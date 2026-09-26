@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Eye, Shield, Skull, Swords, Trash2, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eye, MoveRight, Shield, Skull, Swords, Trash2, Users } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,7 @@ export function CombatantEditor({
   onRemoveEnemy,
   onAttack,
   onDefend,
+  onDash,
   onUseItem,
   onSetInitiative,
 }: {
@@ -44,6 +45,7 @@ export function CombatantEditor({
     targetId: string,
   ) => Promise<boolean>;
   onDefend: () => Promise<boolean>;
+  onDash: () => Promise<boolean>;
   onUseItem: (itemInstanceId: string) => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
@@ -188,6 +190,9 @@ export function CombatantEditor({
           {combatant.defending && (
             <Badge variant="outline">Defending</Badge>
           )}
+          {combatant.dashed && (
+            <Badge variant="outline">Dashed</Badge>
+          )}
           {combatant.hp != null && combatant.max_hp != null && (
             <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
           )}
@@ -195,7 +200,7 @@ export function CombatantEditor({
             <Badge variant="outline">{combatant.hunger}/100 Hunger</Badge>
           )}
           <Badge variant="outline">
-            Move {combatant.movement_remaining}/{combatant.movement_budget}
+            Move {combatant.movement_remaining} · Speed {combatant.movement_budget}
           </Badge>
           <Badge variant="outline">Init {combatant.initiative_score}</Badge>
         </span>
@@ -333,6 +338,19 @@ export function CombatantEditor({
               <Shield /> Defend
             </Button>
           )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={
+              busy
+              || !combatant.is_current_turn
+              || incapacitated
+              || combatant.standard_action_spent
+            }
+            onClick={() => void onDash()}
+          >
+            <MoveRight /> Dash +{combatant.movement_budget}
+          </Button>
           {combatant.usable_items.length > 0 && (
             <>
               <NativeSelect
