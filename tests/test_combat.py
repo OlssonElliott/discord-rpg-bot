@@ -128,10 +128,36 @@ class CombatServiceTests(unittest.TestCase):
                         route.destination_landmark_id,
                     }
                     == {"room:center", landmark.id}
-                    and route.distance is LandmarkDistance.CLOSE
+                    and route.distance is LandmarkDistance.NEAR
                     for route in scene.routes
                 )
             )
+
+    def test_distance_bands_cost_one_through_four(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        expected = {
+            LandmarkDistance.ADJACENT: 1,
+            LandmarkDistance.NEAR: 2,
+            LandmarkDistance.FAR: 3,
+            LandmarkDistance.DISTANT: 4,
+        }
+        for distance, cost in expected.items():
+            scene = self.service.connect_landmarks(
+                44,
+                "room:center",
+                "feature:stone_pillar",
+                distance,
+            )
+            route = next(
+                item
+                for item in scene.routes
+                if {
+                    item.source_landmark_id,
+                    item.destination_landmark_id,
+                } == {"room:center", "feature:stone_pillar"}
+            )
+            self.assertEqual(route.distance, distance)
+            self.assertEqual(route.movement_cost, cost)
 
     def test_behind_requires_cover_and_removing_cover_resets_relation(self) -> None:
         self.service.start(44, self.hall.id)
@@ -186,7 +212,7 @@ class CombatServiceTests(unittest.TestCase):
             44,
             "feature:stone_pillar",
             "room:corner:nw",
-            LandmarkDistance.CLOSE,
+            LandmarkDistance.NEAR,
         )
 
         scene = self.service.auto_connect_landmark(
@@ -261,7 +287,7 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                route.distance is LandmarkDistance.CLOSE
+                route.distance is LandmarkDistance.NEAR
                 for route in scene.routes
             )
         )
@@ -298,7 +324,7 @@ class CombatServiceTests(unittest.TestCase):
         self.assertTrue(automatic_routes)
         self.assertTrue(
             all(
-                route.distance is LandmarkDistance.CLOSE
+                route.distance is LandmarkDistance.NEAR
                 for route in automatic_routes
             )
         )
@@ -313,7 +339,7 @@ class CombatServiceTests(unittest.TestCase):
         self.assertTrue(automatic_routes)
         self.assertTrue(
             all(
-                route.distance is LandmarkDistance.CLOSE
+                route.distance is LandmarkDistance.NEAR
                 for route in automatic_routes
             )
         )
@@ -405,7 +431,7 @@ class CombatServiceTests(unittest.TestCase):
             44,
             "room:corner:nw",
             "room:corner:se",
-            LandmarkDistance.CLOSE,
+            LandmarkDistance.NEAR,
         )
 
         scene = self.service.auto_connect_all(44)
@@ -538,7 +564,7 @@ class CombatServiceTests(unittest.TestCase):
             },
             {"room:center", door.id},
         )
-        self.assertEqual(door_route.distance, LandmarkDistance.CLOSE)
+        self.assertEqual(door_route.distance, LandmarkDistance.NEAR)
 
         self.service.end(44)
         reverse_scene = self.service.start(44, self.other.id)
@@ -732,7 +758,7 @@ class CombatServiceTests(unittest.TestCase):
             44,
             "room:center",
             "feature:stone_pillar",
-            LandmarkDistance.CLOSE,
+            LandmarkDistance.NEAR,
             terrain=RouteTerrain.DIFFICULT,
         )
         self.service.move_combatant(
@@ -766,7 +792,7 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             pillar_route.distance,
-            LandmarkDistance.CLOSE,
+            LandmarkDistance.NEAR,
         )
         self.assertEqual(pillar_route.terrain, RouteTerrain.DIFFICULT)
         self.assertFalse(pillar_route.base_blocked)
