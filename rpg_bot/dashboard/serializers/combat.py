@@ -33,7 +33,7 @@ def _combatant_usable_items_data(
             continue
         if (
             template.item_type is not ItemType.CONSUMABLE
-            or template.affected_stat != "hp"
+            or template.affected_stat not in {"hp", "hunger"}
             or template.affected_amount is None
         ):
             continue
@@ -59,6 +59,7 @@ def _combatant_vitals_data(
         return {
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "character_status": None,
             "failed_death_saves": None,
             "death_save_dc": None,
@@ -69,6 +70,7 @@ def _combatant_vitals_data(
         return {
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "character_status": None,
             "failed_death_saves": None,
             "death_save_dc": None,
@@ -98,6 +100,7 @@ def _combatant_vitals_data(
     return {
         "hp": character.hp,
         "max_hp": character.max_hp,
+        "hunger": character.hunger,
         "character_status": state.status.value,
         "failed_death_saves": state.failed_death_saves,
         "death_save_dc": death_save_dc,
@@ -368,6 +371,7 @@ def _combatant_inspect_data(
             "description": "",
             "hp": character.hp,
             "max_hp": character.max_hp,
+            "hunger": character.hunger,
             "status": combat_state.status.value,
             "failed_death_saves": combat_state.failed_death_saves,
             "death_save_dc": death_save_dc,
@@ -440,6 +444,7 @@ def _combatant_inspect_data(
                 ),
                 "hp": enemy.current_hp,
                 "max_hp": template.max_hp,
+                "hunger": None,
                 "status": enemy.status.value,
                 "failed_death_saves": None,
                 "death_save_dc": None,
@@ -493,6 +498,7 @@ def _combatant_inspect_data(
             "description": legacy.description or "",
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "status": "active",
             "failed_death_saves": None,
             "death_save_dc": None,
