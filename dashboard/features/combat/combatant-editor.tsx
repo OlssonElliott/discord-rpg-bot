@@ -25,6 +25,7 @@ export function CombatantEditor({
   onRemoveEnemy,
   onAttack,
   onDefend,
+  onUseItem,
   onSetInitiative,
 }: {
   combatant: CombatantData;
@@ -43,6 +44,7 @@ export function CombatantEditor({
     targetId: string,
   ) => Promise<boolean>;
   onDefend: () => Promise<boolean>;
+  onUseItem: (itemInstanceId: string) => Promise<boolean>;
   onSetInitiative: (
     combatant: CombatantData,
     initiativeScore: number,
@@ -74,6 +76,9 @@ export function CombatantEditor({
   );
   const [attackTargetId, setAttackTargetId] = useState(
     attackTargets[0]?.source_id || '',
+  );
+  const [itemInstanceId, setItemInstanceId] = useState(
+    combatant.usable_items[0]?.id || '',
   );
 
   useEffect(() => {
@@ -109,6 +114,16 @@ export function CombatantEditor({
       setRelation('at');
     }
   }, [movementLandmark?.cover, relation]);
+
+  useEffect(() => {
+    if (
+      itemInstanceId
+      && combatant.usable_items.some((item) => item.id === itemInstanceId)
+    ) {
+      return;
+    }
+    setItemInstanceId(combatant.usable_items[0]?.id || '');
+  }, [combatant.usable_items, itemInstanceId]);
 
   useEffect(() => {
     const validTarget = scene.combatants.some(
@@ -298,19 +313,54 @@ export function CombatantEditor({
             <Swords /> Attack
           </Button>
           {combatant.kind === 'character' && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={
-                busy
-                || !combatant.is_current_turn
-                || incapacitated
-                || combatant.standard_action_spent
-              }
-              onClick={() => void onDefend()}
-            >
-              <Shield /> Defend
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  busy
+                  || !combatant.is_current_turn
+                  || incapacitated
+                  || combatant.standard_action_spent
+                }
+                onClick={() => void onDefend()}
+              >
+                <Shield /> Defend
+              </Button>
+              <NativeSelect
+                aria-label="Use item"
+                value={itemInstanceId}
+                disabled={
+                  busy
+                  || !combatant.is_current_turn
+                  || incapacitated
+                  || combatant.standard_action_spent
+                  || !combatant.usable_items.length
+                }
+                onChange={(event) => setItemInstanceId(event.target.value)}
+              >
+                <NativeSelectOption value="">Choose item…</NativeSelectOption>
+                {combatant.usable_items.map((item) => (
+                  <NativeSelectOption key={item.id} value={item.id}>
+                    {item.name} ×{item.quantity}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  busy
+                  || !combatant.is_current_turn
+                  || incapacitated
+                  || combatant.standard_action_spent
+                  || !itemInstanceId
+                }
+                onClick={() => void onUseItem(itemInstanceId)}
+              >
+                Use Item
+              </Button>
+            </>
           )}
         </div>
       <div className="combatant-editor__initiative">
