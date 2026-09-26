@@ -6,6 +6,8 @@ from .errors import CombatError
 from .models import CombatScene, CombatantKind
 from ..characters.models import CharacterCombatStatus
 from ..inventory import ItemType
+from ..world import InventoryHolder
+from ..world.enemies import EnemyStatus
 
 
 class CombatItemMixin:
@@ -20,74 +22,145 @@ class CombatItemMixin:
         actor = scene.current_combatant()
         if actor is None:
             raise CombatError("There is no current combatant.")
-        if actor.kind is not CombatantKind.CHARACTER:
-            raise CombatError("Only a character can use items in combat.")
         if actor.standard_action_spent:
             raise CombatError(
                 f"{actor.name} has already spent their Standard Action."
             )
 
-        character = self._character_by_source_id(actor.source_id)
-        assert character.character_id is not None
-        character_id = character.character_id
-        state = self.database.get_character_combat_state(character_id)
-        if state.status not in {
-            CharacterCombatStatus.ACTIVE,
-            CharacterCombatStatus.RECOVERING,
-        }:
-            raise CombatError(
-                f"{actor.name} cannot use an item while {state.status.value}."
-            )
+        if actor.kind is CombatantKind.CHARACTER:
+            character = self._character_by_source_id(actor.source_id)
+            assert character.character_id is not None
+            character_id = character.character_id
+            state = self.database.get_character_combat_state(character_id)
+            if state.status not in {
+                CharacterCombatStatus.ACTIVE,
+                CharacterCombatStatus.RECOVERING,
+            }:
+                raise CombatError(
+                    f"{actor.name} cannot use an item while {state.status.value}."
+                )
 
-        inventory = self.database.get_character_inventory(character_id)
-        try:
-            item = inventory.item(item_instance_id)
-            template = self.world.catalog.get(item.template_id)
-        except ValueError as error:
-            raise CombatError(str(error)) from error
+            inventory = self.database.get_character_inventory(character_id)
+            try:
+                item = inventory.item(item_instance_id)
+                template = self.world.catalog.get(item.template_id)
+            except ValueError as error:
+                raise CombatError(str(error)) from error
 
-        if template.item_type is not ItemType.CONSUMABLE:
-            raise CombatError(f"{template.name} is not a consumable.")
-        if template.affected_amount is None:
-            raise CombatError(
-                f"{template.name} does not have a supported combat effect yet."
-            )
+            if template.item_type is not ItemType.CONSUMABLE:
+                raise CombatError(f"{template.name} is not a consumable.")
+            if template.affected_amount is None:
+                raise CombatError(
+                    f"{template.name} does not have a supported combat effect yet."
+                )
 
-        if template.affected_stat == "hp":
-            if character.hp >= character.max_hp:
-                raise CombatError(f"{actor.name} is already at full HP.")
-            before = character.hp
-            updated = self.database.heal_character_by_id(
-                character_id,
-                template.affected_amount,
-            )
-            effect_message = (
-                f"recovered {updated.hp - before} HP "
-                f"({updated.hp}/{updated.max_hp} HP)"
-            )
-        elif template.affected_stat == "hunger":
-            if character.hunger <= 0:
-                raise CombatError(f"{actor.name} is not hungry.")
-            before = character.hunger
-            updated = self.database.adjust_character_hunger(
-                character_id,
-                -template.affected_amount,
-            )
-            effect_message = (
-                f"reduced Hunger by {before - updated.hunger} "
-                f"({updated.hunger}/100 Hunger)"
-            )
-        else:
-            raise CombatError(
-                f"{template.name} does not have a supported combat effect yet."
-            )
+            if template.affected_stat == "hp":
+                if character.hp >= character.max_hp:
+                    raise CombatError(f"{actor.name} is already at full HP.")
+                before = character.hp
+                updated = self.database.heal_character_by_id(
+                    character_id,
+                    template.affected_amount,
+                )
+                effect_message = (
+                    f"recovered {updated.hp - before} HP "
+                    f"({updated.hp}/{updated.max_hp} HP)"
+                )
+            elif template.affected_stat == "hunger":
+                if character.hunger <= 0:
+                    raise CombatError(f"{actor.name} is not hungry.")
+                before = character.hunger
+                updated = self.database.adjust_character_hunger(
+                    character_id,
+                    -template.affected_amount,
+                )
+                effect_message = (
+                    f"reduced Hunger by {before - updated.hunger} "
+                    f"({updated.hunger}/100 Hunger)"
+                )
+            else:
+                raise CombatError(
+                    f"{template.name} does not have a supported combat effect yet."
+                )
 
-        try:
             self.database.set_inventory_item_quantity(
                 character_id,
                 item.instance_id,
                 item.quantity - 1,
             )
+
+        elif actor.kind is CombatantKind.ENEMY:
+            enemy = self.world.get_enemy(actor.source_id)
+            if enemy is None:
+                raise CombatError(f"Enemy '{actor.source_id}' does not exist.")
+            if enemy.status is not EnemyStatus.ACTIVE:
+                raise CombatError(
+                    f"{actor.name} cannot use an item while {enemy.status.value}."
+                )
+
+            holder = InventoryHolder.entity(enemy.id)
+            stack = next(
+                (
+                    candidate
+                    for candidate in self.world.inventory(holder)
+                    if candidate.item.id == item_instance_id
+                ),
+                None,
+            )
+            if stack is None:
+                raise CombatError(
+                    f"{actor.name} does not carry that item."
+                )
+            try:
+                template = self.world.catalog.get(stack.item.id)
+            except ValueError as error:
+                raise CombatError(str(error)) from error
+
+            if (
+                template.item_type is not ItemType.CONSUMABLE
+                or template.affected_stat != "hp"
+                or template.affected_amount is None
+            ):
+                raise CombatError(
+                    f"{template.name} does not have a supported enemy combat effect."
+                )
+
+            enemy_template = self.world.get_enemy_template(enemy.template_id)
+            if enemy_template is None:
+                raise CombatError(
+                    f"Enemy template '{enemy.template_id}' does not exist."
+                )
+            if enemy.current_hp >= enemy_template.max_hp:
+                raise CombatError(f"{actor.name} is already at full HP.")
+
+            new_hp = min(
+                enemy_template.max_hp,
+                enemy.current_hp + template.affected_amount,
+            )
+            healed = new_hp - enemy.current_hp
+            self.world.update_enemy(
+                enemy.id,
+                name=enemy.name,
+                description=enemy.description,
+                current_hp=new_hp,
+                status=enemy.status,
+            )
+            if stack.quantity > 1:
+                self.world.set_item_quantity(
+                    holder,
+                    stack.item.id,
+                    stack.quantity - 1,
+                )
+            else:
+                self.world.remove_item(holder, stack.item.id)
+            effect_message = (
+                f"recovered {healed} HP "
+                f"({new_hp}/{enemy_template.max_hp} HP)"
+            )
+        else:
+            raise CombatError("That combatant cannot use items.")
+
+        try:
             self.repository.set_standard_action_spent(
                 scene.id,
                 actor.kind,
