@@ -87,6 +87,7 @@ type CombatWorkspaceProps = {
     targetId: string,
   ) => Promise<boolean>;
   onDefend: () => Promise<boolean>;
+  onUseItem: (itemInstanceId: string) => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
   onSetInitiative: (
@@ -157,6 +158,7 @@ export function CombatWorkspace({
   onRemoveEnemy,
   onAttack,
   onDefend,
+  onUseItem,
   onNextTurn,
   onPreviousTurn,
   onSetInitiative,
@@ -742,6 +744,7 @@ export function CombatWorkspace({
                 onRemoveEnemy={onRemoveEnemy}
                 onAttack={onAttack}
                 onDefend={onDefend}
+                onUseItem={onUseItem}
                 onSetInitiative={onSetInitiative}
               />
             ))}
