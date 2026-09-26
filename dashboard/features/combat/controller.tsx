@@ -112,6 +112,14 @@ export function CombatWorkspaceController({
         { method: 'POST' },
         'Defend prepared',
       )}
+      onUseItem={(itemInstanceId) => updateCombat(
+        '/combat/actions/use-item',
+        {
+          method: 'POST',
+          body: JSON.stringify({ item_instance_id: itemInstanceId }),
+        },
+        'Item used',
+      )}
       onAttack={(attacker, targetId) => updateCombat(
         attacker.kind === 'character'
           ? '/combat/actions/attack'
