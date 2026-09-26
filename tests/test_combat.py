@@ -1381,6 +1381,107 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertTrue(reopened_attacker.standard_action_spent)
 
+    def test_shortbow_uses_graph_range_and_dexterity(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        bow = self.world.catalog.get("shortbow")
+        bow_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            bow.template_id,
+            durability=bow.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            bow_instance_id,
+            EquipmentSlot.MAIN_HAND,
+            clear_off_hand=True,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.FAR,
+            terrain=RouteTerrain.DIFFICULT,
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "feature:stone_pillar",
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with patch(
+            "rpg_bot.combat.service.random.randint",
+            side_effect=[15, 4],
+        ):
+            _, result = self.service.attack_enemy(44, goblin.id)
+
+        self.assertEqual(result.weapon_name, "Shortbow")
+        self.assertEqual(result.attack_attribute, "dexterity")
+        self.assertTrue(result.hit)
+        self.assertEqual(result.raw_damage, 4)
+
+    def test_shortbow_rejects_target_beyond_range_without_spending_action(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        bow = self.world.catalog.get("shortbow")
+        bow_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            bow.template_id,
+            durability=bow.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            bow_instance_id,
+            EquipmentSlot.MAIN_HAND,
+            clear_off_hand=True,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "feature:stone_pillar",
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "out of range",
+        ):
+            self.service.attack_enemy(44, goblin.id)
+
+        scene = self.service.current(44)
+        assert scene is not None
+        attacker = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(attacker.standard_action_spent)
+
     def test_attack_requires_same_tactical_position_and_does_not_spend_on_rejection(self) -> None:
         goblin = self.world.place_enemy(
             self.hall.id,
