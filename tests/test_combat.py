@@ -1138,17 +1138,22 @@ class CombatServiceTests(unittest.TestCase):
             LandmarkDistance.DISTANT,
         )
 
-        self.service.jump_turn(
-            44,
+        current = self.service.current(44)
+        assert current is not None
+        self.service.repository.set_combatant_position(
+            current.id,
             CombatantKind.ENEMY,
             goblin.id,
+            "room:center",
+            LandmarkRelation.AT,
+            movement_remaining=0,
+            route_source_landmark_id="room:center",
+            route_destination_landmark_id="feature:stone_pillar",
+            route_progress=2,
+            route_cost=4,
         )
-        scene = self.service.move_combatant_toward(
-            44,
-            CombatantKind.ENEMY,
-            goblin.id,
-            "feature:stone_pillar",
-        )
+        scene = self.service.current(44)
+        assert scene is not None
         goblin_state = next(
             combatant
             for combatant in scene.combatants
