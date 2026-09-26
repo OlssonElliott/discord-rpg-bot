@@ -76,6 +76,10 @@ type CombatWorkspaceProps = {
     landmarkId: string,
     relation: Relation,
   ) => Promise<boolean>;
+  onMoveTowardCombatant: (
+    combatant: CombatantData,
+    target: CombatantData,
+  ) => Promise<boolean>;
   onAddEnemy: (
     templateId: string,
     landmarkId: string,
@@ -155,6 +159,7 @@ export function CombatWorkspace({
   onAutoConnectAll,
   onDisconnectAllRoutes,
   onMoveCombatant,
+  onMoveTowardCombatant,
   onAddEnemy,
   onRemoveEnemy,
   onAttack,
@@ -255,7 +260,26 @@ export function CombatWorkspace({
     const frame = window.requestAnimationFrame(() => {
       if (draggingLandmarkId) return;
       setNodes(nextNodes);
-      setEdges(combatEdges(scene, nextNodes, selectedRouteId));
+      setEdges(combatEdges(
+        scene,
+        nextNodes,
+        selectedRouteId,
+        busy,
+        (targetKind, targetSourceId) => {
+          const current = scene.combatants.find(
+            (combatant) => combatant.is_current_turn,
+          );
+          const target = scene.combatants.find(
+            (combatant) => (
+              combatant.kind === targetKind
+              && combatant.source_id === targetSourceId
+            ),
+          );
+          if (current && target) {
+            void onMoveTowardCombatant(current, target);
+          }
+        },
+      ));
     });
     if (
       selectedLandmarkId
@@ -284,7 +308,9 @@ export function CombatWorkspace({
     }
     return () => window.cancelAnimationFrame(frame);
   }, [
+    busy,
     draggingLandmarkId,
+    onMoveTowardCombatant,
     scene,
     selectedCombatantKey,
     selectedLandmarkId,
