@@ -126,6 +126,13 @@ class CombatantState:
     route_cost: int = 0
     standard_action_spent: bool = False
     defending: bool = False
+    # Hunger integration: any Standard Action marks heavy exertion. Future
+    # spells, Dash, abilities, etc. should use the shared Standard Action
+    # state rather than inventing their own exertion tracking.
+    heavy_exertion: bool = False
+    # Accumulates actual HP damage taken during this combat. Future damage
+    # sources should record damage through the shared combat repository hook.
+    damage_taken: int = 0
 
     @property
     def is_between_landmarks(self) -> bool:
