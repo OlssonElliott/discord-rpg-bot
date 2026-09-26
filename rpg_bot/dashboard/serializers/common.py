@@ -42,6 +42,7 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         data.update(
             grip=template.grip.value if template.grip else "one_handed",
             durability=template.durability,
+            range=template.range,
             damage=template.damage_parts[0].amount if template.damage_parts else 1,
             damage_type=(
                 template.damage_parts[0].damage_type
