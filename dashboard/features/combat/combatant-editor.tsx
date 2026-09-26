@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Eye, MoveRight, Shield, Skull, Swords, Trash2, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleAlert, Eye, MoveRight, Shield, Skull, Swords, Trash2, Users } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,40 @@ type Relation = CombatantData['relation'];
 
 function label(value: string) {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function sameCombatPosition(
+  first: CombatantData,
+  second: CombatantData,
+) {
+  if (first.is_between_landmarks !== second.is_between_landmarks) return false;
+  if (!first.is_between_landmarks) {
+    return first.landmark_id === second.landmark_id;
+  }
+
+  const firstRoute = [
+    first.route_source_landmark_id,
+    first.route_destination_landmark_id,
+  ].sort().join('::');
+  const secondRoute = [
+    second.route_source_landmark_id,
+    second.route_destination_landmark_id,
+  ].sort().join('::');
+  if (firstRoute !== secondRoute || first.route_cost !== second.route_cost) {
+    return false;
+  }
+
+  const canonicalStart = [
+    first.route_source_landmark_id || '',
+    first.route_destination_landmark_id || '',
+  ].sort()[0];
+  const firstProgress = first.route_source_landmark_id === canonicalStart
+    ? first.route_progress
+    : first.route_cost - first.route_progress;
+  const secondProgress = second.route_source_landmark_id === canonicalStart
+    ? second.route_progress
+    : second.route_cost - second.route_progress;
+  return firstProgress === secondProgress;
 }
 
 export function CombatantEditor({
@@ -79,12 +113,19 @@ export function CombatantEditor({
   const [attackTargetId, setAttackTargetId] = useState(
     attackTargets[0]?.source_id || '',
   );
+  const [attackError, setAttackError] = useState('');
   const [itemInstanceId, setItemInstanceId] = useState(
     combatant.usable_items[0]?.id || '',
   );
   const selectedItem = combatant.usable_items.find(
     (item) => item.id === itemInstanceId,
   );
+  const selectedAttackTarget = scene.combatants.find(
+    (candidate) => (
+      candidate.kind === targetKind
+      && candidate.source_id === attackTargetId
+    ),
+  ) ?? null;
 
   useEffect(() => {
     setLandmarkId(
@@ -298,7 +339,10 @@ export function CombatantEditor({
               || incapacitated
               || combatant.standard_action_spent
             }
-            onChange={(event) => setAttackTargetId(event.target.value)}
+            onChange={(event) => {
+              setAttackTargetId(event.target.value);
+              setAttackError('');
+            }}
           >
             <NativeSelectOption value="">Choose target…</NativeSelectOption>
             {attackTargets.map((target) => (
@@ -319,10 +363,30 @@ export function CombatantEditor({
               || combatant.standard_action_spent
               || !attackTargetId
             }
-            onClick={() => void onAttack(combatant, attackTargetId)}
+            onClick={() => {
+              if (
+                selectedAttackTarget
+                && !sameCombatPosition(combatant, selectedAttackTarget)
+              ) {
+                setAttackError(
+                  `${selectedAttackTarget.name} is not within melee range.`,
+                );
+                return;
+              }
+              setAttackError('');
+              void onAttack(combatant, attackTargetId).then((ok) => {
+                if (ok) setAttackError('');
+              });
+            }}
           >
             <Swords /> Attack
           </Button>
+          {attackError && (
+            <p className="combatant-editor__attack-error" role="alert">
+              <CircleAlert size={13} />
+              {attackError}
+            </p>
+          )}
           {combatant.kind === 'character' && (
             <Button
               size="sm"
