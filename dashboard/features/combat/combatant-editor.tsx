@@ -577,6 +577,7 @@ export function CombatantEditor({
             onClick={() => {
               if (
                 selectedAttackTarget
+                && combatant.attack_range <= 0
                 && !sameCombatPosition(combatant, selectedAttackTarget)
               ) {
                 setAttackError(
