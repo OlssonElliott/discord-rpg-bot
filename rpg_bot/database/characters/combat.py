@@ -350,6 +350,43 @@ class DatabaseCharacterCombatMixin:
             )
         return self._require_character(discord_user_id)
 
+    def adjust_character_hunger(
+        self,
+        character_id: int,
+        amount: int,
+    ) -> Character:
+        """Adjust Hunger by a signed amount, clamped to the 0-100 range."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT hunger FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            if row is None:
+                raise CharacterNotFoundError(
+                    f"Character {character_id} does not exist."
+                )
+            hunger = max(0, min(100, int(row["hunger"]) + amount))
+            connection.execute(
+                "UPDATE characters SET hunger = ? WHERE id = ?",
+                (hunger, character_id),
+            )
+            character_row = connection.execute(
+                """
+                SELECT id, discord_user_id, name, hp, max_hp, stance,
+                       lineage, race, age, gender,
+                       strength, dexterity, arcana, vitality, insight, personality,
+                       hunger, is_active, is_archived, portrait_key, current_room_id
+                FROM characters
+                WHERE id = ? AND is_archived = 0
+                """,
+                (character_id,),
+            ).fetchone()
+            assert character_row is not None
+            return self._to_character_with_skills(connection, character_row)
+
     def set_stance(self, discord_user_id: int, stance: Stance) -> Character:
         self._require_character(discord_user_id)
         with self._connect() as connection:
