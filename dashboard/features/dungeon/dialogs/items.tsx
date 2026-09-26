@@ -48,6 +48,7 @@ type ItemDraft = {
   slot_cost: number;
   grip?: string;
   durability?: number;
+  range?: number;
   damage?: number;
   damage_type?: string;
   protection?: number;
@@ -70,6 +71,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
   const [slotCost, setSlotCost] = useState(1);
   const [power, setPower] = useState(1);
   const [damageType, setDamageType] = useState('physical');
+  const [weaponRange, setWeaponRange] = useState(0);
   const [grip, setGrip] = useState('one_handed');
   const [canEquip, setCanEquip] = useState(false);
   const [readableContent, setReadableContent] = useState('');
@@ -84,7 +86,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
 
   const record: ItemDraft = { name, item_type: itemType, description, rarity, value, weight, slot_cost: slotCost };
   Object.assign(record, { stackable });
-  if (itemType === 'weapon') Object.assign(record, { grip, durability: editingItem?.durability ?? 40, damage: power, damage_type: damageType });
+  if (itemType === 'weapon') Object.assign(record, { grip, durability: editingItem?.durability ?? 40, range: weaponRange, damage: power, damage_type: damageType });
   if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: editingItem?.dodge_penalty ?? 0, strength_requirement: editingItem?.strength_requirement ?? 0 });
   if (itemType === 'container') Object.assign(record, { capacity: power, can_equip: canEquip });
   if (itemType === 'consumable') Object.assign(record, { affected_amount: power });
@@ -102,6 +104,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
     setReadableContent(item?.content ?? '');
     setGrip(item?.grip ?? 'one_handed');
     setDamageType(item?.damage_type ?? 'physical');
+    setWeaponRange(item?.range ?? 0);
     setCanEquip(item?.can_equip ?? false);
     setPower(
       item?.damage
@@ -144,13 +147,13 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
           <label className="dialog-label" htmlFor="item-weight">Weight<Input id="item-weight" type="number" min={0} value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
           <label className="dialog-label" htmlFor="item-slots">Storage slots<Input id="item-slots" type="number" min={0} value={slotCost} onChange={(event) => setSlotCost(Number(event.target.value))} /></label>
           {!['misc', 'tool', 'clothing', 'readable'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
-          {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
+          {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-range">Range<Input id="item-range" type="number" min={0} value={weaponRange} onChange={(event) => setWeaponRange(Number(event.target.value))} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
           {itemType === 'container' && <label className="catalog-check"><input type="checkbox" checked={canEquip} onChange={(event) => setCanEquip(event.target.checked)} /> Can be equipped</label>}
         </div>
         <label className="dialog-label" htmlFor="item-description">Description</label>
         <Textarea id="item-description" value={description} onChange={(event) => setDescription(event.target.value)} />
         {itemType === 'readable' && <label className="dialog-label" htmlFor="item-readable-content">Readable content<Textarea className="readable-content-input" id="item-readable-content" value={readableContent} onChange={(event) => setReadableContent(event.target.value)} /></label>}
-        <DialogFooter><Button disabled={!name.trim() || !rarity.trim() || value < 0 || weight < 0 || slotCost < 0 || power < 1} onClick={() => void onSave(record, editingId)}>{editingId ? 'Save item type' : 'Create item type'}</Button></DialogFooter>
+        <DialogFooter><Button disabled={!name.trim() || !rarity.trim() || value < 0 || weight < 0 || slotCost < 0 || power < 1 || weaponRange < 0} onClick={() => void onSave(record, editingId)}>{editingId ? 'Save item type' : 'Create item type'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
