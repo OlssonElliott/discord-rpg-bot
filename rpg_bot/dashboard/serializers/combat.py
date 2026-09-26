@@ -3,7 +3,7 @@
 from typing import Any
 
 from ...combat import AttackResult, CombatScene, EnemyAttackResult
-from ...inventory import ItemType
+from ...inventory import EquipmentSlot, ItemType
 from ...world import InventoryHolder
 from ...world.service import WorldService
 from .common import _catalog_item_summary
@@ -66,6 +66,46 @@ def _combatant_usable_items_data(
             }
         )
     return usable
+
+
+def _combatant_attack_range(
+    world: WorldService,
+    kind: str,
+    source_id: str,
+) -> int:
+    if kind == "character":
+        try:
+            character_id = int(source_id)
+        except ValueError:
+            return 0
+        inventory = world.database.get_character_inventory(character_id)
+        for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+            instance_id = inventory.equipment.get(slot)
+            if instance_id is None:
+                continue
+            try:
+                instance = inventory.item(instance_id)
+                template = world.catalog.get(instance.template_id)
+            except ValueError:
+                continue
+            if template.item_type is ItemType.WEAPON:
+                return template.range
+        return 0
+
+    if kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is None:
+            return 0
+        template = world.get_enemy_template(enemy.template_id)
+        if template is None or template.main_hand_item_id is None:
+            return 0
+        try:
+            weapon = world.catalog.get(template.main_hand_item_id)
+        except ValueError:
+            return 0
+        return weapon.range if weapon.item_type is ItemType.WEAPON else 0
+
+    return 0
 
 
 def _combatant_vitals_data(
@@ -221,6 +261,11 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "standard_action_spent": combatant.standard_action_spent,
                 "defending": combatant.defending,
                 "dashed": combatant.dashed,
+                "attack_range": _combatant_attack_range(
+                    world,
+                    combatant.kind.value,
+                    combatant.source_id,
+                ),
                 "usable_items": _combatant_usable_items_data(
                     world,
                     combatant.kind.value,
