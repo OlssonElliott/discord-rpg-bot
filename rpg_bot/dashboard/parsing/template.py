@@ -218,9 +218,17 @@ def item_record(
             "damage",
             default=1,
         )
+        weapon_range = parse_integer(
+            body,
+            "range",
+            default=0,
+        )
+        if weapon_range < 0:
+            raise ValueError("Weapon range cannot be negative.")
         record.update(
             grip=grip.value,
             durability=durability,
+            range=weapon_range,
             damage_parts=[
                 {
                     "amount": damage,
