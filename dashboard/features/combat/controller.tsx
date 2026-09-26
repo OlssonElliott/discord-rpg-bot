@@ -90,6 +90,11 @@ export function CombatWorkspaceController({
         },
         `${combatant.name} moved`,
       )}
+      onMoveTowardCombatant={(combatant, target) => updateCombat(
+        `/combat/movement/${combatant.kind}/${combatant.source_id}/toward/${target.kind}/${target.source_id}`,
+        { method: 'PATCH' },
+        `${combatant.name} moved toward ${target.name}`,
+      )}
       onAddEnemy={(templateId, landmarkId, quantity) => updateCombat(
         '/combat/enemies',
         {
