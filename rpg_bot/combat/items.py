@@ -48,19 +48,39 @@ class CombatItemMixin:
 
         if template.item_type is not ItemType.CONSUMABLE:
             raise CombatError(f"{template.name} is not a consumable.")
-        if template.affected_stat != "hp" or template.affected_amount is None:
+        if template.affected_amount is None:
             raise CombatError(
                 f"{template.name} does not have a supported combat effect yet."
             )
-        if character.hp >= character.max_hp:
-            raise CombatError(f"{actor.name} is already at full HP.")
 
-        hp_before = character.hp
-        updated = self.database.heal_character_by_id(
-            character_id,
-            template.affected_amount,
-        )
-        healed = updated.hp - hp_before
+        if template.affected_stat == "hp":
+            if character.hp >= character.max_hp:
+                raise CombatError(f"{actor.name} is already at full HP.")
+            before = character.hp
+            updated = self.database.heal_character_by_id(
+                character_id,
+                template.affected_amount,
+            )
+            effect_message = (
+                f"recovered {updated.hp - before} HP "
+                f"({updated.hp}/{updated.max_hp} HP)"
+            )
+        elif template.affected_stat == "hunger":
+            if character.hunger <= 0:
+                raise CombatError(f"{actor.name} is not hungry.")
+            before = character.hunger
+            updated = self.database.adjust_character_hunger(
+                character_id,
+                -template.affected_amount,
+            )
+            effect_message = (
+                f"reduced Hunger by {before - updated.hunger} "
+                f"({updated.hunger}/100 Hunger)"
+            )
+        else:
+            raise CombatError(
+                f"{template.name} does not have a supported combat effect yet."
+            )
 
         try:
             self.database.set_inventory_item_quantity(
@@ -78,10 +98,7 @@ class CombatItemMixin:
                 scene.id,
                 scene.round_number,
                 "item_used",
-                (
-                    f"{actor.name} used {template.name} and recovered "
-                    f"{healed} HP ({updated.hp}/{updated.max_hp} HP)."
-                ),
+                f"{actor.name} used {template.name} and {effect_message}.",
                 actor_kind=actor.kind,
                 actor_source_id=actor.source_id,
                 actor_name=actor.name,
