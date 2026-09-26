@@ -51,7 +51,7 @@ import { ConnectionsPanel } from './connections-panel';
 import { SelectionPanel } from './selection-panel';
 
 type Relation = CombatantData['relation'];
-type Distance = 'close' | 'far' | 'distant';
+type Distance = 'adjacent' | 'near' | 'far' | 'distant';
 
 type CombatWorkspaceProps = {
   scene: CombatSceneData | null;
@@ -87,6 +87,7 @@ type CombatWorkspaceProps = {
     targetId: string,
   ) => Promise<boolean>;
   onDefend: () => Promise<boolean>;
+  onDash: () => Promise<boolean>;
   onUseItem: (itemInstanceId: string) => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
@@ -158,6 +159,7 @@ export function CombatWorkspace({
   onRemoveEnemy,
   onAttack,
   onDefend,
+  onDash,
   onUseItem,
   onNextTurn,
   onPreviousTurn,
@@ -173,7 +175,7 @@ export function CombatWorkspace({
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routeSource, setRouteSource] = useState('');
   const [routeDestination, setRouteDestination] = useState('');
-  const [routeDistance, setRouteDistance] = useState<Distance>('close');
+  const [routeDistance, setRouteDistance] = useState<Distance>('near');
   const [routeTerrain, setRouteTerrain] = useState<'normal' | 'difficult'>('normal');
   const [routeBaseBlocked, setRouteBaseBlocked] = useState(false);
   const [enemyTemplateId, setEnemyTemplateId] = useState('');
@@ -340,13 +342,13 @@ export function CombatWorkspace({
 
     setRouteSource(candidate.source);
     setRouteDestination(candidate.target);
-    setRouteDistance('close');
+    setRouteDistance('near');
     setRouteTerrain('normal');
     setRouteBaseBlocked(false);
     void onConnectLandmarks(
       candidate.source,
       candidate.target,
-      'close',
+      'near',
       'normal',
       false,
     ).then((saved) => {
@@ -744,6 +746,7 @@ export function CombatWorkspace({
                 onRemoveEnemy={onRemoveEnemy}
                 onAttack={onAttack}
                 onDefend={onDefend}
+                onDash={onDash}
                 onUseItem={onUseItem}
                 onSetInitiative={onSetInitiative}
               />
