@@ -319,20 +319,22 @@ export function CombatantEditor({
             <Swords /> Attack
           </Button>
           {combatant.kind === 'character' && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                busy
+                || !combatant.is_current_turn
+                || incapacitated
+                || combatant.standard_action_spent
+              }
+              onClick={() => void onDefend()}
+            >
+              <Shield /> Defend
+            </Button>
+          )}
+          {combatant.usable_items.length > 0 && (
             <>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  busy
-                  || !combatant.is_current_turn
-                  || incapacitated
-                  || combatant.standard_action_spent
-                }
-                onClick={() => void onDefend()}
-              >
-                <Shield /> Defend
-              </Button>
               <NativeSelect
                 aria-label="Use item"
                 value={itemInstanceId}
@@ -341,7 +343,6 @@ export function CombatantEditor({
                   || !combatant.is_current_turn
                   || incapacitated
                   || combatant.standard_action_spent
-                  || !combatant.usable_items.length
                 }
                 onChange={(event) => setItemInstanceId(event.target.value)}
               >
