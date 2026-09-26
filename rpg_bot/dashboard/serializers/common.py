@@ -58,6 +58,7 @@ def _template_data(template: ItemTemplate) -> JsonObject:
     elif template.item_type is ItemType.CONTAINER:
         data.update(capacity=template.capacity, can_equip=template.can_equip)
     elif template.item_type is ItemType.CONSUMABLE:
+        data["affected_stat"] = template.affected_stat
         data["affected_amount"] = template.affected_amount
     return data
 
@@ -278,6 +279,7 @@ def _character_data(
         "lineage": character.lineage,
         "hp": character.hp,
         "max_hp": character.max_hp,
+        "hunger": character.hunger,
         "status": state.status.value,
     }
 
@@ -376,6 +378,7 @@ def _character_admin_data(
         "portrait_url": _character_portrait_url(character, portraits),
         "hp": character.hp,
         "max_hp": character.max_hp,
+        "hunger": character.hunger,
         "status": combat_state.status.value,
         "failed_death_saves": combat_state.failed_death_saves,
         "death_save_dc": death_save_dc,
