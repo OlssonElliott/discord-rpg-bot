@@ -314,6 +314,7 @@ button, input, textarea { font: inherit; }
 .combatant-editor__standard-action { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 8px; border: 1px solid #34445b; border-radius: 7px; background: #101a28; }
 .combatant-editor__standard-action > div { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 8px; color: #9facc0; font-size: .66rem; }
 .combatant-editor__standard-action select { min-width: 0; }
+.combatant-editor__item-effect { grid-column: 1 / -1; color: #7f8da1; font-size: .62rem; line-height: 1.35; }
 .combatant-editor__standard-action button { grid-column: 2; }
 .combat-action-badge--ready { color: #95caa1; border-color: #466c51; }
 .combat-action-badge--spent { color: #8a94a4; border-color: #3c4656; opacity: .75; }
