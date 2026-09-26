@@ -73,6 +73,26 @@ def _combatant_vitals_data(
     kind: str,
     source_id: str,
 ) -> JsonObject:
+    if kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is None:
+            return {
+                "hp": None,
+                "max_hp": None,
+                "hunger": None,
+                "character_status": None,
+                "failed_death_saves": None,
+                "death_save_dc": None,
+            }
+        template = world.get_enemy_template(enemy.template_id)
+        return {
+            "hp": enemy.current_hp,
+            "max_hp": template.max_hp if template is not None else None,
+            "hunger": None,
+            "character_status": None,
+            "failed_death_saves": None,
+            "death_save_dc": None,
+        }
     if kind != "character":
         return {
             "hp": None,
