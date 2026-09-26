@@ -1350,6 +1350,70 @@ class CombatServiceTests(unittest.TestCase):
         self.assertFalse(defender.defending)
         self.assertFalse(defender.standard_action_spent)
 
+    def test_use_item_heals_consumes_stack_and_spends_standard_action(self) -> None:
+        potion_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            "stale_bread",
+            quantity=2,
+            stackable=True,
+        )
+        self.database.set_hp(7, 5)
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.use_item(44, potion_id)
+
+        updated = self.database.get_character(7)
+        self.assertEqual(updated.hp, 10)
+        inventory = self.database.get_character_inventory(self.olof.character_id)
+        self.assertEqual(inventory.item(potion_id).quantity, 1)
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(actor.standard_action_spent)
+        self.assertTrue(
+            any(
+                entry.event_type == "item_used"
+                and "Stale Bread" in entry.message
+                and "recovered 5 HP" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_use_item_rejects_full_hp_without_consuming_item_or_action(self) -> None:
+        potion_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            "health_potion",
+            quantity=1,
+            stackable=True,
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with self.assertRaisesRegex(CombatError, "already at full HP"):
+            self.service.use_item(44, potion_id)
+
+        inventory = self.database.get_character_inventory(self.olof.character_id)
+        self.assertEqual(inventory.item(potion_id).quantity, 1)
+        scene = self.service.current(44)
+        assert scene is not None
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(actor.standard_action_spent)
+
     def test_failed_automatic_defense_applies_armor_and_character_damage(self) -> None:
         armor = self.world.catalog.get("leather_armor")
         armor_instance_id = self.database.add_inventory_item(
