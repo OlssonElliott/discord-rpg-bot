@@ -165,7 +165,7 @@ class DatabaseCharacterCombatMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE id = ? AND is_archived = 0
                 """,
@@ -240,7 +240,7 @@ class DatabaseCharacterCombatMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE id = ? AND is_archived = 0
                 """,
