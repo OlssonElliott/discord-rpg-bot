@@ -190,7 +190,7 @@ export type CombatRouteEffectData = CombatEffectData;
 export type CombatRouteData = {
   source_landmark_id: string;
   destination_landmark_id: string;
-  distance: 'close' | 'far' | 'distant';
+  distance: 'adjacent' | 'near' | 'far' | 'distant';
   movement_cost: number;
   terrain: 'normal' | 'difficult';
   base_blocked: boolean;
@@ -217,6 +217,7 @@ export type CombatantData = {
   is_between_landmarks: boolean;
   standard_action_spent: boolean;
   defending: boolean;
+  dashed: boolean;
   usable_items: {
     id: string;
     template_id: string;
