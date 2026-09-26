@@ -747,6 +747,7 @@ export function CombatWorkspace({
                 busy={busy}
                 selected={selectedCombatantKey === combatantKey(combatant)}
                 onMove={onMoveCombatant}
+                onMoveTowardCombatant={onMoveTowardCombatant}
                 onInspect={(selected) => void inspectCombatant(selected)}
                 onRemoveEnemy={onRemoveEnemy}
                 onAttack={onAttack}
