@@ -47,6 +47,7 @@ class ItemTemplate:
     grip: WeaponGrip | None = None
     durability: int | None = None
     damage_parts: tuple[DamagePart, ...] = ()
+    range: int = 0
     protection: int | None = None
     dodge_penalty: int = 0
     strength_requirement: int | None = None
@@ -61,6 +62,8 @@ class ItemTemplate:
     def __post_init__(self) -> None:
         if self.weight < 0:
             raise ValueError("Item weight cannot be negative.")
+        if self.range < 0:
+            raise ValueError("Weapon range cannot be negative.")
         if self.slot_cost is None:
             object.__setattr__(
                 self,
@@ -144,6 +147,11 @@ class ItemCatalog:
             damage_parts=tuple(
                 DamagePart(int(part["amount"]), str(part["damage_type"]))
                 for part in record.get("damage_parts", [])
+            ),
+            range=(
+                int(record.get("range", 0))
+                if item_type is ItemType.WEAPON
+                else 0
             ),
             protection=protection if item_type is ItemType.ARMOR else None,
             dodge_penalty=int(record.get("dodge_penalty", 0)),
