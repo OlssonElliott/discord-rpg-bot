@@ -10,7 +10,11 @@ class CombatStatus(str, Enum):
 
 
 class LandmarkDistance(str, Enum):
-    CLOSE = "close"
+    ADJACENT = "adjacent"
+    NEAR = "near"
+    # Compatibility alias for older callers. "Close" now maps to the new
+    # standard Near distance rather than being its own persisted value.
+    CLOSE = "near"
     FAR = "far"
     DISTANT = "distant"
 
@@ -79,9 +83,10 @@ class CombatRoute:
     @property
     def base_movement_cost(self) -> int:
         return {
-            LandmarkDistance.CLOSE: 1,
+            LandmarkDistance.ADJACENT: 1,
+            LandmarkDistance.NEAR: 2,
             LandmarkDistance.FAR: 3,
-            LandmarkDistance.DISTANT: 5,
+            LandmarkDistance.DISTANT: 4,
         }[self.distance]
 
     @property
@@ -126,6 +131,7 @@ class CombatantState:
     route_cost: int = 0
     standard_action_spent: bool = False
     defending: bool = False
+    dashed: bool = False
     # Hunger integration: any Standard Action marks heavy exertion. Future
     # spells, Dash, abilities, etc. should use the shared Standard Action
     # state rather than inventing their own exertion tracking.
