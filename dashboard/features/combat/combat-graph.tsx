@@ -49,12 +49,23 @@ export type CombatLandmarkNodeData = {
   combatants: CombatantData[];
 } & Record<string, unknown>;
 
+export type CombatEdgeTraveller = {
+  id: string;
+  name: string;
+  kind: CombatantData['kind'];
+  progress: number;
+  cost: number;
+  position: number;
+  current: boolean;
+};
+
 export type CombatEdgeData = {
   label: string;
   showLabel: boolean;
   labelPosition: number;
   labelOffsetX: number;
   labelOffsetY: number;
+  travellers: CombatEdgeTraveller[];
 } & Record<string, unknown>;
 
 type LandmarkHandle =
@@ -399,17 +410,26 @@ export function combatEdges(
         ) === id
       ),
     );
-    const travellerLabel = travellers
-      .map((combatant) => (
-        `${combatant.name} ${combatant.route_progress}/${combatant.route_cost}`
-      ))
-      .join(', ');
     const routeLabel = route.blocked
       ? `${route.distance} · move ${route.movement_cost} · blocked`
       : `${route.distance} · move ${route.movement_cost}`;
-    const label = travellerLabel
-      ? `${routeLabel} · ${travellerLabel}`
-      : routeLabel;
+    const edgeTravellers = travellers.map((combatant) => {
+      const cost = Math.max(1, combatant.route_cost);
+      const canonicalProgress = (
+        combatant.route_source_landmark_id === route.source_landmark_id
+          ? combatant.route_progress
+          : cost - combatant.route_progress
+      );
+      return {
+        id: combatantKey(combatant),
+        name: combatant.name,
+        kind: combatant.kind,
+        progress: combatant.route_progress,
+        cost,
+        position: Math.min(0.92, Math.max(0.08, canonicalProgress / cost)),
+        current: combatant.is_current_turn,
+      };
+    });
 
     const sourceNode = nodesById.get(route.source_landmark_id);
     const targetNode = nodesById.get(route.destination_landmark_id);
@@ -432,11 +452,12 @@ export function combatEdges(
         type: 'combat',
         selected: id === selectedRouteId,
         data: {
-          label,
+          label: routeLabel,
           showLabel: true,
           labelPosition: 0.5,
           labelOffsetX: 0,
           labelOffsetY: 0,
+          travellers: edgeTravellers,
         },
         className: [
           'combat-connection-edge',
