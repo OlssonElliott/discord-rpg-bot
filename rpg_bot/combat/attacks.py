@@ -368,6 +368,12 @@ class CombatAttackMixin:
                     character_id,
                     final_damage,
                 )
+                self.repository.add_damage_taken(
+                    scene.id,
+                    target.kind,
+                    target.source_id,
+                    final_damage,
+                )
                 target_hp = updated_character.hp
 
         updated_character_state = self.database.get_character_combat_state(
