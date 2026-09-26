@@ -40,6 +40,7 @@ class Character:
     race: str | None = None
     age: str | None = None
     gender: str | None = None
+    hunger: int = 0
     attributes: dict[str, int] = field(default_factory=dict)
     skills: dict[str, int] = field(default_factory=dict)
     character_id: int | None = None
