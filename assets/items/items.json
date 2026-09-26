@@ -518,10 +518,9 @@
     "weight": 0,
     "tags": [
       "food",
-      "healing",
       "consumable"
     ],
-    "affected_stat": "hp",
+    "affected_stat": "hunger",
     "affected_amount": 5,
     "side_effects": null,
     "requirements": []
