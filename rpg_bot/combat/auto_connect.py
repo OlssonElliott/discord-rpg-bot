@@ -168,7 +168,7 @@ class CombatAutoConnectMixin:
                     scene.id,
                     first.id,
                     second.id,
-                    LandmarkDistance.CLOSE,
+                    LandmarkDistance.NEAR,
                     automatic=True,
                 )
                 connected_pairs.add(pair)
@@ -204,7 +204,7 @@ class CombatAutoConnectMixin:
                     scene.id,
                     source.id,
                     target.id,
-                    LandmarkDistance.CLOSE,
+                    LandmarkDistance.NEAR,
                     automatic=True,
                 )
                 connected_pairs.add(pair)
