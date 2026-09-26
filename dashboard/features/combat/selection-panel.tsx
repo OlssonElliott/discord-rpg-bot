@@ -176,9 +176,10 @@ export function SelectionPanel({
           value={routeDistance}
           onChange={(event) => onSetRouteDistance(event.target.value as Distance)}
         >
-          <NativeSelectOption value="close">Close</NativeSelectOption>
-          <NativeSelectOption value="far">Far</NativeSelectOption>
-          <NativeSelectOption value="distant">Distant</NativeSelectOption>
+          <NativeSelectOption value="adjacent">Adjacent · move 1</NativeSelectOption>
+          <NativeSelectOption value="near">Near · move 2</NativeSelectOption>
+          <NativeSelectOption value="far">Far · move 3</NativeSelectOption>
+          <NativeSelectOption value="distant">Distant · move 4</NativeSelectOption>
         </NativeSelect>
         <label htmlFor="combat-route-terrain">Terrain</label>
         <NativeSelect
@@ -254,7 +255,7 @@ export function SelectionPanel({
   return (
     <p className="combat-selection-description">
       Select a landmark or connection to inspect it. Drag between landmark
-      handles to create a new close connection.
+      handles to create a new Near connection.
     </p>
   );
 }
