@@ -77,6 +77,11 @@ class CombatTurnMixin:
                 first.kind,
                 first.source_id,
             )
+            self.repository.reset_dashed(
+                scene.id,
+                first.kind,
+                first.source_id,
+            )
 
             self.repository.reset_defending(
                 scene.id,
@@ -141,6 +146,11 @@ class CombatTurnMixin:
                 target.source_id,
             )
             self.repository.reset_standard_action(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
+            self.repository.reset_dashed(
                 scene.id,
                 target.kind,
                 target.source_id,
@@ -213,6 +223,11 @@ class CombatTurnMixin:
                 target.kind,
                 target.source_id,
             )
+            self.repository.reset_dashed(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
 
             self.repository.reset_defending(
                 scene.id,
@@ -267,6 +282,11 @@ class CombatTurnMixin:
                 source_id,
             )
             self.repository.reset_standard_action(
+                scene.id,
+                parsed_kind,
+                source_id,
+            )
+            self.repository.reset_dashed(
                 scene.id,
                 parsed_kind,
                 source_id,
