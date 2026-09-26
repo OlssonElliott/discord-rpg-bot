@@ -1524,6 +1524,13 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(result.armor_reduction, 1)
         self.assertEqual(result.final_damage, 3)
         self.assertEqual(result.target_hp, 12)
+        tracked = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(tracked.damage_taken, 3)
+        self.assertTrue(tracked.heavy_exertion)
 
         updated_olof = next(
             character
