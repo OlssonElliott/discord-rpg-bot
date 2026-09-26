@@ -220,6 +220,7 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "is_between_landmarks": combatant.is_between_landmarks,
                 "standard_action_spent": combatant.standard_action_spent,
                 "defending": combatant.defending,
+                "dashed": combatant.dashed,
                 "usable_items": _combatant_usable_items_data(
                     world,
                     combatant.kind.value,
