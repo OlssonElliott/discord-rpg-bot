@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import {
   api,
   uploadRoomImage,
+  type CatalogItem,
   type CharacterSummary,
   type ConnectionData,
   type RoomData,
@@ -34,6 +35,7 @@ type DungeonInspectorProps = {
   rooms: RoomData[];
   connections: ConnectionData[];
   characters: CharacterSummary[];
+  catalogItems: CatalogItem[];
   mutate: Mutate;
   onClose: () => void;
   onAddContent: (kind: ContentKind) => void;
@@ -52,6 +54,7 @@ export function DungeonInspector({
   rooms,
   connections,
   characters,
+  catalogItems,
   mutate,
   onClose,
   onAddContent,
@@ -85,6 +88,7 @@ export function DungeonInspector({
           connections={connections}
           rooms={rooms}
           characters={characters}
+          catalogItems={catalogItems}
           onSave={(name, description) => mutate(
             () => api(`/rooms/${room.id}`, {
               method: 'PATCH',
@@ -114,6 +118,19 @@ export function DungeonInspector({
               { method: 'DELETE' },
             ),
             `${kind === 'item' ? 'Item' : kind === 'container' ? 'Container' : 'Enemy'} removed`,
+          )}
+          onAddEnemyItem={(enemyId, itemId, quantity) => mutate(
+            () => api(`/enemies/${enemyId}/items`, {
+              method: 'POST',
+              body: JSON.stringify({ item_id: itemId, quantity }),
+            }),
+            'Enemy inventory updated',
+          )}
+          onRemoveEnemyItem={(enemyId, itemId) => mutate(
+            () => api(`/enemies/${enemyId}/items/${itemId}`, {
+              method: 'DELETE',
+            }),
+            'Item removed from enemy',
           )}
           onPlaceCharacter={(characterId) => mutate(
             () => api(`/characters/${characterId}/room`, {
