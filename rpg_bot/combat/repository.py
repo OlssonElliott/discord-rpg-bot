@@ -77,7 +77,7 @@ class CombatRepository:
                 scene_id INTEGER NOT NULL,
                 source_landmark_id TEXT NOT NULL,
                 destination_landmark_id TEXT NOT NULL,
-                distance TEXT NOT NULL CHECK (distance IN ('close', 'far', 'distant')),
+                distance TEXT NOT NULL CHECK (distance IN ('adjacent', 'near', 'far', 'distant')),
                 terrain TEXT NOT NULL DEFAULT 'normal'
                     CHECK (terrain IN ('normal', 'difficult')),
                 base_blocked INTEGER NOT NULL DEFAULT 0 CHECK (base_blocked IN (0, 1)),
@@ -136,6 +136,8 @@ class CombatRepository:
                     CHECK (standard_action_spent IN (0, 1)),
                 defending INTEGER NOT NULL DEFAULT 0
                     CHECK (defending IN (0, 1)),
+                dashed INTEGER NOT NULL DEFAULT 0
+                    CHECK (dashed IN (0, 1)),
                 heavy_exertion INTEGER NOT NULL DEFAULT 0
                     CHECK (heavy_exertion IN (0, 1)),
                 damage_taken INTEGER NOT NULL DEFAULT 0
@@ -188,6 +190,57 @@ class CombatRepository:
                     "UPDATE combat_landmarks SET cover = 'half' "
                     "WHERE source_feature_id IS NOT NULL"
                 )
+        route_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'combat_routes'"
+        ).fetchone()
+        combat_routes_needs_distance_migration = (
+            route_schema is not None
+            and "'adjacent'" not in str(route_schema["sql"])
+        )
+        if combat_routes_needs_distance_migration:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.executescript(
+                """
+                ALTER TABLE combat_routes RENAME TO combat_routes_old;
+                CREATE TABLE combat_routes (
+                    scene_id INTEGER NOT NULL,
+                    source_landmark_id TEXT NOT NULL,
+                    destination_landmark_id TEXT NOT NULL,
+                    distance TEXT NOT NULL CHECK (
+                        distance IN ('adjacent', 'near', 'far', 'distant')
+                    ),
+                    terrain TEXT NOT NULL DEFAULT 'normal'
+                        CHECK (terrain IN ('normal', 'difficult')),
+                    base_blocked INTEGER NOT NULL DEFAULT 0
+                        CHECK (base_blocked IN (0, 1)),
+                    automatic INTEGER NOT NULL DEFAULT 0
+                        CHECK (automatic IN (0, 1)),
+                    PRIMARY KEY (
+                        scene_id,
+                        source_landmark_id,
+                        destination_landmark_id
+                    ),
+                    FOREIGN KEY (scene_id)
+                        REFERENCES combat_scenes(id) ON DELETE CASCADE,
+                    FOREIGN KEY (scene_id, source_landmark_id)
+                        REFERENCES combat_landmarks(scene_id, id) ON DELETE CASCADE,
+                    FOREIGN KEY (scene_id, destination_landmark_id)
+                        REFERENCES combat_landmarks(scene_id, id) ON DELETE CASCADE
+                );
+                INSERT INTO combat_routes (
+                    scene_id, source_landmark_id, destination_landmark_id,
+                    distance, terrain, base_blocked, automatic
+                )
+                SELECT
+                    scene_id, source_landmark_id, destination_landmark_id,
+                    CASE WHEN distance = 'close' THEN 'near' ELSE distance END,
+                    terrain, base_blocked, automatic
+                FROM combat_routes_old;
+                DROP TABLE combat_routes_old;
+                """
+            )
+            connection.execute("PRAGMA foreign_keys = ON")
+
         route_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(combat_routes)")
@@ -279,6 +332,10 @@ class CombatRepository:
         if "defending" not in combatant_columns:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN defending INTEGER NOT NULL DEFAULT 0"
+            )
+        if "dashed" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN dashed INTEGER NOT NULL DEFAULT 0"
             )
         if "heavy_exertion" not in combatant_columns:
             connection.execute(
@@ -376,7 +433,7 @@ class CombatRepository:
                     movement_budget, movement_remaining,
                     route_source_landmark_id, route_destination_landmark_id,
                     route_progress, route_cost, standard_action_spent, defending,
-                    heavy_exertion, damage_taken
+                    dashed, heavy_exertion, damage_taken
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
@@ -398,6 +455,7 @@ class CombatRepository:
                         combatant.route_cost,
                         int(combatant.standard_action_spent),
                         int(combatant.defending),
+                        int(combatant.dashed),
                         int(combatant.heavy_exertion),
                         combatant.damage_taken,
                     )
@@ -489,7 +547,7 @@ class CombatRepository:
                         movement_budget, movement_remaining,
                         route_source_landmark_id, route_destination_landmark_id,
                         route_progress, route_cost, standard_action_spent,
-                        defending, heavy_exertion, damage_taken
+                        defending, dashed, heavy_exertion, damage_taken
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
@@ -510,6 +568,7 @@ class CombatRepository:
                         combatant.route_cost,
                         int(combatant.standard_action_spent),
                         int(combatant.defending),
+                        int(combatant.dashed),
                         int(combatant.heavy_exertion),
                         combatant.damage_taken,
                     ),
@@ -689,6 +748,36 @@ class CombatRepository:
                 raise ValueError(
                     f"Unknown combatant '{kind.value}:{source_id}'."
                 )
+
+    def set_dashed(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        dashed: bool,
+    ) -> None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET dashed = ?
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (int(dashed), scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
+
+    def reset_dashed(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+    ) -> None:
+        self.set_dashed(scene_id, kind, source_id, False)
 
     def reset_defending(
         self,
@@ -1332,7 +1421,7 @@ class CombatRepository:
                    movement_budget, movement_remaining,
                    route_source_landmark_id, route_destination_landmark_id,
                    route_progress, route_cost, standard_action_spent, defending,
-                   heavy_exertion, damage_taken
+                   dashed, heavy_exertion, damage_taken
             FROM combatants
             WHERE scene_id = ?
             ORDER BY initiative_score DESC, initiative_roll DESC,
@@ -1409,6 +1498,7 @@ class CombatRepository:
                     item["route_cost"],
                     bool(item["standard_action_spent"]),
                     bool(item["defending"]),
+                    bool(item["dashed"]),
                     bool(item["heavy_exertion"]),
                     int(item["damage_taken"]),
                 )
