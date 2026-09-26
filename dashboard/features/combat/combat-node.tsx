@@ -12,7 +12,7 @@ export function CombatLandmarkNode({
   data,
   selected,
 }: NodeProps<Node<CombatLandmarkNodeData>>) {
-  const { landmark, combatants } = data;
+  const { landmark, combatants, movementTarget } = data;
   const kind = landmark.synthetic
     ? 'Anchor'
     : landmark.feature_type === 'door'
@@ -25,6 +25,7 @@ export function CombatLandmarkNode({
         'combat-landmark-node',
         landmark.synthetic ? 'combat-landmark-node--synthetic' : '',
         landmark.feature_type === 'door' ? 'combat-landmark-node--door' : '',
+        movementTarget ? 'combat-landmark-node--movement-target' : '',
         selected ? 'combat-landmark-node--selected' : '',
       ].filter(Boolean).join(' ')}
     >
@@ -42,6 +43,9 @@ export function CombatLandmarkNode({
         <Flag size={14} />
         <strong>{landmark.name}</strong>
       </div>
+      {movementTarget && (
+        <span className="combat-landmark-node__move-hint">MOVE</span>
+      )}
       {landmark.feature_type && landmark.feature_type !== 'door' && (
         <span className="combat-landmark-node__type">{landmark.feature_type}</span>
       )}
