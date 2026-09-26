@@ -21,6 +21,7 @@ export type CharacterSummary = {
   lineage: string | null;
   hp: number;
   max_hp: number;
+  hunger: number;
   status: CharacterStatus;
 };
 
@@ -34,6 +35,7 @@ export type CharacterAdminData = {
   portrait_url: string | null;
   hp: number;
   max_hp: number;
+  hunger: number;
   status: CharacterStatus;
   failed_death_saves: number;
   death_save_dc: number | null;
@@ -91,6 +93,7 @@ export type CatalogItem = {
   strength_requirement?: number | null;
   capacity?: number;
   can_equip?: boolean;
+  affected_stat?: string;
   affected_amount?: number;
 };
 
@@ -218,6 +221,7 @@ export type CombatantData = {
   }[];
   hp: number | null;
   max_hp: number | null;
+  hunger: number | null;
   character_status: 'active' | 'downed' | 'stable' | 'recovering' | 'dead' | null;
   failed_death_saves: number | null;
   death_save_dc: number | null;
@@ -269,6 +273,7 @@ export type CombatantInspectData = {
   description: string;
   hp: number | null;
   max_hp: number | null;
+  hunger: number | null;
   status: string;
   failed_death_saves: number | null;
   death_save_dc: number | null;
