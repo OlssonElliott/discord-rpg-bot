@@ -136,6 +136,10 @@ class CombatRepository:
                     CHECK (standard_action_spent IN (0, 1)),
                 defending INTEGER NOT NULL DEFAULT 0
                     CHECK (defending IN (0, 1)),
+                heavy_exertion INTEGER NOT NULL DEFAULT 0
+                    CHECK (heavy_exertion IN (0, 1)),
+                damage_taken INTEGER NOT NULL DEFAULT 0
+                    CHECK (damage_taken >= 0),
                 PRIMARY KEY (scene_id, kind, source_id),
                 FOREIGN KEY (scene_id) REFERENCES combat_scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (scene_id, landmark_id)
@@ -276,6 +280,14 @@ class CombatRepository:
             connection.execute(
                 "ALTER TABLE combatants ADD COLUMN defending INTEGER NOT NULL DEFAULT 0"
             )
+        if "heavy_exertion" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN heavy_exertion INTEGER NOT NULL DEFAULT 0"
+            )
+        if "damage_taken" not in combatant_columns:
+            connection.execute(
+                "ALTER TABLE combatants ADD COLUMN damage_taken INTEGER NOT NULL DEFAULT 0"
+            )
 
         # Older combat scenes may still contain relations that are no longer
         # part of the combat model. Treat those positions as simply being at
@@ -363,8 +375,9 @@ class CombatRepository:
                     initiative_roll, initiative_score, acted_this_round,
                     movement_budget, movement_remaining,
                     route_source_landmark_id, route_destination_landmark_id,
-                    route_progress, route_cost, standard_action_spent, defending
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    route_progress, route_cost, standard_action_spent, defending,
+                    heavy_exertion, damage_taken
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -385,6 +398,8 @@ class CombatRepository:
                         combatant.route_cost,
                         int(combatant.standard_action_spent),
                         int(combatant.defending),
+                        int(combatant.heavy_exertion),
+                        combatant.damage_taken,
                     )
                     for combatant in combatants
                 ],
@@ -473,8 +488,9 @@ class CombatRepository:
                         initiative_roll, initiative_score, acted_this_round,
                         movement_budget, movement_remaining,
                         route_source_landmark_id, route_destination_landmark_id,
-                        route_progress, route_cost, standard_action_spent
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        route_progress, route_cost, standard_action_spent,
+                        defending, heavy_exertion, damage_taken
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene_id,
@@ -493,6 +509,9 @@ class CombatRepository:
                         combatant.route_progress,
                         combatant.route_cost,
                         int(combatant.standard_action_spent),
+                        int(combatant.defending),
+                        int(combatant.heavy_exertion),
+                        combatant.damage_taken,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -622,10 +641,14 @@ class CombatRepository:
             cursor = connection.execute(
                 """
                 UPDATE combatants
-                SET standard_action_spent = ?
+                SET standard_action_spent = ?,
+                    heavy_exertion = CASE
+                        WHEN ? = 1 AND kind = 'character' THEN 1
+                        ELSE heavy_exertion
+                    END
                 WHERE scene_id = ? AND kind = ? AND source_id = ?
                 """,
-                (int(spent), scene_id, kind.value, source_id),
+                (int(spent), int(spent), scene_id, kind.value, source_id),
             )
             if cursor.rowcount == 0:
                 raise ValueError(
@@ -679,6 +702,39 @@ class CombatRepository:
             source_id,
             False,
         )
+
+    def add_damage_taken(
+        self,
+        scene_id: int,
+        kind: CombatantKind,
+        source_id: str,
+        amount: int,
+    ) -> None:
+        """Record real HP damage for end-of-combat Hunger calculation.
+
+        Future spells, traps, hazards, and other combat damage sources should
+        call this hook whenever a character actually loses HP.
+        """
+        if amount <= 0:
+            return
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            cursor = connection.execute(
+                """
+                UPDATE combatants
+                SET damage_taken = damage_taken + ?,
+                    heavy_exertion = CASE
+                        WHEN kind = 'character' THEN 1
+                        ELSE heavy_exertion
+                    END
+                WHERE scene_id = ? AND kind = ? AND source_id = ?
+                """,
+                (amount, scene_id, kind.value, source_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Unknown combatant '{kind.value}:{source_id}'."
+                )
 
     def set_all_combatants_acted(
         self,
@@ -1275,7 +1331,8 @@ class CombatRepository:
                    initiative_roll, initiative_score, acted_this_round,
                    movement_budget, movement_remaining,
                    route_source_landmark_id, route_destination_landmark_id,
-                   route_progress, route_cost, standard_action_spent, defending
+                   route_progress, route_cost, standard_action_spent, defending,
+                   heavy_exertion, damage_taken
             FROM combatants
             WHERE scene_id = ?
             ORDER BY initiative_score DESC, initiative_roll DESC,
@@ -1352,6 +1409,8 @@ class CombatRepository:
                     item["route_cost"],
                     bool(item["standard_action_spent"]),
                     bool(item["defending"]),
+                    bool(item["heavy_exertion"]),
+                    int(item["damage_taken"]),
                 )
                 for item in combatant_rows
             ),
