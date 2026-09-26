@@ -87,6 +87,7 @@ def _combatant_vitals_data(
         return {
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "character_status": None,
             "failed_death_saves": None,
             "death_save_dc": None,
