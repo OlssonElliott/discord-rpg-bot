@@ -198,11 +198,9 @@ class CombatRepository:
             and "'adjacent'" not in str(route_schema["sql"])
         )
         if combat_routes_needs_distance_migration:
-            connection.execute("PRAGMA foreign_keys = OFF")
             connection.executescript(
                 """
-                ALTER TABLE combat_routes RENAME TO combat_routes_old;
-                CREATE TABLE combat_routes (
+                CREATE TABLE combat_routes_new (
                     scene_id INTEGER NOT NULL,
                     source_landmark_id TEXT NOT NULL,
                     destination_landmark_id TEXT NOT NULL,
@@ -227,7 +225,8 @@ class CombatRepository:
                     FOREIGN KEY (scene_id, destination_landmark_id)
                         REFERENCES combat_landmarks(scene_id, id) ON DELETE CASCADE
                 );
-                INSERT INTO combat_routes (
+
+                INSERT INTO combat_routes_new (
                     scene_id, source_landmark_id, destination_landmark_id,
                     distance, terrain, base_blocked, automatic
                 )
@@ -235,11 +234,55 @@ class CombatRepository:
                     scene_id, source_landmark_id, destination_landmark_id,
                     CASE WHEN distance = 'close' THEN 'near' ELSE distance END,
                     terrain, base_blocked, automatic
-                FROM combat_routes_old;
-                DROP TABLE combat_routes_old;
+                FROM combat_routes;
+
+                CREATE TABLE combat_route_effects_new (
+                    scene_id INTEGER NOT NULL,
+                    id TEXT NOT NULL,
+                    source_landmark_id TEXT NOT NULL,
+                    destination_landmark_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    effect_type TEXT NOT NULL,
+                    blocks_movement INTEGER NOT NULL DEFAULT 0
+                        CHECK (blocks_movement IN (0, 1)),
+                    movement_cost_modifier INTEGER NOT NULL DEFAULT 0,
+                    remaining_rounds INTEGER
+                        CHECK (
+                            remaining_rounds IS NULL
+                            OR remaining_rounds > 0
+                        ),
+                    PRIMARY KEY (scene_id, id),
+                    FOREIGN KEY (
+                        scene_id,
+                        source_landmark_id,
+                        destination_landmark_id
+                    ) REFERENCES combat_routes_new(
+                        scene_id,
+                        source_landmark_id,
+                        destination_landmark_id
+                    ) ON DELETE CASCADE
+                );
+
+                INSERT INTO combat_route_effects_new (
+                    scene_id, id, source_landmark_id,
+                    destination_landmark_id, name, effect_type,
+                    blocks_movement, movement_cost_modifier,
+                    remaining_rounds
+                )
+                SELECT
+                    scene_id, id, source_landmark_id,
+                    destination_landmark_id, name, effect_type,
+                    blocks_movement, movement_cost_modifier,
+                    remaining_rounds
+                FROM combat_route_effects;
+
+                DROP TABLE combat_route_effects;
+                DROP TABLE combat_routes;
+                ALTER TABLE combat_routes_new RENAME TO combat_routes;
+                ALTER TABLE combat_route_effects_new
+                    RENAME TO combat_route_effects;
                 """
             )
-            connection.execute("PRAGMA foreign_keys = ON")
 
         route_columns = {
             row["name"]
