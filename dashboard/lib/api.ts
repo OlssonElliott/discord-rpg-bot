@@ -219,6 +219,7 @@ export type CombatantData = {
   standard_action_spent: boolean;
   defending: boolean;
   dashed: boolean;
+  attack_range: number;
   usable_items: {
     id: string;
     template_id: string;
