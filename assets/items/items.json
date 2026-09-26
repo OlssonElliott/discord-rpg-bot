@@ -43,6 +43,33 @@
   },
   {
     "item_type": "weapon",
+    "id": "shortbow",
+    "name": "Shortbow",
+    "rarity": "Common",
+    "value": 35,
+    "description": "A compact bow suited for skirmishing at range.",
+    "weight": 1,
+    "tags": [
+      "bow",
+      "two_handed",
+      "ranged",
+      "piercing",
+      "wood"
+    ],
+    "durability": 35,
+    "grip": "two_handed",
+    "range": 3,
+    "damage_parts": [
+      {
+        "amount": 6,
+        "damage_type": "pierce"
+      }
+    ],
+    "modifiers": [],
+    "requirements": []
+  },
+  {
+    "item_type": "weapon",
     "id": "iron_dagger",
     "name": "Iron Dagger",
     "rarity": "Common",
