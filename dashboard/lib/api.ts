@@ -133,6 +133,12 @@ export type PlacedEnemy = {
   current_hp: number | null;
   max_hp: number | null;
   status: 'active' | 'dead' | 'fled';
+  inventory: {
+    id: string;
+    name: string;
+    description: string;
+    quantity: number;
+  }[];
 };
 
 export type RoomData = {
