@@ -61,19 +61,40 @@ export function CombatConnectionEdge({
               const y = sourceY + dy * traveller.position;
               const laneOffset = 22 + index * 24;
               return (
-                <div
+                <button
                   key={traveller.id}
+                  type="button"
                   className={[
                     'combat-edge-traveller',
+                    'nodrag',
+                    'nopan',
                     traveller.kind === 'enemy'
                       ? 'combat-edge-traveller--enemy'
                       : 'combat-edge-traveller--character',
                     traveller.current
                       ? 'combat-edge-traveller--current'
                       : '',
+                    traveller.canMoveTo
+                      ? 'combat-edge-traveller--targetable'
+                      : '',
                   ].filter(Boolean).join(' ')}
+                  disabled={!traveller.canMoveTo}
+                  title={
+                    traveller.canMoveTo
+                      ? `Move toward ${traveller.name}`
+                      : traveller.current
+                        ? 'Current combatant'
+                        : 'Cannot move to this combatant right now'
+                  }
                   style={{
                     transform: `translate(-50%, -50%) translate(${x + normalX * laneOffset}px, ${y + normalY * laneOffset}px)`,
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    data?.onMoveToTraveller?.(
+                      traveller.kind,
+                      traveller.sourceId,
+                    );
                   }}
                 >
                   {traveller.kind === 'enemy'
@@ -81,7 +102,7 @@ export function CombatConnectionEdge({
                     : <UserRound size={12} />}
                   <strong>{traveller.name}</strong>
                   <small>{traveller.progress}/{traveller.cost}</small>
-                </div>
+                </button>
               );
             })}
           </>
