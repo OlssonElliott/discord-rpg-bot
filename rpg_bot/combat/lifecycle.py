@@ -284,15 +284,18 @@ class CombatLifecycleMixin:
                 character_id,
                 hunger_gain,
             )
+            hunger_parts = ["5 combat"]
+            if exertion_hunger:
+                hunger_parts.append("2 exertion")
+            if damage_hunger:
+                hunger_parts.append(f"{damage_hunger} damage")
             self.repository.append_log(
                 current.id,
                 current.round_number,
                 "hunger_changed",
                 (
                     f"{combatant.name} gained {hunger_gain} Hunger "
-                    f"(5 combat"
-                    f"{' + 2 exertion' if exertion_hunger else ''}"
-                    f"{f' + {damage_hunger} damage' if damage_hunger else ''}). "
+                    f"({' + '.join(hunger_parts)}). "
                     f"Hunger is now {updated.hunger}/100."
                 ),
                 actor_kind=combatant.kind,
