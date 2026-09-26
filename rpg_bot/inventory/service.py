@@ -197,9 +197,27 @@ class InventoryService:
         template = self.catalog.get(item.template_id)
         if template.item_type is not ItemType.CONSUMABLE:
             raise InventoryError("That item is not consumable.")
-        if template.affected_stat != "hp" or template.affected_amount is None:
+        if template.affected_amount is None:
             raise InventoryError("That consumable is not supported yet.")
-        updated = self.database.heal(character.discord_user_id, template.affected_amount)
+
+        if template.affected_stat == "hp":
+            if character.hp >= character.max_hp:
+                raise InventoryError("That character is already at full HP.")
+            updated = self.database.heal(
+                character.discord_user_id,
+                template.affected_amount,
+            )
+        elif template.affected_stat == "hunger":
+            if character.hunger <= 0:
+                raise InventoryError("That character is not hungry.")
+            assert character.character_id is not None
+            updated = self.database.adjust_character_hunger(
+                character.character_id,
+                -template.affected_amount,
+            )
+        else:
+            raise InventoryError("That consumable is not supported yet.")
+
         self.database.set_inventory_item_quantity(
             character.character_id, instance_id, item.quantity - 1
         )
