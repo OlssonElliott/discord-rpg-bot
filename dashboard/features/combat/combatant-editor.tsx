@@ -6,7 +6,11 @@ import { ChevronDown, ChevronRight, CircleAlert, Eye, MoveRight, Shield, Skull, 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import {
+  NativeSelect,
+  NativeSelectOptGroup,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
 import type { CombatSceneData, CombatantData } from '@/lib/api';
 
 type Relation = CombatantData['relation'];
@@ -55,6 +59,7 @@ export function CombatantEditor({
   busy,
   selected,
   onMove,
+  onMoveTowardCombatant,
   onInspect,
   onRemoveEnemy,
   onAttack,
@@ -72,6 +77,10 @@ export function CombatantEditor({
     landmarkId: string,
     relation: Relation,
   ) => Promise<boolean>;
+  onMoveTowardCombatant: (
+    combatant: CombatantData,
+    target: CombatantData,
+  ) => Promise<boolean>;
   onInspect: (combatant: CombatantData) => void;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
   onAttack: (
@@ -86,15 +95,16 @@ export function CombatantEditor({
     initiativeScore: number,
   ) => Promise<boolean>;
 }) {
-  const [landmarkId, setLandmarkId] = useState(
-    combatant.route_destination_landmark_id || combatant.landmark_id,
-  );
+  const [movementTarget, setMovementTarget] = useState('');
   const [relation, setRelation] = useState<Relation>(combatant.relation);
   const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
   const [expanded, setExpanded] = useState(combatant.is_current_turn);
   const wasCurrentTurn = useRef(combatant.is_current_turn);
+  const movementTargetLandmarkId = movementTarget.startsWith('landmark:')
+    ? movementTarget.slice('landmark:'.length)
+    : '';
   const movementLandmark = scene.landmarks.find(
-    (landmark) => landmark.id === landmarkId,
+    (landmark) => landmark.id === movementTargetLandmarkId,
   ) ?? null;
   const targetKind = combatant.kind === 'character' ? 'enemy' : 'character';
   const incapacitated = (
@@ -128,9 +138,7 @@ export function CombatantEditor({
   ) ?? null;
 
   useEffect(() => {
-    setLandmarkId(
-      combatant.route_destination_landmark_id || combatant.landmark_id,
-    );
+    setMovementTarget('');
     setRelation(combatant.relation);
     setInitiativeScore(combatant.initiative_score);
   }, [
@@ -138,6 +146,7 @@ export function CombatantEditor({
     combatant.landmark_id,
     combatant.relation,
     combatant.route_destination_landmark_id,
+    combatant.route_progress,
   ]);
 
   useEffect(() => {
@@ -205,6 +214,94 @@ export function CombatantEditor({
     ? scene.landmarks.find(
       (landmark) => landmark.id === combatant.route_destination_landmark_id,
     )
+    : null;
+
+  const directLandmarkTargets = (() => {
+    if (combatant.is_between_landmarks) {
+      const targets: Array<{ id: string; cost: number }> = [];
+      if (combatant.route_source_landmark_id) {
+        targets.push({
+          id: combatant.route_source_landmark_id,
+          cost: combatant.route_progress,
+        });
+      }
+      if (combatant.route_destination_landmark_id) {
+        targets.push({
+          id: combatant.route_destination_landmark_id,
+          cost: combatant.route_cost - combatant.route_progress,
+        });
+      }
+      return targets;
+    }
+
+    return scene.routes
+      .filter((route) => (
+        !route.blocked
+        && (
+          route.source_landmark_id === combatant.landmark_id
+          || route.destination_landmark_id === combatant.landmark_id
+        )
+      ))
+      .map((route) => ({
+        id: route.source_landmark_id === combatant.landmark_id
+          ? route.destination_landmark_id
+          : route.source_landmark_id,
+        cost: route.movement_cost,
+      }));
+  })();
+
+  const localLandmarkIds = new Set([
+    combatant.landmark_id,
+    ...directLandmarkTargets.map((target) => target.id),
+  ]);
+  const localRouteKeys = new Set(
+    scene.routes
+      .filter((route) => (
+        !route.blocked
+        && (
+          localLandmarkIds.has(route.source_landmark_id)
+          || localLandmarkIds.has(route.destination_landmark_id)
+        )
+      ))
+      .map((route) => [
+        route.source_landmark_id,
+        route.destination_landmark_id,
+      ].sort().join('::')),
+  );
+  if (
+    combatant.route_source_landmark_id
+    && combatant.route_destination_landmark_id
+  ) {
+    localRouteKeys.add([
+      combatant.route_source_landmark_id,
+      combatant.route_destination_landmark_id,
+    ].sort().join('::'));
+  }
+
+  const movementCombatantTargets = scene.combatants.filter((candidate) => {
+    if (
+      candidate.kind === combatant.kind
+      && candidate.source_id === combatant.source_id
+    ) {
+      return false;
+    }
+    if (candidate.is_between_landmarks) {
+      const key = [
+        candidate.route_source_landmark_id || '',
+        candidate.route_destination_landmark_id || '',
+      ].sort().join('::');
+      return localRouteKeys.has(key);
+    }
+    return localLandmarkIds.has(candidate.landmark_id);
+  });
+
+  const selectedMovementCombatant = movementTarget.startsWith('combatant:')
+    ? scene.combatants.find(
+      (candidate) => (
+        `combatant:${candidate.kind}:${candidate.source_id}`
+        === movementTarget
+      ),
+    ) ?? null
     : null;
 
   return (
@@ -277,45 +374,103 @@ export function CombatantEditor({
           {combatant.route_progress}/{combatant.route_cost}
         </p>
       )}
-      <NativeSelect
-        value={landmarkId}
-        disabled={busy || !combatant.is_current_turn || incapacitated}
-        onChange={(event) => setLandmarkId(event.target.value)}
-      >
-        {scene.landmarks.map((landmark) => (
-          <NativeSelectOption key={landmark.id} value={landmark.id}>
-            {landmark.name}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
-      <NativeSelect
-        value={relation}
-        disabled={busy || !combatant.is_current_turn || incapacitated}
-        onChange={(event) => setRelation(event.target.value as Relation)}
-      >
-        <NativeSelectOption value="at">At</NativeSelectOption>
-        {movementLandmark?.cover !== 'none' && (
-          <NativeSelectOption value="behind">Behind</NativeSelectOption>
+      <div className="combatant-editor__movement-control">
+        <NativeSelect
+          aria-label="Movement target"
+          value={movementTarget}
+          disabled={
+            busy
+            || !combatant.is_current_turn
+            || incapacitated
+            || combatant.movement_remaining <= 0
+          }
+          onChange={(event) => {
+            setMovementTarget(event.target.value);
+            setRelation('at');
+          }}
+        >
+          <NativeSelectOption value="">Choose movement target…</NativeSelectOption>
+          {directLandmarkTargets.length > 0 && (
+            <NativeSelectOptGroup label="Connected landmarks">
+              {directLandmarkTargets.map((target) => {
+                const landmark = scene.landmarks.find(
+                  (candidate) => candidate.id === target.id,
+                );
+                if (!landmark) return null;
+                return (
+                  <NativeSelectOption
+                    key={target.id}
+                    value={`landmark:${target.id}`}
+                  >
+                    {landmark.name} · Move {target.cost}
+                  </NativeSelectOption>
+                );
+              })}
+            </NativeSelectOptGroup>
+          )}
+          {movementCombatantTargets.length > 0 && (
+            <NativeSelectOptGroup label="Combatants">
+              {movementCombatantTargets.map((target) => (
+                <NativeSelectOption
+                  key={`${target.kind}:${target.source_id}`}
+                  value={`combatant:${target.kind}:${target.source_id}`}
+                >
+                  {target.name}
+                  {target.is_between_landmarks
+                    ? ` · path ${target.route_progress}/${target.route_cost}`
+                    : ''}
+                </NativeSelectOption>
+              ))}
+            </NativeSelectOptGroup>
+          )}
+        </NativeSelect>
+        {movementLandmark && (
+          <NativeSelect
+            aria-label="Movement relation"
+            value={relation}
+            disabled={busy || !combatant.is_current_turn || incapacitated}
+            onChange={(event) => setRelation(event.target.value as Relation)}
+          >
+            <NativeSelectOption value="at">At</NativeSelectOption>
+            {movementLandmark.cover !== 'none' && (
+              <NativeSelectOption value="behind">Behind</NativeSelectOption>
+            )}
+          </NativeSelect>
         )}
-      </NativeSelect>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={
-          busy
-          || !combatant.is_current_turn
-          || incapacitated
-          || combatant.movement_remaining <= 0
-          || (
-            !combatant.is_between_landmarks
-            && landmarkId === combatant.landmark_id
-            && relation === combatant.relation
-          )
-        }
-        onClick={() => void onMove(combatant, landmarkId, relation)}
-      >
-        Move toward
-      </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={
+            busy
+            || !combatant.is_current_turn
+            || incapacitated
+            || combatant.movement_remaining <= 0
+            || !movementTarget
+          }
+          onClick={() => {
+            if (movementLandmark) {
+              void onMove(
+                combatant,
+                movementLandmark.id,
+                relation,
+              ).then((ok) => {
+                if (ok) setMovementTarget('');
+              });
+              return;
+            }
+            if (selectedMovementCombatant) {
+              void onMoveTowardCombatant(
+                combatant,
+                selectedMovementCombatant,
+              ).then((ok) => {
+                if (ok) setMovementTarget('');
+              });
+            }
+          }}
+        >
+          <MoveRight /> Move
+        </Button>
+      </div>
       <div className="combatant-editor__standard-action">
           <div>
             <span>Standard Action</span>
