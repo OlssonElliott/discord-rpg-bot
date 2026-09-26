@@ -31,6 +31,22 @@ ROOM_CORNER_SPECS = (
 class CombatLifecycleMixin:
     """Start, access, and end combat scenes."""
 
+    @staticmethod
+    def _combat_hunger_damage_bonus(
+        damage_taken: int,
+        max_hp: int,
+    ) -> int:
+        if damage_taken <= 0 or max_hp <= 0:
+            return 0
+        damage_percent = (damage_taken / max_hp) * 100
+        if damage_percent <= 25:
+            return 0
+        if damage_percent <= 50:
+            return 2
+        if damage_percent <= 75:
+            return 4
+        return 6
+
     def start(self, guild_id: int, room_id: str) -> CombatScene:
         if self.repository.get_active_scene(guild_id) is not None:
             raise CombatError("This server already has an active combat scene.")
@@ -242,6 +258,48 @@ class CombatLifecycleMixin:
 
     def end(self, guild_id: int) -> CombatScene:
         current = self._require_current(guild_id)
+
+        for combatant in current.combatants:
+            if combatant.kind is not CombatantKind.CHARACTER:
+                continue
+            try:
+                character_id = int(combatant.source_id)
+            except ValueError:
+                continue
+            character = self.database.get_character_by_global_id(character_id)
+            if character is None:
+                continue
+            state = self.database.get_character_combat_state(character_id)
+            if state.status is CharacterCombatStatus.DEAD:
+                continue
+
+            base_hunger = 5
+            exertion_hunger = 2 if combatant.heavy_exertion else 0
+            damage_hunger = self._combat_hunger_damage_bonus(
+                combatant.damage_taken,
+                character.max_hp,
+            )
+            hunger_gain = base_hunger + exertion_hunger + damage_hunger
+            updated = self.database.adjust_character_hunger(
+                character_id,
+                hunger_gain,
+            )
+            self.repository.append_log(
+                current.id,
+                current.round_number,
+                "hunger_changed",
+                (
+                    f"{combatant.name} gained {hunger_gain} Hunger "
+                    f"(5 combat"
+                    f"{' + 2 exertion' if exertion_hunger else ''}"
+                    f"{f' + {damage_hunger} damage' if damage_hunger else ''}). "
+                    f"Hunger is now {updated.hunger}/100."
+                ),
+                actor_kind=combatant.kind,
+                actor_source_id=combatant.source_id,
+                actor_name=combatant.name,
+            )
+
         self.repository.append_log(
             current.id,
             current.round_number,
