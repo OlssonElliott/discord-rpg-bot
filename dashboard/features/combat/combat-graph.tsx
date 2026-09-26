@@ -51,12 +51,14 @@ export type CombatLandmarkNodeData = {
 
 export type CombatEdgeTraveller = {
   id: string;
+  sourceId: string;
   name: string;
   kind: CombatantData['kind'];
   progress: number;
   cost: number;
   position: number;
   current: boolean;
+  canMoveTo: boolean;
 };
 
 export type CombatEdgeData = {
@@ -66,6 +68,10 @@ export type CombatEdgeData = {
   labelOffsetX: number;
   labelOffsetY: number;
   travellers: CombatEdgeTraveller[];
+  onMoveToTraveller?: (
+    kind: CombatantData['kind'],
+    sourceId: string,
+  ) => void;
 } & Record<string, unknown>;
 
 type LandmarkHandle =
@@ -387,12 +393,20 @@ export function combatEdges(
   scene: CombatSceneData,
   nodes: Node<CombatLandmarkNodeData>[],
   selectedRouteId: string | null,
+  busy = false,
+  onMoveToTraveller?: (
+    kind: CombatantData['kind'],
+    sourceId: string,
+  ) => void,
 ): Edge[] {
   const nodesById = new globalThis.Map(nodes.map((node) => [node.id, node]));
   const positions = new globalThis.Map(
     nodes.map((node) => [node.id, node.position]),
   );
   const handleAssignments = routeHandleAssignments(scene, positions);
+  const currentCombatant = scene.combatants.find(
+    (combatant) => combatant.is_current_turn,
+  ) ?? null;
 
   const drafts: EdgeDraft[] = scene.routes.map((route) => {
     const id = routeKey(
@@ -422,12 +436,19 @@ export function combatEdges(
       );
       return {
         id: combatantKey(combatant),
+        sourceId: combatant.source_id,
         name: combatant.name,
         kind: combatant.kind,
         progress: combatant.route_progress,
         cost,
         position: Math.min(0.92, Math.max(0.08, canonicalProgress / cost)),
         current: combatant.is_current_turn,
+        canMoveTo: Boolean(
+          !busy
+          && currentCombatant
+          && !combatant.is_current_turn
+          && currentCombatant.movement_remaining > 0
+        ),
       };
     });
 
@@ -458,6 +479,7 @@ export function combatEdges(
           labelOffsetX: 0,
           labelOffsetY: 0,
           travellers: edgeTravellers,
+          onMoveToTraveller,
         },
         className: [
           'combat-connection-edge',
