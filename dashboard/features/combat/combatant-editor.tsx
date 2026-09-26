@@ -188,6 +188,9 @@ export function CombatantEditor({
           {combatant.hp != null && combatant.max_hp != null && (
             <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
           )}
+          {combatant.hunger != null && (
+            <Badge variant="outline">{combatant.hunger}/100 Hunger</Badge>
+          )}
           <Badge variant="outline">
             Move {combatant.movement_remaining}/{combatant.movement_budget}
           </Badge>
