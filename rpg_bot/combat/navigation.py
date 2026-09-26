@@ -146,6 +146,85 @@ def shortest_path(
     return None
 
 
+def tactical_distance(
+    scene: CombatScene,
+    first: CombatantState,
+    second: CombatantState,
+) -> int | None:
+    """Return shortest unblocked tactical distance between two combatants."""
+    if same_combat_position(first, second):
+        return 0
+
+    def endpoint_options(
+        combatant: CombatantState,
+    ) -> list[tuple[str, int]]:
+        if not combatant.is_between_landmarks:
+            return [(combatant.landmark_id, 0)]
+
+        source_id = combatant.route_source_landmark_id
+        destination_id = combatant.route_destination_landmark_id
+        assert source_id is not None
+        assert destination_id is not None
+        route = route_between(scene, source_id, destination_id)
+        if route is None or route.blocked:
+            return []
+        return [
+            (source_id, combatant.route_progress),
+            (
+                destination_id,
+                combatant.route_cost - combatant.route_progress,
+            ),
+        ]
+
+    candidates: list[int] = []
+
+    if first.is_between_landmarks and second.is_between_landmarks:
+        first_ids = {
+            first.route_source_landmark_id,
+            first.route_destination_landmark_id,
+        }
+        second_ids = {
+            second.route_source_landmark_id,
+            second.route_destination_landmark_id,
+        }
+        if first_ids == second_ids and first.route_cost == second.route_cost:
+            source_id = first.route_source_landmark_id
+            destination_id = first.route_destination_landmark_id
+            assert source_id is not None
+            assert destination_id is not None
+            route = route_between(scene, source_id, destination_id)
+            if route is not None and not route.blocked:
+                canonical_start = min(source_id, destination_id)
+                first_progress = (
+                    first.route_progress
+                    if first.route_source_landmark_id == canonical_start
+                    else first.route_cost - first.route_progress
+                )
+                second_progress = (
+                    second.route_progress
+                    if second.route_source_landmark_id == canonical_start
+                    else second.route_cost - second.route_progress
+                )
+                candidates.append(abs(first_progress - second_progress))
+
+    for first_endpoint, first_partial in endpoint_options(first):
+        for second_endpoint, second_partial in endpoint_options(second):
+            path = shortest_path(
+                scene,
+                first_endpoint,
+                second_endpoint,
+            )
+            if path is None:
+                continue
+            candidates.append(
+                first_partial
+                + path_cost(scene, path)
+                + second_partial
+            )
+
+    return min(candidates) if candidates else None
+
+
 def movement_legs(
     scene: CombatScene,
     combatant: CombatantState,
