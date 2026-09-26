@@ -86,6 +86,7 @@ export type CatalogItem = {
   content: string | null;
   grip?: string;
   durability?: number;
+  range?: number;
   damage?: number;
   damage_type?: string;
   protection?: number;
