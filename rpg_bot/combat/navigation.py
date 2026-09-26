@@ -150,16 +150,28 @@ def tactical_distance(
     scene: CombatScene,
     first: CombatantState,
     second: CombatantState,
-) -> int | None:
-    """Return shortest unblocked tactical distance between two combatants."""
+) -> float | None:
+    """Return shortest unblocked physical distance between two combatants."""
     if same_combat_position(first, second):
-        return 0
+        return 0.0
+
+    def route_physical_progress(
+        combatant: CombatantState,
+        route: CombatRoute,
+    ) -> float:
+        if combatant.route_cost <= 0:
+            return 0.0
+        return (
+            combatant.route_progress
+            / combatant.route_cost
+            * route.base_movement_cost
+        )
 
     def endpoint_options(
         combatant: CombatantState,
-    ) -> list[tuple[str, int]]:
+    ) -> list[tuple[str, float]]:
         if not combatant.is_between_landmarks:
-            return [(combatant.landmark_id, 0)]
+            return [(combatant.landmark_id, 0.0)]
 
         source_id = combatant.route_source_landmark_id
         destination_id = combatant.route_destination_landmark_id
@@ -168,15 +180,28 @@ def tactical_distance(
         route = route_between(scene, source_id, destination_id)
         if route is None or route.blocked:
             return []
+
+        progress = route_physical_progress(combatant, route)
         return [
-            (source_id, combatant.route_progress),
+            (source_id, progress),
             (
                 destination_id,
-                combatant.route_cost - combatant.route_progress,
+                route.base_movement_cost - progress,
             ),
         ]
 
-    candidates: list[int] = []
+    def physical_path_cost(path: tuple[str, ...]) -> float:
+        total = 0.0
+        for source_id, destination_id in zip(path, path[1:]):
+            route = route_between(scene, source_id, destination_id)
+            if route is None:
+                raise ValueError(
+                    "Combat route changed while range was resolved."
+                )
+            total += route.base_movement_cost
+        return total
+
+    candidates: list[float] = []
 
     if first.is_between_landmarks and second.is_between_landmarks:
         first_ids = {
@@ -195,16 +220,12 @@ def tactical_distance(
             route = route_between(scene, source_id, destination_id)
             if route is not None and not route.blocked:
                 canonical_start = min(source_id, destination_id)
-                first_progress = (
-                    first.route_progress
-                    if first.route_source_landmark_id == canonical_start
-                    else first.route_cost - first.route_progress
-                )
-                second_progress = (
-                    second.route_progress
-                    if second.route_source_landmark_id == canonical_start
-                    else second.route_cost - second.route_progress
-                )
+                first_progress = route_physical_progress(first, route)
+                if first.route_source_landmark_id != canonical_start:
+                    first_progress = route.base_movement_cost - first_progress
+                second_progress = route_physical_progress(second, route)
+                if second.route_source_landmark_id != canonical_start:
+                    second_progress = route.base_movement_cost - second_progress
                 candidates.append(abs(first_progress - second_progress))
 
     for first_endpoint, first_partial in endpoint_options(first):
@@ -218,7 +239,7 @@ def tactical_distance(
                 continue
             candidates.append(
                 first_partial
-                + path_cost(scene, path)
+                + physical_path_cost(path)
                 + second_partial
             )
 
