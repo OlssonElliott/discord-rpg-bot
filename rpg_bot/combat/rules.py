@@ -107,6 +107,8 @@ class CombatRulesMixin:
     ) -> str:
         if weapon is None:
             return "strength"
+        if weapon.range > 0:
+            return "dexterity"
         tags = {tag.casefold() for tag in weapon.tags}
         if tags & {"magic", "spell", "focus", "staff"}:
             return "arcana"
