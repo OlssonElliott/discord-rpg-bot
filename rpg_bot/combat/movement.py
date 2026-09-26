@@ -11,6 +11,70 @@ from ..characters.models import CharacterCombatStatus
 class CombatMovementMixin:
     """Move combatants directly or by spending turn movement."""
 
+    def dash(self, guild_id: int) -> CombatScene:
+        """Spend the Standard Action to gain another full movement budget."""
+        scene = self._require_current(guild_id)
+        actor = scene.current_combatant()
+        if actor is None:
+            raise CombatError("There is no current combatant.")
+        if actor.standard_action_spent:
+            raise CombatError(
+                f"{actor.name} has already spent their Standard Action."
+            )
+
+        if actor.kind is CombatantKind.CHARACTER:
+            character = self._character_by_source_id(actor.source_id)
+            assert character.character_id is not None
+            state = self.database.get_character_combat_state(
+                character.character_id
+            )
+            if state.status not in {
+                CharacterCombatStatus.ACTIVE,
+                CharacterCombatStatus.RECOVERING,
+            }:
+                raise CombatError(
+                    f"{actor.name} cannot Dash while {state.status.value}."
+                )
+            if (
+                self._character_load_state(character.character_id)
+                == "over_encumbered"
+            ):
+                raise CombatError(
+                    f"{actor.name} is over-encumbered and cannot Dash."
+                )
+
+        self.repository.set_movement_remaining(
+            scene.id,
+            actor.kind,
+            actor.source_id,
+            actor.movement_remaining + actor.movement_budget,
+        )
+        self.repository.set_dashed(
+            scene.id,
+            actor.kind,
+            actor.source_id,
+            True,
+        )
+        self.repository.set_standard_action_spent(
+            scene.id,
+            actor.kind,
+            actor.source_id,
+            True,
+        )
+        self.repository.append_log(
+            scene.id,
+            scene.round_number,
+            "combatant_dashed",
+            (
+                f"{actor.name} Dashed for +{actor.movement_budget} movement "
+                f"this turn."
+            ),
+            actor_kind=actor.kind,
+            actor_source_id=actor.source_id,
+            actor_name=actor.name,
+        )
+        return self._require_current(guild_id)
+
     def move_combatant(
         self,
         guild_id: int,
