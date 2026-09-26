@@ -1353,7 +1353,7 @@ class CombatServiceTests(unittest.TestCase):
     def test_use_item_heals_consumes_stack_and_spends_standard_action(self) -> None:
         potion_id = self.database.add_inventory_item(
             self.olof.character_id,
-            "stale_bread",
+            "health_potion",
             quantity=2,
             stackable=True,
         )
@@ -1368,7 +1368,7 @@ class CombatServiceTests(unittest.TestCase):
         scene = self.service.use_item(44, potion_id)
 
         updated = self.database.get_character(7)
-        self.assertEqual(updated.hp, 10)
+        self.assertEqual(updated.hp, 15)
         inventory = self.database.get_character_inventory(self.olof.character_id)
         self.assertEqual(inventory.item(potion_id).quantity, 1)
         actor = next(
@@ -1380,11 +1380,80 @@ class CombatServiceTests(unittest.TestCase):
         self.assertTrue(
             any(
                 entry.event_type == "item_used"
-                and "Stale Bread" in entry.message
-                and "recovered 5 HP" in entry.message
+                and "Health Potion" in entry.message
+                and "recovered 10 HP" in entry.message
                 for entry in scene.log_entries
             )
         )
+
+    def test_use_food_reduces_hunger_in_combat(self) -> None:
+        bread_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            "stale_bread",
+            quantity=2,
+            stackable=True,
+        )
+        self.database.adjust_character_hunger(self.olof.character_id, 12)
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.use_item(44, bread_id)
+
+        updated = self.database.get_character(7)
+        assert updated is not None
+        self.assertEqual(updated.hunger, 7)
+        self.assertEqual(updated.hp, 15)
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(actor.standard_action_spent)
+        self.assertTrue(actor.heavy_exertion)
+        self.assertTrue(
+            any(
+                entry.event_type == "item_used"
+                and "reduced Hunger by 5" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_combat_end_adds_base_hunger_without_exertion(self) -> None:
+        self.service.start(44, self.hall.id)
+
+        self.service.end(44)
+
+        updated = self.database.get_character(7)
+        assert updated is not None
+        self.assertEqual(updated.hunger, 5)
+
+    def test_combat_end_adds_exertion_and_damage_hunger(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.service.defend(44)
+        scene = self.service.current(44)
+        assert scene is not None
+        self.service.repository.add_damage_taken(
+            scene.id,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            8,
+        )
+
+        self.service.end(44)
+
+        updated = self.database.get_character(7)
+        assert updated is not None
+        # 8 / 15 HP is >50% and <=75%: 5 base + 2 exertion + 4 damage.
+        self.assertEqual(updated.hunger, 11)
 
     def test_use_item_rejects_full_hp_without_consuming_item_or_action(self) -> None:
         potion_id = self.database.add_inventory_item(
