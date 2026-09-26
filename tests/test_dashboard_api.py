@@ -274,7 +274,7 @@ class DashboardAPITests(unittest.TestCase):
             {
                 "source_landmark_id": "feature:pillar",
                 "destination_landmark_id": "feature:table",
-                "distance": "close",
+                "distance": "near",
                 "terrain": "difficult",
                 "base_blocked": False,
             },
