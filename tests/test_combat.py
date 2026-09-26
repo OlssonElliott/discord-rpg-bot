@@ -770,7 +770,7 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(pillar_route.terrain, RouteTerrain.DIFFICULT)
         self.assertFalse(pillar_route.base_blocked)
-        self.assertEqual(pillar_route.movement_cost, 2)
+        self.assertEqual(pillar_route.movement_cost, 4)
         olof = next(
             item
             for item in reopened.combatants
@@ -904,14 +904,14 @@ class CombatServiceTests(unittest.TestCase):
             [entry.message for entry in scene.log_entries],
         )
 
-    def test_strength_sets_movement_budget(self) -> None:
+    def test_dexterity_sets_movement_budget(self) -> None:
         runner = self.database.create_character(
             9,
             "Bran",
             14,
             attributes={
-                "Strength": 14,
-                "Dexterity": 10,
+                "Strength": 10,
+                "Dexterity": 14,
                 "Arcana": 10,
                 "Vitality": 10,
                 "Insight": 10,
@@ -928,8 +928,89 @@ class CombatServiceTests(unittest.TestCase):
             if combatant.source_id == str(runner.character_id)
         )
 
-        self.assertEqual(bran.movement_budget, 5)
-        self.assertEqual(bran.movement_remaining, 5)
+        self.assertEqual(bran.movement_budget, 3)
+        self.assertEqual(bran.movement_remaining, 3)
+
+    def test_encumbrance_reduces_dexterity_movement(self) -> None:
+        runner = self.database.create_character(
+            9,
+            "Bran",
+            14,
+            attributes={
+                "Strength": 10,
+                "Dexterity": 14,
+                "Arcana": 10,
+                "Vitality": 10,
+                "Insight": 10,
+                "Personality": 10,
+            },
+        )
+        assert runner.character_id is not None
+        axe = self.world.catalog.get("great_axe")
+        self.database.add_inventory_item(
+            runner.character_id,
+            axe.template_id,
+            durability=axe.durability,
+        )
+        self.database.add_inventory_item(
+            runner.character_id,
+            axe.template_id,
+            durability=axe.durability,
+        )
+        self.world.place_character(runner.character_id, self.hall.id)
+
+        scene = self.service.start(44, self.hall.id)
+        bran = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(runner.character_id)
+        )
+
+        # 8 / 10 carry weight is encumbered, reducing Speed 3 to Speed 2.
+        self.assertEqual(bran.movement_budget, 2)
+
+    def test_dash_adds_current_speed_and_spends_standard_action(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.dash(44)
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+
+        self.assertEqual(olof.movement_budget, 2)
+        self.assertEqual(olof.movement_remaining, 4)
+        self.assertTrue(olof.dashed)
+        self.assertTrue(olof.standard_action_spent)
+        self.assertTrue(olof.heavy_exertion)
+
+        with self.assertRaisesRegex(CombatError, "already spent"):
+            self.service.dash(44)
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            "bandit",
+        )
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(olof.movement_remaining, 2)
+        self.assertFalse(olof.dashed)
+        self.assertFalse(olof.standard_action_spent)
 
     def test_movement_can_end_between_landmarks_and_continue_next_turn(self) -> None:
         self.service.start(44, self.hall.id)
@@ -949,7 +1030,7 @@ class CombatServiceTests(unittest.TestCase):
             for combatant in scene.combatants
             if combatant.source_id == str(self.olof.character_id)
         )
-        self.assertEqual(olof.movement_budget, 3)
+        self.assertEqual(olof.movement_budget, 2)
 
         scene = self.service.move_combatant_toward(
             44,
@@ -974,7 +1055,7 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             (olof.route_progress, olof.route_cost),
-            (3, 5),
+            (2, 4),
         )
         self.assertEqual(olof.movement_remaining, 0)
 
@@ -1016,7 +1097,7 @@ class CombatServiceTests(unittest.TestCase):
             olof.relation,
             LandmarkRelation.BEHIND,
         )
-        self.assertEqual(olof.movement_remaining, 1)
+        self.assertEqual(olof.movement_remaining, 0)
 
     def test_player_attack_uses_equipped_weapon_and_spends_standard_action(self) -> None:
         skeleton = self.world.place_enemy(
