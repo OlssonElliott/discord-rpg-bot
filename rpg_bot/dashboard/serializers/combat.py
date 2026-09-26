@@ -17,32 +17,50 @@ def _combatant_usable_items_data(
     kind: str,
     source_id: str,
 ) -> list[JsonObject]:
-    if kind != "character":
-        return []
-    try:
-        character_id = int(source_id)
-    except ValueError:
+    usable: list[JsonObject] = []
+
+    if kind == "character":
+        try:
+            character_id = int(source_id)
+        except ValueError:
+            return []
+        inventory = world.database.get_character_inventory(character_id)
+        candidates = (
+            (item.instance_id, item.template_id, item.quantity)
+            for item in inventory.items
+        )
+        supported_stats = {"hp", "hunger"}
+    elif kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is None:
+            return []
+        candidates = (
+            (stack.item.id, stack.item.id, stack.quantity)
+            for stack in world.inventory(InventoryHolder.entity(enemy.id))
+        )
+        # Enemies do not currently have Hunger, so only HP consumables are
+        # combat-usable for them. Other carried items remain loot/inventory.
+        supported_stats = {"hp"}
+    else:
         return []
 
-    inventory = world.database.get_character_inventory(character_id)
-    usable: list[JsonObject] = []
-    for item in inventory.items:
+    for item_id, template_id, quantity in candidates:
         try:
-            template = world.catalog.get(item.template_id)
+            template = world.catalog.get(template_id)
         except ValueError:
             continue
         if (
             template.item_type is not ItemType.CONSUMABLE
-            or template.affected_stat not in {"hp", "hunger"}
+            or template.affected_stat not in supported_stats
             or template.affected_amount is None
         ):
             continue
         usable.append(
             {
-                "id": item.instance_id,
+                "id": item_id,
                 "template_id": template.template_id,
                 "name": template.name,
-                "quantity": item.quantity,
+                "quantity": quantity,
                 "affected_stat": template.affected_stat,
                 "affected_amount": template.affected_amount,
             }
