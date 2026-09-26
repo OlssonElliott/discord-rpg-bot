@@ -12,7 +12,11 @@ from ..parsing.request import (
     parse_optional_text,
     parse_text,
 )
-from ..serializers.common import _enemy_data, _stack_data
+from ..serializers.common import (
+    _enemy_data,
+    _enemy_inventory_data,
+    _stack_data,
+)
 
 if TYPE_CHECKING:
     from ..api import DashboardAPI
@@ -48,7 +52,11 @@ def handle_room_content_request(
             enemy.template_id
         )
         assert template is not None
-        return 201, _enemy_data(enemy, template)
+        return 201, _enemy_data(
+            enemy,
+            template,
+            inventory=_enemy_inventory_data(api.world, enemy),
+        )
 
     match = re.fullmatch(r"/api/enemies/([^/]+)", path)
     if match and method == "GET":
@@ -63,7 +71,11 @@ def handle_room_content_request(
             enemy.template_id
         )
         assert template is not None
-        return 200, _enemy_data(enemy, template)
+        return 200, _enemy_data(
+            enemy,
+            template,
+            inventory=_enemy_inventory_data(api.world, enemy),
+        )
 
     if match and method == "PATCH":
         current = api.world.get_enemy(match.group(1))
@@ -100,7 +112,11 @@ def handle_room_content_request(
             enemy.template_id
         )
         assert template is not None
-        return 200, _enemy_data(enemy, template)
+        return 200, _enemy_data(
+            enemy,
+            template,
+            inventory=_enemy_inventory_data(api.world, enemy),
+        )
 
     if match and method == "DELETE":
         current = api.world.get_enemy(match.group(1))
@@ -112,6 +128,41 @@ def handle_room_content_request(
             }
         api.world.remove_entity(current.id)
         return 200, {"deleted": current.id}
+
+    match = re.fullmatch(r"/api/enemies/([^/]+)/items", path)
+    if match and method == "POST":
+        enemy_id = match.group(1)
+        if api.world.get_enemy(enemy_id) is None:
+            return 404, {"error": f"Enemy '{enemy_id}' does not exist."}
+        quantity = parse_integer(body, "quantity", default=1)
+        if quantity <= 0:
+            raise ValueError("Quantity must be greater than zero.")
+        stack = api.world.place_catalog_item(
+            InventoryHolder.entity(enemy_id),
+            parse_text(body, "item_id"),
+            quantity,
+        )
+        return 201, _stack_data(stack)
+
+    match = re.fullmatch(r"/api/enemies/([^/]+)/items/([^/]+)", path)
+    if match and method in {"PUT", "DELETE"}:
+        enemy_id, item_id = match.groups()
+        if api.world.get_enemy(enemy_id) is None:
+            return 404, {"error": f"Enemy '{enemy_id}' does not exist."}
+        holder = InventoryHolder.entity(enemy_id)
+        if method == "DELETE":
+            api.world.remove_item(holder, item_id)
+            return 200, {"deleted": item_id}
+        quantity = parse_integer(body, "quantity")
+        if quantity <= 0:
+            api.world.remove_item(holder, item_id)
+            return 200, {"deleted": item_id}
+        stack = api.world.set_item_quantity(
+            holder,
+            item_id,
+            quantity,
+        )
+        return 200, _stack_data(stack)
 
     match = re.fullmatch(r"/api/rooms/([^/]+)/entities", path)
     if match and method == "POST":
