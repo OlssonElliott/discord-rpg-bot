@@ -248,6 +248,23 @@ def handle_combat_request(
         payload["enemy_attack_result"] = _enemy_attack_result_data(result)
         return 200, payload
 
+    combatant_movement_match = re.fullmatch(
+        r"/api/combat/movement/(character|enemy)/([^/]+)/toward/(character|enemy)/([^/]+)",
+        path,
+    )
+    if combatant_movement_match and method == "PATCH":
+        kind, source_id, target_kind, target_source_id = (
+            combatant_movement_match.groups()
+        )
+        scene = api.combat.move_combatant_toward_combatant(
+            _combat_guild_id(api),
+            kind,
+            source_id,
+            target_kind,
+            target_source_id,
+        )
+        return 200, _combat_state_data(scene, api.world)
+
     movement_match = re.fullmatch(
         r"/api/combat/movement/(character|enemy)/([^/]+)",
         path,
