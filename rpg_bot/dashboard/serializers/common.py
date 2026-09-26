@@ -9,7 +9,7 @@ from ...inventory import ItemTemplate, ItemType
 from ...characters.models import CharacterCombatStatus
 from ...media.portraits import CharacterPortraitStore
 from ...media.room_images import RoomImageStore
-from ...world import AreaGraph, Room, RoomEditorNode
+from ...world import AreaGraph, InventoryHolder, Room, RoomEditorNode
 from ...world.service import WorldService
 
 
@@ -147,9 +147,28 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
     }
 
 
+def _enemy_inventory_data(
+    world: WorldService,
+    enemy: EnemyInstance,
+) -> list[JsonObject]:
+    return [
+        {
+            "id": stack.item.id,
+            "name": stack.item.name,
+            "description": stack.item.description or "",
+            "quantity": stack.quantity,
+        }
+        for stack in world.inventory(
+            InventoryHolder.entity(enemy.id)
+        )
+    ]
+
+
 def _enemy_data(
     enemy: EnemyInstance,
     template: EnemyTemplate,
+    *,
+    inventory: list[JsonObject] | None = None,
 ) -> JsonObject:
     return {
         "id": enemy.id,
@@ -161,6 +180,7 @@ def _enemy_data(
         "current_hp": enemy.current_hp,
         "max_hp": template.max_hp,
         "status": enemy.status.value,
+        "inventory": inventory or [],
     }
 
 
@@ -175,6 +195,7 @@ def _legacy_enemy_data(entity: object) -> JsonObject:
         "current_hp": None,
         "max_hp": None,
         "status": "active",
+        "inventory": [],
     }
 
 
