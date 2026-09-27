@@ -84,6 +84,7 @@ type CombatWorkspaceProps = {
     templateId: string,
     landmarkId: string,
     quantity: number,
+    combatRole: 'random' | 'melee' | 'ranged' | 'spellcaster',
   ) => Promise<boolean>;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
   onAttack: (
@@ -186,6 +187,7 @@ export function CombatWorkspace({
   const [enemyTemplateId, setEnemyTemplateId] = useState('');
   const [enemyLandmarkId, setEnemyLandmarkId] = useState('room:center');
   const [enemyQuantity, setEnemyQuantity] = useState(1);
+  const [enemyCombatRole, setEnemyCombatRole] = useState<'random' | 'melee' | 'ranged' | 'spellcaster'>('random');
   const [selectionOpen, setSelectionOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [addEnemyOpen, setAddEnemyOpen] = useState(false);
@@ -668,7 +670,10 @@ export function CombatWorkspace({
               Enemy type
               <NativeSelect
                 value={enemyTemplateId}
-                onChange={(event) => setEnemyTemplateId(event.target.value)}
+                onChange={(event) => {
+                  setEnemyTemplateId(event.target.value);
+                  setEnemyCombatRole('random');
+                }}
               >
                 <NativeSelectOption value="">Choose enemy…</NativeSelectOption>
                 {enemyTemplates.map((template) => (
@@ -678,6 +683,34 @@ export function CombatWorkspace({
                 ))}
               </NativeSelect>
             </label>
+            {enemyTemplateId && (() => {
+              const selectedTemplate = enemyTemplates.find(
+                (template) => template.id === enemyTemplateId,
+              );
+              const roles = selectedTemplate?.available_roles ?? [];
+              const effectiveRole = roles.length <= 1
+                ? (roles[0] ?? 'melee')
+                : enemyCombatRole;
+              return (
+                <label>
+                  Combat role
+                  <NativeSelect
+                    value={effectiveRole}
+                    onChange={(event) => setEnemyCombatRole(
+                      event.target.value as 'random' | 'melee' | 'ranged' | 'spellcaster',
+                    )}
+                  >
+                    {roles.length > 1 && (
+                      <NativeSelectOption value="random">Random</NativeSelectOption>
+                    )}
+                    {roles.includes('melee') && <NativeSelectOption value="melee">Melee</NativeSelectOption>}
+                    {roles.includes('ranged') && <NativeSelectOption value="ranged">Ranged</NativeSelectOption>}
+                    {roles.includes('spellcaster') && <NativeSelectOption value="spellcaster">Spellcaster</NativeSelectOption>}
+                    {roles.length === 0 && <NativeSelectOption value="melee">Melee</NativeSelectOption>}
+                  </NativeSelect>
+                </label>
+              );
+            })()}
             <label>
               Spawn at
               <NativeSelect
@@ -717,6 +750,14 @@ export function CombatWorkspace({
                   enemyTemplateId,
                   enemyLandmarkId,
                   enemyQuantity,
+                  (() => {
+                    const roles = enemyTemplates.find(
+                      (template) => template.id === enemyTemplateId,
+                    )?.available_roles ?? [];
+                    return roles.length <= 1
+                      ? (roles[0] ?? 'melee')
+                      : enemyCombatRole;
+                  })(),
                 )) {
                   setEnemyQuantity(1);
                 }
