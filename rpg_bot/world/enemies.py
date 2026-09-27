@@ -10,6 +10,12 @@ class EnemyStatus(str, Enum):
     FLED = "fled"
 
 
+class EnemyCombatRole(str, Enum):
+    MELEE = "melee"
+    RANGED = "ranged"
+    SPELLCASTER = "spellcaster"
+
+
 @dataclass(frozen=True, slots=True)
 class EnemyTemplate:
     template_id: str
@@ -35,6 +41,12 @@ class EnemyTemplate:
     main_hand_item_id: str | None = None
     off_hand_item_id: str | None = None
     armor_item_id: str | None = None
+    melee_weapon_ids: tuple[str, ...] = ()
+    ranged_weapon_ids: tuple[str, ...] = ()
+    off_hand_item_ids: tuple[str, ...] = ()
+    armor_item_ids: tuple[str, ...] = ()
+    spell_names: tuple[str, ...] = ()
+    spell_range: int = 3
 
     def __post_init__(self) -> None:
         non_negative = {
@@ -58,6 +70,7 @@ class EnemyTemplate:
             "max HP": self.max_hp,
             "attack DC": self.attack_dc,
             "defense DC": self.defense_dc,
+            "spell range": self.spell_range,
         }.items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(
@@ -72,6 +85,18 @@ class EnemyTemplate:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"Enemy {label} is required.")
 
+        for label, values in {
+            "melee weapon pool": self.melee_weapon_ids,
+            "ranged weapon pool": self.ranged_weapon_ids,
+            "off-hand pool": self.off_hand_item_ids,
+            "armor pool": self.armor_item_ids,
+            "spell access": self.spell_names,
+        }.items():
+            if len(values) != len(set(values)):
+                raise ValueError(f"Enemy {label} cannot contain duplicates.")
+            if any(not isinstance(value, str) or not value.strip() for value in values):
+                raise ValueError(f"Enemy {label} values must be non-empty text.")
+
 
 @dataclass(frozen=True, slots=True)
 class EnemyInstance:
@@ -82,6 +107,11 @@ class EnemyInstance:
     current_hp: int
     status: EnemyStatus = EnemyStatus.ACTIVE
     description: str | None = None
+    combat_role: EnemyCombatRole = EnemyCombatRole.MELEE
+    main_hand_item_id: str | None = None
+    off_hand_item_id: str | None = None
+    armor_item_id: str | None = None
+    selected_spell: str | None = None
 
     def __post_init__(self) -> None:
         if (
