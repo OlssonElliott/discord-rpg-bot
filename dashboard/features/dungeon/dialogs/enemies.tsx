@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Save, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -203,7 +203,7 @@ function EnemyEditorSection({
   title: string;
   summary?: string;
   defaultOpen?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
