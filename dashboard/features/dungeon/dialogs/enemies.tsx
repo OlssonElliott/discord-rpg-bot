@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Save, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -27,11 +27,18 @@ export function EnemyPlacementDialog({
   open: boolean;
   templates: EnemyTemplateData[];
   onOpenChange: (open: boolean) => void;
-  onPlace: (templateId: string, quantity: number) => Promise<boolean>;
+  onPlace: (
+    templateId: string,
+    quantity: number,
+    combatRole: 'random' | 'melee' | 'ranged' | 'spellcaster',
+  ) => Promise<boolean>;
 }) {
   const [templateId, setTemplateId] = useState('');
   const [quantity, setQuantity] = useState(1);
+  const [combatRole, setCombatRole] = useState<'random' | 'melee' | 'ranged' | 'spellcaster'>('random');
   const [search, setSearch] = useState('');
+  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const availableRoles = selectedTemplate?.available_roles ?? [];
   const filtered = templates.filter((template) => {
     const query = search.trim().toLocaleLowerCase();
     return !query
@@ -65,7 +72,10 @@ export function EnemyPlacementDialog({
         <NativeSelect
           id="enemy-template"
           value={templateId}
-          onChange={(event) => setTemplateId(event.target.value)}
+          onChange={(event) => {
+            setTemplateId(event.target.value);
+            setCombatRole('random');
+          }}
         >
           <NativeSelectOption value="">
             Choose an enemy…
@@ -79,6 +89,37 @@ export function EnemyPlacementDialog({
             </NativeSelectOption>
           ))}
         </NativeSelect>
+
+        {selectedTemplate && (
+          <>
+            <label className="dialog-label" htmlFor="enemy-combat-role">
+              Combat role
+            </label>
+            <NativeSelect
+              id="enemy-combat-role"
+              value={availableRoles.length <= 1 ? (availableRoles[0] ?? 'melee') : combatRole}
+              onChange={(event) => setCombatRole(
+                event.target.value as 'random' | 'melee' | 'ranged' | 'spellcaster',
+              )}
+            >
+              {availableRoles.length > 1 && (
+                <NativeSelectOption value="random">Random</NativeSelectOption>
+              )}
+              {availableRoles.includes('melee') && (
+                <NativeSelectOption value="melee">Melee</NativeSelectOption>
+              )}
+              {availableRoles.includes('ranged') && (
+                <NativeSelectOption value="ranged">Ranged</NativeSelectOption>
+              )}
+              {availableRoles.includes('spellcaster') && (
+                <NativeSelectOption value="spellcaster">Spellcaster</NativeSelectOption>
+              )}
+              {availableRoles.length === 0 && (
+                <NativeSelectOption value="melee">Melee</NativeSelectOption>
+              )}
+            </NativeSelect>
+          </>
+        )}
 
         <label className="dialog-label" htmlFor="enemy-quantity">
           Quantity
@@ -101,9 +142,13 @@ export function EnemyPlacementDialog({
               || quantity > 20
             }
             onClick={async () => {
-              if (await onPlace(templateId, quantity)) {
+              const role = availableRoles.length <= 1
+                ? (availableRoles[0] ?? 'melee')
+                : combatRole;
+              if (await onPlace(templateId, quantity, role)) {
                 setTemplateId('');
                 setQuantity(1);
+                setCombatRole('random');
                 setSearch('');
               }
             }}
@@ -140,7 +185,79 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     main_hand_item_id: null,
     off_hand_item_id: null,
     armor_item_id: null,
+    melee_weapon_ids: [],
+    ranged_weapon_ids: [],
+    off_hand_item_ids: [],
+    armor_item_ids: [],
+    spell_names: [],
+    spell_range: 3,
   };
+}
+
+function EnemyEditorSection({
+  title,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="enemy-editor-section">
+      <button
+        type="button"
+        className="enemy-editor-section__toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span>{title}</span>
+        {summary && <Badge variant="outline">{summary}</Badge>}
+        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+      </button>
+      {open && <div className="enemy-editor-section__body">{children}</div>}
+    </section>
+  );
+}
+
+function PoolChecklist({
+  items,
+  selected,
+  onChange,
+}: {
+  items: CatalogItem[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (!items.length) {
+    return <p className="enemy-pool-empty">No compatible items in the Item Library.</p>;
+  }
+  return (
+    <div className="enemy-pool-list">
+      {items.map((item) => (
+        <label key={item.id} className="enemy-pool-option">
+          <input
+            type="checkbox"
+            checked={selected.includes(item.id)}
+            onChange={(event) => {
+              onChange(
+                event.target.checked
+                  ? [...selected, item.id]
+                  : selected.filter((id) => id !== item.id),
+              );
+            }}
+          />
+          <span>{item.name}</span>
+          {item.item_type === 'weapon' && (
+            <small>Range {item.range ?? 0}</small>
+          )}
+        </label>
+      ))}
+    </div>
+  );
 }
 
 export function EnemyLibraryDialog({
@@ -165,17 +282,15 @@ export function EnemyLibraryDialog({
   const [draft, setDraft] = useState<EnemyTemplateDraft>(
     () => emptyEnemyTemplateDraft(),
   );
-  const editingTemplate = templates.find(
-    (template) => template.id === editingId,
-  );
-  const weapons = catalogItems.filter(
-    (item) => item.item_type === 'weapon',
-  );
-  const armorItems = catalogItems.filter(
-    (item) => item.item_type === 'armor',
-  );
   const [search, setSearch] = useState('');
   const [raceFilter, setRaceFilter] = useState('all');
+  const editingTemplate = templates.find((template) => template.id === editingId);
+
+  const weapons = catalogItems.filter((item) => item.item_type === 'weapon');
+  const meleeWeapons = weapons.filter((item) => (item.range ?? 0) <= 0);
+  const rangedWeapons = weapons.filter((item) => (item.range ?? 0) > 0);
+  const armorItems = catalogItems.filter((item) => item.item_type === 'armor');
+
   const races = Array.from(
     new Set(templates.map((template) => template.race).filter(Boolean)),
   ).sort((left, right) => left.localeCompare(right));
@@ -199,7 +314,21 @@ export function EnemyLibraryDialog({
 
   function editTemplate(template?: EnemyTemplateData) {
     setEditingId(template?.id);
-    setDraft(template ? {
+    if (!template) {
+      setDraft(emptyEnemyTemplateDraft());
+      return;
+    }
+
+    const legacyMain = template.main_hand_item_id
+      ? catalogItems.find((item) => item.id === template.main_hand_item_id)
+      : undefined;
+    const meleePool = [...template.melee_weapon_ids];
+    const rangedPool = [...template.ranged_weapon_ids];
+    if (legacyMain && !meleePool.includes(legacyMain.id) && !rangedPool.includes(legacyMain.id)) {
+      ((legacyMain.range ?? 0) > 0 ? rangedPool : meleePool).push(legacyMain.id);
+    }
+
+    setDraft({
       name: template.name,
       description: template.description,
       race: template.race,
@@ -219,10 +348,22 @@ export function EnemyLibraryDialog({
       attack_profile: template.attack_profile,
       special_ability: template.special_ability,
       typical_behaviour: template.typical_behaviour,
-      main_hand_item_id: template.main_hand_item_id,
-      off_hand_item_id: template.off_hand_item_id,
-      armor_item_id: template.armor_item_id,
-    } : emptyEnemyTemplateDraft());
+      main_hand_item_id: null,
+      off_hand_item_id: null,
+      armor_item_id: null,
+      melee_weapon_ids: meleePool,
+      ranged_weapon_ids: rangedPool,
+      off_hand_item_ids: Array.from(new Set([
+        ...template.off_hand_item_ids,
+        ...(template.off_hand_item_id ? [template.off_hand_item_id] : []),
+      ])),
+      armor_item_ids: Array.from(new Set([
+        ...template.armor_item_ids,
+        ...(template.armor_item_id ? [template.armor_item_id] : []),
+      ])),
+      spell_names: template.spell_names,
+      spell_range: template.spell_range,
+    });
   }
 
   const invalidNumber = [
@@ -235,17 +376,19 @@ export function EnemyLibraryDialog({
     draft.personality,
     draft.armor,
     draft.magical_resistance,
-  ].some(
-    (value) => !Number.isInteger(value) || value < 0,
-  );
-
+  ].some((value) => !Number.isInteger(value) || value < 0);
   const invalidPositive = [
     draft.max_hp,
     draft.attack_dc,
     draft.defense_dc,
-  ].some(
-    (value) => !Number.isInteger(value) || value < 1,
-  );
+    draft.spell_range,
+  ].some((value) => !Number.isInteger(value) || value < 1);
+
+  const roleSummary = [
+    draft.melee_weapon_ids.length ? 'Melee' : '',
+    draft.ranged_weapon_ids.length ? 'Ranged' : '',
+    draft.spell_names.length ? 'Spellcaster' : '',
+  ].filter(Boolean).join(' · ') || 'No roles';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -253,7 +396,7 @@ export function EnemyLibraryDialog({
         <DialogHeader>
           <DialogTitle>Enemy library</DialogTitle>
           <DialogDescription>
-            Define reusable enemy types here. Click an existing type to edit or delete it. Placed copies keep independent HP and world state.
+            Define reusable enemy types and the combat roles their placed instances may use.
           </DialogDescription>
         </DialogHeader>
 
@@ -261,10 +404,7 @@ export function EnemyLibraryDialog({
           <div className="catalog-count">
             {filteredTemplates.length} of {templates.length} enemy types
           </div>
-          <button
-            type="button"
-            onClick={() => editTemplate()}
-          >
+          <button type="button" onClick={() => editTemplate()}>
             New enemy
           </button>
         </div>
@@ -288,26 +428,17 @@ export function EnemyLibraryDialog({
             >
               <NativeSelectOption value="all">All races</NativeSelectOption>
               {races.map((race) => (
-                <NativeSelectOption key={race} value={race}>
-                  {race}
-                </NativeSelectOption>
+                <NativeSelectOption key={race} value={race}>{race}</NativeSelectOption>
               ))}
             </NativeSelect>
           </label>
         </div>
 
-        <div
-          className="catalog-list"
-          aria-label="Existing enemy types"
-        >
+        <div className="catalog-list" aria-label="Existing enemy types">
           {filteredTemplates.map((template) => (
             <button
               type="button"
-              className={
-                editingId === template.id
-                  ? 'selected'
-                  : ''
-              }
+              className={editingId === template.id ? 'selected' : ''}
               key={template.id}
               onClick={() => editTemplate(template)}
             >
@@ -319,253 +450,130 @@ export function EnemyLibraryDialog({
           ))}
         </div>
 
-        <div className="catalog-grid">
-          <label className="dialog-label" htmlFor="enemy-template-name">
-            Name
-            <Input
-              id="enemy-template-name"
-              value={draft.name}
-              onChange={(event) => update('name', event.target.value)}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-race">
-            Race
-            <Input
-              id="enemy-template-race"
-              value={draft.race}
-              onChange={(event) => update('race', event.target.value)}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-difficulty">
-            Difficulty
-            <Input
-              id="enemy-template-difficulty"
-              type="number"
-              min={0}
-              value={draft.difficulty_level}
-              onChange={(event) => update('difficulty_level', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-hp">
-            Max HP
-            <Input
-              id="enemy-template-hp"
-              type="number"
-              min={1}
-              value={draft.max_hp}
-              onChange={(event) => update('max_hp', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-strength">
-            Strength
-            <Input
-              id="enemy-template-strength"
-              type="number"
-              min={0}
-              value={draft.strength}
-              onChange={(event) => update('strength', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-dexterity">
-            Dexterity
-            <Input
-              id="enemy-template-dexterity"
-              type="number"
-              min={0}
-              value={draft.dexterity}
-              onChange={(event) => update('dexterity', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-arcana">
-            Arcana
-            <Input
-              id="enemy-template-arcana"
-              type="number"
-              min={0}
-              value={draft.arcana}
-              onChange={(event) => update('arcana', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-vitality">
-            Vitality
-            <Input
-              id="enemy-template-vitality"
-              type="number"
-              min={0}
-              value={draft.vitality}
-              onChange={(event) => update('vitality', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-insight">
-            Insight
-            <Input
-              id="enemy-template-insight"
-              type="number"
-              min={0}
-              value={draft.insight}
-              onChange={(event) => update('insight', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-personality">
-            Personality
-            <Input
-              id="enemy-template-personality"
-              type="number"
-              min={0}
-              value={draft.personality}
-              onChange={(event) => update('personality', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-armor">
-            Armor
-            <Input
-              id="enemy-template-armor"
-              type="number"
-              min={0}
-              value={draft.armor}
-              onChange={(event) => update('armor', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-magic-resistance">
-            Magic resistance
-            <Input
-              id="enemy-template-magic-resistance"
-              type="number"
-              min={0}
-              value={draft.magical_resistance}
-              onChange={(event) => update('magical_resistance', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-attack-dc">
-            Attack DC
-            <Input
-              id="enemy-template-attack-dc"
-              type="number"
-              min={1}
-              value={draft.attack_dc}
-              onChange={(event) => update('attack_dc', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-defense-dc">
-            Defense DC
-            <Input
-              id="enemy-template-defense-dc"
-              type="number"
-              min={1}
-              value={draft.defense_dc}
-              onChange={(event) => update('defense_dc', Number(event.target.value))}
-            />
-          </label>
-        </div>
+        <div className="enemy-editor-sections">
+          <EnemyEditorSection title="Basics" summary={draft.race} defaultOpen>
+            <div className="catalog-grid">
+              <label className="dialog-label">Name
+                <Input value={draft.name} onChange={(event) => update('name', event.target.value)} />
+              </label>
+              <label className="dialog-label">Race
+                <Input value={draft.race} onChange={(event) => update('race', event.target.value)} />
+              </label>
+              <label className="dialog-label">Difficulty
+                <Input type="number" min={0} value={draft.difficulty_level} onChange={(event) => update('difficulty_level', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Max HP
+                <Input type="number" min={1} value={draft.max_hp} onChange={(event) => update('max_hp', Number(event.target.value))} />
+              </label>
+            </div>
+            <label className="dialog-label">Description
+              <Textarea value={draft.description} onChange={(event) => update('description', event.target.value)} />
+            </label>
+          </EnemyEditorSection>
 
-        <label className="dialog-label" htmlFor="enemy-template-description">
-          Description
-        </label>
-        <Textarea
-          id="enemy-template-description"
-          value={draft.description}
-          onChange={(event) => update('description', event.target.value)}
-        />
-
-        <label className="dialog-label" htmlFor="enemy-template-damage">
-          Damage
-        </label>
-        <Input
-          id="enemy-template-damage"
-          value={draft.damage}
-          onChange={(event) => update('damage', event.target.value)}
-          placeholder="1d6"
-        />
-
-        <label className="dialog-label" htmlFor="enemy-template-attack-profile">
-          Attack profile
-        </label>
-        <Input
-          id="enemy-template-attack-profile"
-          value={draft.attack_profile}
-          onChange={(event) => update('attack_profile', event.target.value)}
-        />
-
-        <label className="dialog-label" htmlFor="enemy-template-behaviour">
-          Typical behaviour
-        </label>
-        <Textarea
-          id="enemy-template-behaviour"
-          value={draft.typical_behaviour}
-          onChange={(event) => update('typical_behaviour', event.target.value)}
-        />
-
-        <label className="dialog-label" htmlFor="enemy-template-ability">
-          Special ability
-        </label>
-        <Textarea
-          id="enemy-template-ability"
-          value={draft.special_ability ?? ''}
-          onChange={(event) => update(
-            'special_ability',
-            event.target.value.trim()
-              ? event.target.value
-              : null,
-          )}
-        />
-
-        <div className="catalog-grid">
-          <label className="dialog-label" htmlFor="enemy-template-main-hand">
-            Main hand
-            <NativeSelect
-              id="enemy-template-main-hand"
-              value={draft.main_hand_item_id ?? ''}
-              onChange={(event) => update(
-                'main_hand_item_id',
-                event.target.value || null,
-              )}
-            >
-              <NativeSelectOption value="">None</NativeSelectOption>
-              {weapons.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
+          <EnemyEditorSection title="Attribute modifiers" summary="STR · DEX · ARC · VIT · INS · PER">
+            <p className="enemy-section-help">These values are modifiers, not 1–20 character attribute scores.</p>
+            <div className="enemy-attribute-grid">
+              {([
+                ['strength', 'STR'],
+                ['dexterity', 'DEX'],
+                ['arcana', 'ARC'],
+                ['vitality', 'VIT'],
+                ['insight', 'INS'],
+                ['personality', 'PER'],
+              ] as const).map(([key, abbreviation]) => (
+                <label key={key}>
+                  <span>{abbreviation}</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={draft[key]}
+                    onChange={(event) => update(key, Number(event.target.value))}
+                  />
+                </label>
               ))}
-            </NativeSelect>
-          </label>
+            </div>
+          </EnemyEditorSection>
 
-          <label className="dialog-label" htmlFor="enemy-template-off-hand">
-            Off hand
-            <NativeSelect
-              id="enemy-template-off-hand"
-              value={draft.off_hand_item_id ?? ''}
-              onChange={(event) => update(
-                'off_hand_item_id',
-                event.target.value || null,
-              )}
-            >
-              <NativeSelectOption value="">None</NativeSelectOption>
-              {weapons.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
+          <EnemyEditorSection title="Combat" summary={`ATK ${draft.attack_dc} · DEF ${draft.defense_dc}`}>
+            <div className="catalog-grid">
+              <label className="dialog-label">Armor
+                <Input type="number" min={0} value={draft.armor} onChange={(event) => update('armor', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Magic resistance
+                <Input type="number" min={0} value={draft.magical_resistance} onChange={(event) => update('magical_resistance', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Attack DC
+                <Input type="number" min={1} value={draft.attack_dc} onChange={(event) => update('attack_dc', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Defense DC
+                <Input type="number" min={1} value={draft.defense_dc} onChange={(event) => update('defense_dc', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Damage
+                <Input value={draft.damage} onChange={(event) => update('damage', event.target.value)} placeholder="1d6" />
+              </label>
+              <label className="dialog-label">Attack profile
+                <Input value={draft.attack_profile} onChange={(event) => update('attack_profile', event.target.value)} />
+              </label>
+            </div>
+          </EnemyEditorSection>
 
-          <label className="dialog-label" htmlFor="enemy-template-armor-item">
-            Armor
-            <NativeSelect
-              id="enemy-template-armor-item"
-              value={draft.armor_item_id ?? ''}
-              onChange={(event) => update(
-                'armor_item_id',
-                event.target.value || null,
-              )}
-            >
-              <NativeSelectOption value="">None</NativeSelectOption>
-              {armorItems.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
+          <EnemyEditorSection title="Loadout pools" summary={roleSummary}>
+            <p className="enemy-section-help">
+              A placed enemy receives one random item from the selected role pool. Its actual loadout is then saved on that enemy instance.
+            </p>
+            <div className="enemy-pool-grid">
+              <div>
+                <h4>Melee weapons</h4>
+                <PoolChecklist items={meleeWeapons} selected={draft.melee_weapon_ids} onChange={(value) => update('melee_weapon_ids', value)} />
+              </div>
+              <div>
+                <h4>Ranged weapons</h4>
+                <PoolChecklist items={rangedWeapons} selected={draft.ranged_weapon_ids} onChange={(value) => update('ranged_weapon_ids', value)} />
+              </div>
+              <div>
+                <h4>Off hand</h4>
+                <PoolChecklist items={weapons} selected={draft.off_hand_item_ids} onChange={(value) => update('off_hand_item_ids', value)} />
+              </div>
+              <div>
+                <h4>Armor</h4>
+                <PoolChecklist items={armorItems} selected={draft.armor_item_ids} onChange={(value) => update('armor_item_ids', value)} />
+              </div>
+            </div>
+          </EnemyEditorSection>
+
+          <EnemyEditorSection title="Magic" summary={draft.spell_names.length ? `${draft.spell_names.length} spells` : 'None'}>
+            <p className="enemy-section-help">
+              Spell names currently define Spellcaster access and attack range. A full spell library can replace this list later.
+            </p>
+            <label className="dialog-label">Spell access
+              <Input
+                value={draft.spell_names.join(', ')}
+                placeholder="Dark Bolt, Fear, Hex"
+                onChange={(event) => update(
+                  'spell_names',
+                  Array.from(new Set(
+                    event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
+                  )),
+                )}
+              />
+            </label>
+            <label className="dialog-label">Spell range
+              <Input type="number" min={1} value={draft.spell_range} onChange={(event) => update('spell_range', Number(event.target.value))} />
+            </label>
+          </EnemyEditorSection>
+
+          <EnemyEditorSection title="Behaviour">
+            <label className="dialog-label">Typical behaviour
+              <Textarea value={draft.typical_behaviour} onChange={(event) => update('typical_behaviour', event.target.value)} />
+            </label>
+            <label className="dialog-label">Special ability
+              <Textarea
+                value={draft.special_ability ?? ''}
+                onChange={(event) => update('special_ability', event.target.value.trim() ? event.target.value : null)}
+              />
+            </label>
+          </EnemyEditorSection>
         </div>
 
         <DialogFooter className="enemy-library-footer">
@@ -573,15 +581,12 @@ export function EnemyLibraryDialog({
             <Button
               variant="destructive"
               onClick={async () => {
-                if (await onDelete(editingTemplate)) {
-                  editTemplate();
-                }
+                if (await onDelete(editingTemplate)) editTemplate();
               }}
             >
               <Trash2 /> Delete
             </Button>
           )}
-
           <Button
             disabled={
               !draft.name.trim()
@@ -593,15 +598,11 @@ export function EnemyLibraryDialog({
               || invalidPositive
             }
             onClick={async () => {
-              if (await onSave(editingId, draft)) {
-                editTemplate();
-              }
+              if (await onSave(editingId, draft)) editTemplate();
             }}
           >
             <Save />
-            {editingId
-              ? 'Save enemy type'
-              : 'Create enemy type'}
+            {editingId ? 'Save enemy type' : 'Create enemy type'}
           </Button>
         </DialogFooter>
       </DialogContent>
