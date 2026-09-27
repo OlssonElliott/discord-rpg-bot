@@ -944,6 +944,82 @@ class DashboardAPITests(unittest.TestCase):
             {"deleted": "skeleton_warrior"},
         )
 
+    def test_enemy_role_loadout_pool_is_persisted(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "role_test", "name": "Role Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/role_test/rooms",
+            {"id": "arena", "name": "Arena", "x": 0, "y": 0},
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "role_sword",
+                "name": "Role Sword",
+                "item_type": "weapon",
+                "damage": 4,
+                "range": 0,
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "role_bow",
+                "name": "Role Bow",
+                "item_type": "weapon",
+                "damage": 4,
+                "range": 3,
+            },
+        )
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "role_raider",
+                "name": "Role Raider",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Weapon attack",
+                "typical_behaviour": "Tests role loadouts.",
+                "melee_weapon_ids": ["role_sword"],
+                "ranged_weapon_ids": ["role_bow"],
+            },
+        )
+        self.assertEqual(template_status, 201)
+        self.assertEqual(
+            set(template["available_roles"]),
+            {"melee", "ranged"},
+        )
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/arena/enemies",
+            {
+                "template_id": "role_raider",
+                "combat_role": "ranged",
+            },
+        )
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(placed["combat_role"], "ranged")
+        self.assertEqual(placed["main_hand_item_id"], "role_bow")
+        self.assertEqual(
+            [item["id"] for item in placed["inventory"]],
+            ["role_bow"],
+        )
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(placed["id"])
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.combat_role.value, "ranged")
+        self.assertEqual(persisted.main_hand_item_id, "role_bow")
+
     def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:
         status, templates = self.api.handle(
             "GET",
