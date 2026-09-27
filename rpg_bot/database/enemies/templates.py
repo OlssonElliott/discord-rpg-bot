@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from ...world import NotFoundError
@@ -18,7 +19,9 @@ class DatabaseEnemyTemplatesMixin:
                        strength, dexterity, arcana, vitality, insight, personality,
                        max_hp, armor, magical_resistance, attack_dc, defense_dc,
                        damage, attack_profile, special_ability, typical_behaviour,
-                       main_hand_item_id, off_hand_item_id, armor_item_id
+                       main_hand_item_id, off_hand_item_id, armor_item_id,
+                       melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
+                       armor_item_ids, spell_names, spell_range
                 FROM enemy_templates
                 ORDER BY name COLLATE NOCASE, id
                 """
@@ -33,7 +36,9 @@ class DatabaseEnemyTemplatesMixin:
                        strength, dexterity, arcana, vitality, insight, personality,
                        max_hp, armor, magical_resistance, attack_dc, defense_dc,
                        damage, attack_profile, special_ability, typical_behaviour,
-                       main_hand_item_id, off_hand_item_id, armor_item_id
+                       main_hand_item_id, off_hand_item_id, armor_item_id,
+                       melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
+                       armor_item_ids, spell_names, spell_range
                 FROM enemy_templates
                 WHERE id = ?
                 """,
@@ -57,9 +62,11 @@ class DatabaseEnemyTemplatesMixin:
                         strength, dexterity, arcana, vitality, insight, personality,
                         max_hp, armor, magical_resistance, attack_dc, defense_dc,
                         damage, attack_profile, special_ability, typical_behaviour,
-                        main_hand_item_id, off_hand_item_id, armor_item_id
+                        main_hand_item_id, off_hand_item_id, armor_item_id,
+                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
+                        armor_item_ids, spell_names, spell_range
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     (
@@ -86,6 +93,12 @@ class DatabaseEnemyTemplatesMixin:
                         template.main_hand_item_id,
                         template.off_hand_item_id,
                         template.armor_item_id,
+                        json.dumps(template.melee_weapon_ids),
+                        json.dumps(template.ranged_weapon_ids),
+                        json.dumps(template.off_hand_item_ids),
+                        json.dumps(template.armor_item_ids),
+                        json.dumps(template.spell_names),
+                        template.spell_range,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -114,7 +127,10 @@ class DatabaseEnemyTemplatesMixin:
                     magical_resistance = ?, attack_dc = ?, defense_dc = ?,
                     damage = ?, attack_profile = ?, special_ability = ?,
                     typical_behaviour = ?, main_hand_item_id = ?,
-                    off_hand_item_id = ?, armor_item_id = ?
+                    off_hand_item_id = ?, armor_item_id = ?,
+                    melee_weapon_ids = ?, ranged_weapon_ids = ?,
+                    off_hand_item_ids = ?, armor_item_ids = ?,
+                    spell_names = ?, spell_range = ?
                 WHERE id = ?
                 """,
                 (
@@ -140,6 +156,12 @@ class DatabaseEnemyTemplatesMixin:
                     template.main_hand_item_id,
                     template.off_hand_item_id,
                     template.armor_item_id,
+                    json.dumps(template.melee_weapon_ids),
+                    json.dumps(template.ranged_weapon_ids),
+                    json.dumps(template.off_hand_item_ids),
+                    json.dumps(template.armor_item_ids),
+                    json.dumps(template.spell_names),
+                    template.spell_range,
                     clean_id,
                 ),
             )
@@ -210,4 +232,10 @@ class DatabaseEnemyTemplatesMixin:
             main_hand_item_id=row["main_hand_item_id"],
             off_hand_item_id=row["off_hand_item_id"],
             armor_item_id=row["armor_item_id"],
+            melee_weapon_ids=tuple(json.loads(row["melee_weapon_ids"] or "[]")),
+            ranged_weapon_ids=tuple(json.loads(row["ranged_weapon_ids"] or "[]")),
+            off_hand_item_ids=tuple(json.loads(row["off_hand_item_ids"] or "[]")),
+            armor_item_ids=tuple(json.loads(row["armor_item_ids"] or "[]")),
+            spell_names=tuple(json.loads(row["spell_names"] or "[]")),
+            spell_range=row["spell_range"],
         )
