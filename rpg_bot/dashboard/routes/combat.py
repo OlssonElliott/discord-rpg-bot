@@ -149,6 +149,7 @@ def handle_combat_request(
             parse_text(body, "template_id"),
             landmark_id=parse_optional_text(body, "landmark_id"),
             quantity=parse_integer(body, "quantity", default=1),
+            combat_role=parse_optional_text(body, "combat_role"),
         )
         return 201, _combat_state_data(scene, api.world)
 
