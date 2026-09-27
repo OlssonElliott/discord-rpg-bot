@@ -47,6 +47,7 @@ def handle_room_content_request(
                 body,
                 "description",
             ),
+            combat_role=parse_optional_text(body, "combat_role"),
         )
         template = api.world.get_enemy_template(
             enemy.template_id
