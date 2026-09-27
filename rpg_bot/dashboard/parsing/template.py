@@ -38,6 +38,20 @@ def enemy_template_from_body(
             return parse_optional_text(body, field)
         return default
 
+    def list_value(
+        field: str,
+        default: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if field not in body:
+            return default
+        value = body[field]
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip()
+            for item in value
+        ):
+            raise ValueError(f"'{field}' must be a list of text values.")
+        return tuple(dict.fromkeys(item.strip() for item in value))
+
     return EnemyTemplate(
         template_id=template_id or parse_text(body, "id"),
         name=(
@@ -144,6 +158,31 @@ def enemy_template_from_body(
         armor_item_id=optional_value(
             "armor_item_id",
             current.armor_item_id if current is not None else None,
+        ),
+        melee_weapon_ids=list_value(
+            "melee_weapon_ids",
+            current.melee_weapon_ids if current is not None else (),
+        ),
+        ranged_weapon_ids=list_value(
+            "ranged_weapon_ids",
+            current.ranged_weapon_ids if current is not None else (),
+        ),
+        off_hand_item_ids=list_value(
+            "off_hand_item_ids",
+            current.off_hand_item_ids if current is not None else (),
+        ),
+        armor_item_ids=list_value(
+            "armor_item_ids",
+            current.armor_item_ids if current is not None else (),
+        ),
+        spell_names=list_value(
+            "spell_names",
+            current.spell_names if current is not None else (),
+        ),
+        spell_range=parse_integer(
+            body,
+            "spell_range",
+            default=current.spell_range if current is not None else 3,
         ),
     )
 
