@@ -97,10 +97,14 @@ def _combatant_attack_range(
         if enemy is None:
             return 0
         template = world.get_enemy_template(enemy.template_id)
-        if template is None or template.main_hand_item_id is None:
+        if template is None:
+            return 0
+        if enemy.combat_role.value == "spellcaster" and enemy.selected_spell:
+            return template.spell_range
+        if enemy.main_hand_item_id is None:
             return 0
         try:
-            weapon = world.catalog.get(template.main_hand_item_id)
+            weapon = world.catalog.get(enemy.main_hand_item_id)
         except ValueError:
             return 0
         return weapon.range if weapon.item_type is ItemType.WEAPON else 0
