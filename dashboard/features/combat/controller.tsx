@@ -95,7 +95,7 @@ export function CombatWorkspaceController({
         { method: 'PATCH' },
         `${combatant.name} moved toward ${target.name}`,
       )}
-      onAddEnemy={(templateId, landmarkId, quantity) => updateCombat(
+      onAddEnemy={(templateId, landmarkId, quantity, combatRole) => updateCombat(
         '/combat/enemies',
         {
           method: 'POST',
@@ -103,6 +103,7 @@ export function CombatWorkspaceController({
             template_id: templateId,
             landmark_id: landmarkId,
             quantity,
+            combat_role: combatRole,
           }),
         },
         `${quantity} enem${quantity === 1 ? 'y' : 'ies'} added`,
