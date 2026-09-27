@@ -145,6 +145,21 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "main_hand_item_id": template.main_hand_item_id,
         "off_hand_item_id": template.off_hand_item_id,
         "armor_item_id": template.armor_item_id,
+        "melee_weapon_ids": list(template.melee_weapon_ids),
+        "ranged_weapon_ids": list(template.ranged_weapon_ids),
+        "off_hand_item_ids": list(template.off_hand_item_ids),
+        "armor_item_ids": list(template.armor_item_ids),
+        "spell_names": list(template.spell_names),
+        "spell_range": template.spell_range,
+        "available_roles": [
+            role
+            for role, available in (
+                ("melee", bool(template.melee_weapon_ids or template.main_hand_item_id)),
+                ("ranged", bool(template.ranged_weapon_ids)),
+                ("spellcaster", bool(template.spell_names)),
+            )
+            if available
+        ],
     }
 
 
@@ -181,6 +196,11 @@ def _enemy_data(
         "current_hp": enemy.current_hp,
         "max_hp": template.max_hp,
         "status": enemy.status.value,
+        "combat_role": enemy.combat_role.value,
+        "main_hand_item_id": enemy.main_hand_item_id,
+        "off_hand_item_id": enemy.off_hand_item_id,
+        "armor_item_id": enemy.armor_item_id,
+        "selected_spell": enemy.selected_spell,
         "inventory": inventory or [],
     }
 
