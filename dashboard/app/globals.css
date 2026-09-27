@@ -402,6 +402,30 @@ button, input, textarea { font: inherit; }
 .readable-content-input { min-height: 12rem; resize: vertical; }
 .catalog-check { display: flex; align-items: center; gap: 8px; color: #aab5c3; font-size: .8rem; }
 .enemy-library-dialog { width: min(860px, calc(100vw - 32px)); max-height: 85vh; overflow-y: auto; }
+
+.enemy-editor-sections { display: grid; gap: 8px; margin-top: 10px; }
+.enemy-editor-section { border: 1px solid #26344a; border-radius: 8px; background: #0f1724; overflow: hidden; }
+.enemy-editor-section__toggle { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 10px 12px; color: #d7dee7; text-align: left; border: 0; background: #111b2a; }
+.enemy-editor-section__toggle:hover { color: #f0c178; background: #142033; }
+.enemy-editor-section__toggle > span:first-child { font-size: .76rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.enemy-editor-section__toggle > svg { color: #718096; }
+.enemy-editor-section__body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid #26344a; }
+.enemy-section-help { margin: 0; color: #7f8da1; font-size: .7rem; line-height: 1.45; }
+.enemy-attribute-grid { display: grid; grid-template-columns: repeat(6, minmax(72px, 1fr)); gap: 8px; }
+.enemy-attribute-grid label { display: grid; gap: 5px; color: #8f9db0; font-size: .66rem; font-weight: 800; }
+.enemy-attribute-grid input { text-align: center; }
+.enemy-pool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.enemy-pool-grid > div { min-width: 0; padding: 9px; border: 1px solid #2b3a4f; border-radius: 7px; background: #0d1622; }
+.enemy-pool-grid h4 { margin: 0 0 7px; color: #aab5c3; font-size: .68rem; text-transform: uppercase; }
+.enemy-pool-list { display: grid; gap: 5px; max-height: 150px; overflow-y: auto; }
+.enemy-pool-option { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 6px; color: #d1d8e0; font-size: .68rem; border-radius: 5px; background: #121d2b; }
+.enemy-pool-option input { margin: 0; accent-color: #d39a4a; }
+.enemy-pool-option small { color: #718096; font-size: .58rem; }
+.enemy-pool-empty { margin: 0; color: #667487; font-size: .65rem; }
+@media (max-width: 760px) {
+  .enemy-attribute-grid { grid-template-columns: repeat(3, minmax(72px, 1fr)); }
+  .enemy-pool-grid { grid-template-columns: 1fr; }
+}
 .enemy-library-dialog .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .enemy-library-dialog .enemy-library-filters { grid-template-columns: 2fr 1fr; }
 .enemy-library-footer { position: sticky; bottom: 0; z-index: 4; margin: 4px -16px -16px; padding: 12px 16px 16px; border-top: 1px solid #26344a; background: #111a29; }
