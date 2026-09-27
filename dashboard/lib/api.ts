@@ -122,6 +122,13 @@ export type EnemyTemplateData = {
   main_hand_item_id: string | null;
   off_hand_item_id: string | null;
   armor_item_id: string | null;
+  melee_weapon_ids: string[];
+  ranged_weapon_ids: string[];
+  off_hand_item_ids: string[];
+  armor_item_ids: string[];
+  spell_names: string[];
+  spell_range: number;
+  available_roles: ('melee' | 'ranged' | 'spellcaster')[];
 };
 
 export type PlacedEnemy = {
@@ -134,6 +141,11 @@ export type PlacedEnemy = {
   current_hp: number | null;
   max_hp: number | null;
   status: 'active' | 'dead' | 'fled';
+  combat_role: 'melee' | 'ranged' | 'spellcaster';
+  main_hand_item_id: string | null;
+  off_hand_item_id: string | null;
+  armor_item_id: string | null;
+  selected_spell: string | null;
   inventory: {
     id: string;
     name: string;
