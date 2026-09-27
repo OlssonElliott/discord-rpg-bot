@@ -491,9 +491,9 @@ def _combatant_inspect_data(
             equipment_templates = {
                 item_id: slot
                 for slot, item_id in (
-                    ("main_hand", template.main_hand_item_id),
-                    ("off_hand", template.off_hand_item_id),
-                    ("armor", template.armor_item_id),
+                    ("main_hand", enemy.main_hand_item_id),
+                    ("off_hand", enemy.off_hand_item_id),
+                    ("armor", enemy.armor_item_id),
                 )
                 if item_id is not None
             }
@@ -518,9 +518,9 @@ def _combatant_inspect_data(
                     **_catalog_item_summary(world, item_id),
                 }
                 for slot, item_id in (
-                    ("main_hand", template.main_hand_item_id),
-                    ("off_hand", template.off_hand_item_id),
-                    ("armor", template.armor_item_id),
+                    ("main_hand", enemy.main_hand_item_id),
+                    ("off_hand", enemy.off_hand_item_id),
+                    ("armor", enemy.armor_item_id),
                 )
                 if item_id is not None
             ]
