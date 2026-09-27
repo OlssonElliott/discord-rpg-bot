@@ -322,17 +322,24 @@ class CombatAttackMixin:
             )
 
         enemy_weapon = None
-        if template.main_hand_item_id is not None:
+        if enemy.main_hand_item_id is not None:
             try:
                 candidate = self.world.catalog.get(
-                    template.main_hand_item_id
+                    enemy.main_hand_item_id
                 )
                 if candidate.item_type.value == "weapon":
                     enemy_weapon = candidate
             except ValueError:
                 enemy_weapon = None
 
-        weapon_range = enemy_weapon.range if enemy_weapon is not None else 0
+        weapon_range = (
+            template.spell_range
+            if enemy.combat_role.value == "spellcaster"
+            and enemy.selected_spell is not None
+            else enemy_weapon.range
+            if enemy_weapon is not None
+            else 0
+        )
         if weapon_range <= 0:
             if not same_combat_position(attacker, target):
                 raise CombatError(
@@ -430,7 +437,12 @@ class CombatAttackMixin:
             attacker_name=attacker.name,
             target_source_id=target.source_id,
             target_name=target.name,
-            attack_profile=template.attack_profile,
+            attack_profile=(
+                enemy.selected_spell
+                if enemy.combat_role.value == "spellcaster"
+                and enemy.selected_spell is not None
+                else template.attack_profile
+            ),
             attack_dc=template.attack_dc,
             defense_method=defense_method,
             defense_attribute=defense_attribute,
