@@ -76,7 +76,13 @@ class DatabaseWorldSchemaMixin:
                 typical_behaviour TEXT NOT NULL DEFAULT 'Unknown',
                 main_hand_item_id TEXT,
                 off_hand_item_id TEXT,
-                armor_item_id TEXT
+                armor_item_id TEXT,
+                melee_weapon_ids TEXT NOT NULL DEFAULT '[]',
+                ranged_weapon_ids TEXT NOT NULL DEFAULT '[]',
+                off_hand_item_ids TEXT NOT NULL DEFAULT '[]',
+                armor_item_ids TEXT NOT NULL DEFAULT '[]',
+                spell_names TEXT NOT NULL DEFAULT '[]',
+                spell_range INTEGER NOT NULL DEFAULT 3 CHECK (spell_range > 0)
             );
             CREATE TABLE IF NOT EXISTS world_enemies (
                 entity_id TEXT PRIMARY KEY,
@@ -84,6 +90,12 @@ class DatabaseWorldSchemaMixin:
                 current_hp INTEGER NOT NULL CHECK (current_hp >= 0),
                 status TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'dead', 'fled')),
+                combat_role TEXT NOT NULL DEFAULT 'melee'
+                    CHECK (combat_role IN ('melee', 'ranged', 'spellcaster')),
+                main_hand_item_id TEXT,
+                off_hand_item_id TEXT,
+                armor_item_id TEXT,
+                selected_spell TEXT,
                 FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
                 FOREIGN KEY (template_id) REFERENCES enemy_templates(id)
             );
@@ -187,6 +199,66 @@ class DatabaseWorldSchemaMixin:
             CREATE INDEX IF NOT EXISTS characters_by_room ON characters(current_room_id);
             """
         )
+        enemy_template_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(enemy_templates)")
+        }
+        enemy_template_migrations = {
+            "melee_weapon_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN melee_weapon_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "ranged_weapon_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN ranged_weapon_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "off_hand_item_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN off_hand_item_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "armor_item_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN armor_item_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "spell_names": (
+                "ALTER TABLE enemy_templates ADD COLUMN spell_names "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "spell_range": (
+                "ALTER TABLE enemy_templates ADD COLUMN spell_range "
+                "INTEGER NOT NULL DEFAULT 3"
+            ),
+        }
+        for column, statement in enemy_template_migrations.items():
+            if column not in enemy_template_columns:
+                connection.execute(statement)
+
+        world_enemy_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(world_enemies)")
+        }
+        world_enemy_migrations = {
+            "combat_role": (
+                "ALTER TABLE world_enemies ADD COLUMN combat_role "
+                "TEXT NOT NULL DEFAULT 'melee'"
+            ),
+            "main_hand_item_id": (
+                "ALTER TABLE world_enemies ADD COLUMN main_hand_item_id TEXT"
+            ),
+            "off_hand_item_id": (
+                "ALTER TABLE world_enemies ADD COLUMN off_hand_item_id TEXT"
+            ),
+            "armor_item_id": (
+                "ALTER TABLE world_enemies ADD COLUMN armor_item_id TEXT"
+            ),
+            "selected_spell": (
+                "ALTER TABLE world_enemies ADD COLUMN selected_spell TEXT"
+            ),
+        }
+        for column, statement in world_enemy_migrations.items():
+            if column not in world_enemy_columns:
+                connection.execute(statement)
+
         enemy_seed_key = "basic_enemy_templates_v1"
         if connection.execute(
             "SELECT 1 FROM world_seed_state WHERE key = ?",
