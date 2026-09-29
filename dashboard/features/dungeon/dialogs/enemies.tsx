@@ -194,6 +194,8 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     melee_damage_filter: null,
     ranged_damage_filter: null,
     natural_attacks: [],
+    armor_reduction_filter: null,
+    dual_wield: false,
   };
 }
 
@@ -297,6 +299,9 @@ export function EnemyLibraryDialog({
   const meleeWeapons = weapons.filter((item) => (item.range ?? 0) <= 0);
   const rangedWeapons = weapons.filter((item) => (item.range ?? 0) > 0);
   const armorItems = catalogItems.filter((item) => item.item_type === 'armor');
+  const secondWeapons = meleeWeapons.filter(
+    (item) => item.grip === 'one_handed',
+  );
   const meleeDamageOptions = Array.from(new Set(
     meleeWeapons.map((item) => item.damage_expression).filter(Boolean),
   )).sort();
@@ -311,6 +316,31 @@ export function EnemyLibraryDialog({
     (item) => !draft.ranged_damage_filter
       || item.damage_expression === draft.ranged_damage_filter,
   );
+  const armorReductionOptions = Array.from(new Set(
+    armorItems
+      .map((item) => item.protection)
+      .filter((value): value is number => value !== undefined),
+  )).sort((left, right) => left - right);
+  const compatibleArmorItems = armorItems.filter(
+    (item) => draft.armor_reduction_filter === null
+      || item.protection === draft.armor_reduction_filter,
+  );
+  const selectedArmorItems = armorItems.filter(
+    (item) => draft.armor_item_ids.includes(item.id),
+  );
+  const defenseValues = Array.from(new Set(
+    (selectedArmorItems.length ? selectedArmorItems : [undefined]).map(
+      (armor) => Math.max(
+        1,
+        10 + draft.dexterity + (armor?.dodge_penalty ?? 0),
+      ),
+    ),
+  )).sort((left, right) => left - right);
+  const defenseSummary = defenseValues.length > 1
+    ? `${defenseValues[0]}–${defenseValues[defenseValues.length - 1]}`
+    : String(defenseValues[0] ?? (10 + draft.dexterity));
+  const meleeAttackDc = Math.max(1, 10 + draft.strength);
+  const rangedAttackDc = Math.max(1, 10 + draft.dexterity);
 
   const races = Array.from(
     new Set(templates.map((template) => template.race).filter(Boolean)),
@@ -387,6 +417,8 @@ export function EnemyLibraryDialog({
       melee_damage_filter: template.melee_damage_filter,
       ranged_damage_filter: template.ranged_damage_filter,
       natural_attacks: template.natural_attacks,
+      armor_reduction_filter: template.armor_reduction_filter,
+      dual_wield: template.dual_wield,
     });
   }
 
