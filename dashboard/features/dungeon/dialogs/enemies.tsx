@@ -427,6 +427,10 @@ export function EnemyLibraryDialog({
         template.allowed_races.length
           ? template.allowed_races
           : [template.race]
+      ))
+      .filter((race) => (
+        lineageFilter === 'all'
+        || lineageForRace(race) === lineageFilter
       )),
   ].filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const normalizedSearch = search.trim().toLocaleLowerCase();
