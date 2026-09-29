@@ -41,6 +41,13 @@ const NATURAL_ATTACK_PRESETS = {
   slam: { name: 'Slam', damage: '1d6', damage_type: 'blunt', range: 0 },
 } as const;
 
+function lineageForRace(race: string): string {
+  return Object.entries(LINEAGE_RACES).find(([, races]) => (
+    races.includes(race)
+  ))?.[0] ?? 'Other';
+}
+
+
 export function EnemyPlacementDialog({
   open,
   templates,
@@ -638,44 +645,12 @@ export function EnemyLibraryDialog({
         <div className="enemy-editor-sections">
           <EnemyEditorSection
             title="Basics"
-            summary={`${draft.lineage} · ${draft.race}`}
+            summary={`${draft.allowed_races.length || 1} race${(draft.allowed_races.length || 1) === 1 ? '' : 's'}`}
             defaultOpen
           >
             <div className="catalog-grid">
               <label className="dialog-label">Name
                 <Input value={draft.name} onChange={(event) => update('name', event.target.value)} />
-              </label>
-              <label className="dialog-label">Lineage
-                <NativeSelect
-                  value={draft.lineage}
-                  onChange={(event) => {
-                    const lineage = event.target.value;
-                    const nextRace = LINEAGE_RACES[lineage]?.[0] ?? 'Unknown';
-                    update('lineage', lineage);
-                    update('race', nextRace);
-                  }}
-                >
-                  {lineages.map((lineage) => (
-                    <NativeSelectOption key={lineage} value={lineage}>
-                      {lineage}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </label>
-              <label className="dialog-label">Race
-                <NativeSelect
-                  value={draft.race}
-                  onChange={(event) => update('race', event.target.value)}
-                >
-                  {Array.from(new Set([
-                    ...(LINEAGE_RACES[draft.lineage] ?? []),
-                    draft.race,
-                  ])).map((race) => (
-                    <NativeSelectOption key={race} value={race}>
-                      {race}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
               </label>
               <label className="dialog-label">Max HP
                 <Input type="number" min={1} value={draft.max_hp} onChange={(event) => update('max_hp', Number(event.target.value))} />
@@ -692,6 +667,73 @@ export function EnemyLibraryDialog({
                 />
               </label>
             </div>
+
+            <div className="enemy-race-pool">
+              <div className="enemy-race-pool__heading">
+                <div>
+                  <strong>Allowed races</strong>
+                  <p className="enemy-section-help">
+                    One race is chosen and saved when the enemy spawns.
+                  </p>
+                </div>
+                <Badge variant="outline">
+                  {draft.allowed_races.length || 1} selected
+                </Badge>
+              </div>
+              <div className="enemy-race-groups">
+                {Object.entries(LINEAGE_RACES).map(([lineage, races]) => {
+                  const selectedCount = races.filter((race) => (
+                    draft.allowed_races.includes(race)
+                  )).length;
+                  const allSelected = selectedCount === races.length;
+                  return (
+                    <div key={lineage} className="enemy-race-group">
+                      <label className="enemy-race-group__title">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={(event) => {
+                            const withoutGroup = draft.allowed_races.filter(
+                              (race) => !races.includes(race),
+                            );
+                            const next = event.target.checked
+                              ? [...withoutGroup, ...races]
+                              : withoutGroup;
+                            const fallback = next[0] ?? 'Unknown';
+                            update('allowed_races', next);
+                            update('race', fallback);
+                            update('lineage', lineageForRace(fallback));
+                          }}
+                        />
+                        <span>{lineage}</span>
+                        <small>{selectedCount}/{races.length}</small>
+                      </label>
+                      <div className="enemy-race-options">
+                        {races.map((race) => (
+                          <label key={race}>
+                            <input
+                              type="checkbox"
+                              checked={draft.allowed_races.includes(race)}
+                              onChange={(event) => {
+                                const next = event.target.checked
+                                  ? [...draft.allowed_races, race]
+                                  : draft.allowed_races.filter((value) => value !== race);
+                                const fallback = next[0] ?? 'Unknown';
+                                update('allowed_races', next);
+                                update('race', fallback);
+                                update('lineage', lineageForRace(fallback));
+                              }}
+                            />
+                            <span>{race}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             <label className="dialog-label">Description
               <Textarea value={draft.description} onChange={(event) => update('description', event.target.value)} />
             </label>
