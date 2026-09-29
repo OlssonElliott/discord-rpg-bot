@@ -79,8 +79,45 @@ def place_enemy(
         if template.main_hand_item_id not in legacy_pool:
             legacy_pool.append(template.main_hand_item_id)
 
+    one_handed_melee = [
+        item_id
+        for item_id in melee_pool
+        if service.catalog.get(item_id).grip is WeaponGrip.ONE_HANDED
+    ]
+    two_handed_melee = [
+        item_id
+        for item_id in melee_pool
+        if service.catalog.get(item_id).grip is WeaponGrip.TWO_HANDED
+    ]
+
+    second_weapon_pool = list(template.off_hand_item_ids)
+    shield_pool = list(template.shield_item_ids)
+    if template.off_hand_item_id is not None:
+        legacy_offhand = service.catalog.get(template.off_hand_item_id)
+        if legacy_offhand.defense_bonus > 0:
+            if template.off_hand_item_id not in shield_pool:
+                shield_pool.append(template.off_hand_item_id)
+        elif template.off_hand_item_id not in second_weapon_pool:
+            second_weapon_pool.append(template.off_hand_item_id)
+
+    feasible_melee_loadouts: list[str] = []
+    requested_loadouts = list(template.melee_loadouts)
+    if not requested_loadouts:
+        if one_handed_melee:
+            feasible_melee_loadouts.append("one_handed")
+        if one_handed_melee and shield_pool:
+            feasible_melee_loadouts.append("shield")
+        if one_handed_melee and second_weapon_pool:
+            feasible_melee_loadouts.append("dual_wield")
+        if two_handed_melee:
+            feasible_melee_loadouts.append("two_handed")
+        if template.natural_attacks:
+            feasible_melee_loadouts.append("natural")
+    else:
+        feasible_melee_loadouts = requested_loadouts
+
     available_roles: list[EnemyCombatRole] = []
-    if melee_pool or template.natural_attacks:
+    if feasible_melee_loadouts:
         available_roles.append(EnemyCombatRole.MELEE)
     if ranged_pool:
         available_roles.append(EnemyCombatRole.RANGED)
@@ -108,36 +145,46 @@ def place_enemy(
                 f"{resolved_role.value} role."
             )
 
+    race_pool = list(template.allowed_races) or [template.race]
+    resolved_race = random.choice(race_pool)
+
     main_hand_item_id = None
+    off_hand_item_id = None
     selected_spell = None
     selected_natural_attack = None
-    if resolved_role is EnemyCombatRole.MELEE and melee_pool:
-        main_hand_item_id = random.choice(melee_pool)
-    elif resolved_role is EnemyCombatRole.MELEE and template.natural_attacks:
-        selected_natural_attack = random.choice(template.natural_attacks)
-    elif resolved_role is EnemyCombatRole.RANGED and ranged_pool:
+    loadout_style = None
+
+    if resolved_role is EnemyCombatRole.MELEE:
+        if not feasible_melee_loadouts:
+            raise ValueError(
+                f"{template.name} has no valid melee loadout."
+            )
+        loadout_style = random.choice(feasible_melee_loadouts)
+        if loadout_style == "one_handed":
+            main_hand_item_id = random.choice(one_handed_melee)
+        elif loadout_style == "shield":
+            main_hand_item_id = random.choice(one_handed_melee)
+            off_hand_item_id = random.choice(shield_pool)
+        elif loadout_style == "dual_wield":
+            main_hand_item_id = random.choice(one_handed_melee)
+            off_hand_item_id = random.choice(second_weapon_pool)
+        elif loadout_style == "two_handed":
+            main_hand_item_id = random.choice(two_handed_melee)
+        elif loadout_style == "natural":
+            selected_natural_attack = random.choice(
+                template.natural_attacks
+            )
+    elif resolved_role is EnemyCombatRole.RANGED:
+        loadout_style = "ranged"
         main_hand_item_id = random.choice(ranged_pool)
     elif resolved_role is EnemyCombatRole.SPELLCASTER:
+        loadout_style = "spellcaster"
         selected_spell = random.choice(template.spell_names)
 
-    off_hand_pool = list(template.off_hand_item_ids)
-    if template.off_hand_item_id is not None:
-        if template.off_hand_item_id not in off_hand_pool:
-            off_hand_pool.append(template.off_hand_item_id)
     armor_pool = list(template.armor_item_ids)
     if template.armor_item_id is not None:
         if template.armor_item_id not in armor_pool:
             armor_pool.append(template.armor_item_id)
-
-    off_hand_item_id = (
-        random.choice(off_hand_pool)
-        if (
-            resolved_role is EnemyCombatRole.MELEE
-            and main_hand_item_id is not None
-            and off_hand_pool
-        )
-        else None
-    )
     armor_item_id = random.choice(armor_pool) if armor_pool else None
 
     enemy = service.database.create_enemy_instance(
@@ -152,6 +199,8 @@ def place_enemy(
         armor_item_id=armor_item_id,
         selected_spell=selected_spell,
         selected_natural_attack=selected_natural_attack,
+        race=resolved_race,
+        loadout_style=loadout_style,
     )
 
     try:
@@ -236,6 +285,8 @@ def update_enemy(
             armor_item_id=current.armor_item_id,
             selected_spell=current.selected_spell,
             selected_natural_attack=current.selected_natural_attack,
+            race=current.race,
+            loadout_style=current.loadout_style,
         )
     )
 
