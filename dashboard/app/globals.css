@@ -411,6 +411,14 @@ button, input, textarea { font: inherit; }
 .enemy-editor-section__toggle > svg { color: #718096; }
 .enemy-editor-section__body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid #26344a; }
 .enemy-section-help { margin: 0; color: #7f8da1; font-size: .7rem; line-height: 1.45; }
+.enemy-combat-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.enemy-combat-summary > div { display: grid; gap: 3px; padding: 9px; border: 1px solid #2b3a4f; border-radius: 7px; background: #0d1622; }
+.enemy-combat-summary span { color: #8290a3; font-size: .62rem; font-weight: 750; text-transform: uppercase; }
+.enemy-combat-summary strong { color: #efc27e; font-size: 1rem; }
+.enemy-combat-summary small { color: #667487; font-size: .58rem; }
+.enemy-dual-wield-toggle { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #cbd4df; font-size: .7rem; }
+.enemy-dual-wield-toggle input { margin: 0; accent-color: #d39a4a; }
+.enemy-natural-range { display: grid; gap: 3px; color: #7f8da1; font-size: .58rem; }
 .enemy-attribute-grid { display: grid; grid-template-columns: repeat(6, minmax(72px, 1fr)); gap: 8px; }
 .enemy-attribute-grid label { display: grid; gap: 5px; color: #8f9db0; font-size: .66rem; font-weight: 800; }
 .enemy-attribute-grid input { text-align: center; }
@@ -431,6 +439,7 @@ button, input, textarea { font: inherit; }
 @media (max-width: 760px) {
   .enemy-attribute-grid { grid-template-columns: repeat(3, minmax(72px, 1fr)); }
   .enemy-pool-grid { grid-template-columns: 1fr; }
+  .enemy-combat-summary { grid-template-columns: 1fr; }
   .enemy-natural-attack-row { grid-template-columns: 1fr 1fr; }
   .enemy-natural-attack-row button { grid-column: 2; }
 }
