@@ -542,7 +542,7 @@ def _combatant_inspect_data(
                 "death_save_dc": None,
                 "stance": None,
                 "race": template.race,
-                "lineage": None,
+                "lineage": template.lineage,
                 "age": None,
                 "gender": None,
                 "attributes": {
@@ -587,6 +587,13 @@ def _combatant_inspect_data(
                                 enemy.armor_item_id
                             ).dodge_penalty
                             if enemy.armor_item_id is not None
+                            else 0
+                        )
+                        + (
+                            world.catalog.get(
+                                enemy.off_hand_item_id
+                            ).defense_bonus
+                            if enemy.off_hand_item_id is not None
                             else 0
                         ),
                     ),
