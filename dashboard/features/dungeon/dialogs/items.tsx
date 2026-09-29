@@ -53,6 +53,7 @@ type ItemDraft = {
   damage_type?: string;
   protection?: number;
   dodge_penalty?: number;
+  defense_bonus?: number;
   strength_requirement?: number;
   capacity?: number;
   can_equip?: boolean;
@@ -73,6 +74,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
   const [damageType, setDamageType] = useState('physical');
   const [weaponRange, setWeaponRange] = useState(0);
   const [grip, setGrip] = useState('one_handed');
+  const [defenseBonus, setDefenseBonus] = useState(0);
   const [canEquip, setCanEquip] = useState(false);
   const [readableContent, setReadableContent] = useState('');
   const [stackable, setStackable] = useState(false);
@@ -87,7 +89,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
   const record: ItemDraft = { name, item_type: itemType, description, rarity, value, weight, slot_cost: slotCost };
   Object.assign(record, { stackable });
   if (itemType === 'weapon') Object.assign(record, { grip, durability: editingItem?.durability ?? 40, range: weaponRange, damage: power, damage_type: damageType });
-  if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: editingItem?.dodge_penalty ?? 0, strength_requirement: editingItem?.strength_requirement ?? 0 });
+  if (itemType === 'armor') Object.assign(record, { protection: power, dodge_penalty: editingItem?.dodge_penalty ?? 0, defense_bonus: defenseBonus, strength_requirement: editingItem?.strength_requirement ?? 0 });
   if (itemType === 'container') Object.assign(record, { capacity: power, can_equip: canEquip });
   if (itemType === 'consumable') Object.assign(record, { affected_amount: power });
   if (itemType === 'readable') Object.assign(record, { content: readableContent });
@@ -105,6 +107,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
     setGrip(item?.grip ?? 'one_handed');
     setDamageType(item?.damage_type ?? 'physical');
     setWeaponRange(item?.range ?? 0);
+    setDefenseBonus(item?.defense_bonus ?? 0);
     setCanEquip(item?.can_equip ?? false);
     setPower(
       item?.damage
@@ -148,6 +151,7 @@ export function ItemLibraryDialog({ open, items, onOpenChange, onSave }: { open:
           <label className="dialog-label" htmlFor="item-slots">Storage slots<Input id="item-slots" type="number" min={0} value={slotCost} onChange={(event) => setSlotCost(Number(event.target.value))} /></label>
           {!['misc', 'tool', 'clothing', 'readable'].includes(itemType) && <label className="dialog-label" htmlFor="item-power">{itemType === 'weapon' ? 'Damage' : itemType === 'armor' ? 'Protection' : itemType === 'container' ? 'Capacity' : 'Healing'}<Input id="item-power" type="number" min={1} value={power} onChange={(event) => setPower(Number(event.target.value))} /></label>}
           {itemType === 'weapon' && <><label className="dialog-label" htmlFor="item-damage-type">Damage type<Input id="item-damage-type" value={damageType} onChange={(event) => setDamageType(event.target.value)} /></label><label className="dialog-label" htmlFor="item-range">Range<Input id="item-range" type="number" min={0} value={weaponRange} onChange={(event) => setWeaponRange(Number(event.target.value))} /></label><label className="dialog-label" htmlFor="item-grip">Grip<NativeSelect id="item-grip" value={grip} onChange={(event) => setGrip(event.target.value)}><NativeSelectOption value="one_handed">One handed</NativeSelectOption><NativeSelectOption value="two_handed">Two handed</NativeSelectOption></NativeSelect></label></>}
+          {itemType === 'armor' && <label className="dialog-label" htmlFor="item-defense-bonus">Defense bonus<Input id="item-defense-bonus" type="number" min={0} value={defenseBonus} onChange={(event) => setDefenseBonus(Number(event.target.value))} /></label>}
           {itemType === 'container' && <label className="catalog-check"><input type="checkbox" checked={canEquip} onChange={(event) => setCanEquip(event.target.checked)} /> Can be equipped</label>}
         </div>
         <label className="dialog-label" htmlFor="item-description">Description</label>
