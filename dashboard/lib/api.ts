@@ -136,6 +136,9 @@ export type EnemyTemplateData = {
   ranged_damage_filter: string | null;
   armor_reduction_filter: number | null;
   dual_wield: boolean;
+  allowed_races: string[];
+  melee_loadouts: ('one_handed' | 'shield' | 'dual_wield' | 'two_handed' | 'natural')[];
+  shield_item_ids: string[];
   natural_attacks: {
     name: string;
     damage: string;
@@ -160,6 +163,8 @@ export type PlacedEnemy = {
   off_hand_item_id: string | null;
   armor_item_id: string | null;
   selected_spell: string | null;
+  race: string;
+  loadout_style: string | null;
   selected_natural_attack: {
     name: string;
     damage: string;
