@@ -262,7 +262,11 @@ function PoolChecklist({
   onChange: (next: string[]) => void;
 }) {
   if (!items.length) {
-    return <p className="enemy-pool-empty">No compatible items in the Item Library.</p>;
+    return (
+      <div className="enemy-pool-list enemy-pool-list--empty">
+        <p className="enemy-pool-empty">No compatible items in the Item Library.</p>
+      </div>
+    );
   }
   return (
     <div className="enemy-pool-list">
@@ -285,6 +289,13 @@ function PoolChecklist({
               {item.damage_expression ?? `1d${item.damage ?? 1}`}
               {item.damage_type ? ` · ${item.damage_type}` : ''}
               {` · Range ${item.range ?? 0}`}
+            </small>
+          )}
+          {item.item_type === 'armor' && (
+            <small>
+              {(item.defense_bonus ?? 0) > 0
+                ? `Defense +${item.defense_bonus}`
+                : `DR ${item.protection ?? 0} · Dodge ${(item.dodge_penalty ?? 0) >= 0 ? '+' : ''}${item.dodge_penalty ?? 0}`}
             </small>
           )}
         </label>
@@ -792,30 +803,51 @@ export function EnemyLibraryDialog({
               </div>
 
               <div>
-                <h4>Second weapon</h4>
-                <label className="enemy-dual-wield-toggle">
-                  <input
-                    type="checkbox"
-                    checked={draft.dual_wield}
+                <h4>Offhand</h4>
+                <label className="dialog-label">
+                  Mode
+                  <NativeSelect
+                    value={offhandMode}
                     onChange={(event) => {
-                      update('dual_wield', event.target.checked);
-                      if (!event.target.checked) {
-                        update('off_hand_item_ids', []);
+                      const mode = event.target.value as 'none' | 'dual_wield' | 'shield';
+                      setOffhandMode(mode);
+                      update('dual_wield', mode === 'dual_wield');
+                      update('off_hand_item_ids', []);
+                      if (mode !== 'none') {
+                        update(
+                          'melee_weapon_ids',
+                          draft.melee_weapon_ids.filter((id) => (
+                            meleeWeapons.find((item) => item.id === id)?.grip === 'one_handed'
+                          )),
+                        );
                       }
                     }}
-                  />
-                  <span>Dual wield</span>
+                  >
+                    <NativeSelectOption value="none">None</NativeSelectOption>
+                    <NativeSelectOption value="dual_wield">Dual wield</NativeSelectOption>
+                    <NativeSelectOption value="shield">Shield</NativeSelectOption>
+                  </NativeSelect>
                 </label>
-                {draft.dual_wield ? (
+                {offhandMode === 'dual_wield' && (
                   <PoolChecklist
                     items={secondWeapons}
                     selected={draft.off_hand_item_ids}
                     onChange={(value) => update('off_hand_item_ids', value)}
                   />
-                ) : (
-                  <p className="enemy-pool-empty">
-                    Enable dual wield to choose one-handed melee weapons.
-                  </p>
+                )}
+                {offhandMode === 'shield' && (
+                  <PoolChecklist
+                    items={shieldItems}
+                    selected={draft.off_hand_item_ids}
+                    onChange={(value) => update('off_hand_item_ids', value)}
+                  />
+                )}
+                {offhandMode === 'none' && (
+                  <div className="enemy-pool-list enemy-pool-list--empty">
+                    <p className="enemy-pool-empty">
+                      No offhand equipment.
+                    </p>
+                  </div>
                 )}
               </div>
               <div>
@@ -862,22 +894,31 @@ export function EnemyLibraryDialog({
                     Natural attacks belong to the creature and are not placed in inventory or loot.
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => update('natural_attacks', [
-                    ...draft.natural_attacks,
-                    {
-                      name: 'Bite',
-                      damage: '1d6',
-                      damage_type: 'pierce',
-                      range: 0,
-                    },
-                  ])}
-                >
-                  Add natural attack
-                </Button>
+                <div className="enemy-natural-preset">
+                  <NativeSelect
+                    value={naturalAttackPreset}
+                    onChange={(event) => setNaturalAttackPreset(
+                      event.target.value as keyof typeof NATURAL_ATTACK_PRESETS,
+                    )}
+                  >
+                    {Object.entries(NATURAL_ATTACK_PRESETS).map(([id, attack]) => (
+                      <NativeSelectOption key={id} value={id}>
+                        {attack.name} · {attack.damage}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => update('natural_attacks', [
+                      ...draft.natural_attacks,
+                      { ...NATURAL_ATTACK_PRESETS[naturalAttackPreset] },
+                    ])}
+                  >
+                    Add
+                  </Button>
+                </div>
               </div>
               {draft.natural_attacks.map((attack, index) => (
                 <div className="enemy-natural-attack-row" key={`${index}-${attack.name}`}>
