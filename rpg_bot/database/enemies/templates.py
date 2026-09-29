@@ -21,7 +21,8 @@ class DatabaseEnemyTemplatesMixin:
                        damage, attack_profile, special_ability, typical_behaviour,
                        main_hand_item_id, off_hand_item_id, armor_item_id,
                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
-                       armor_item_ids, spell_names, spell_range
+                       armor_item_ids, spell_names, spell_range,
+                       melee_damage_filter, ranged_damage_filter, natural_attacks
                 FROM enemy_templates
                 ORDER BY name COLLATE NOCASE, id
                 """
@@ -38,7 +39,8 @@ class DatabaseEnemyTemplatesMixin:
                        damage, attack_profile, special_ability, typical_behaviour,
                        main_hand_item_id, off_hand_item_id, armor_item_id,
                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
-                       armor_item_ids, spell_names, spell_range
+                       armor_item_ids, spell_names, spell_range,
+                       melee_damage_filter, ranged_damage_filter, natural_attacks
                 FROM enemy_templates
                 WHERE id = ?
                 """,
@@ -64,7 +66,8 @@ class DatabaseEnemyTemplatesMixin:
                         damage, attack_profile, special_ability, typical_behaviour,
                         main_hand_item_id, off_hand_item_id, armor_item_id,
                         melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
-                        armor_item_ids, spell_names, spell_range
+                        armor_item_ids, spell_names, spell_range,
+                       melee_damage_filter, ranged_damage_filter, natural_attacks
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
@@ -99,6 +102,17 @@ class DatabaseEnemyTemplatesMixin:
                         json.dumps(template.armor_item_ids),
                         json.dumps(template.spell_names),
                         template.spell_range,
+                        template.melee_damage_filter,
+                        template.ranged_damage_filter,
+                        json.dumps([
+                            {
+                                "name": attack.name,
+                                "damage": attack.damage,
+                                "damage_type": attack.damage_type,
+                                "range": attack.range,
+                            }
+                            for attack in template.natural_attacks
+                        ]),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -162,6 +176,17 @@ class DatabaseEnemyTemplatesMixin:
                     json.dumps(template.armor_item_ids),
                     json.dumps(template.spell_names),
                     template.spell_range,
+                    template.melee_damage_filter,
+                    template.ranged_damage_filter,
+                    json.dumps([
+                        {
+                            "name": attack.name,
+                            "damage": attack.damage,
+                            "damage_type": attack.damage_type,
+                            "range": attack.range,
+                        }
+                        for attack in template.natural_attacks
+                    ]),
                     clean_id,
                 ),
             )
@@ -206,7 +231,7 @@ class DatabaseEnemyTemplatesMixin:
 
     @staticmethod
     def _enemy_template_from_row(row):
-        from ...world.enemies import EnemyTemplate
+        from ...world.enemies import EnemyNaturalAttack, EnemyTemplate
 
         return EnemyTemplate(
             template_id=row["id"],
@@ -238,4 +263,15 @@ class DatabaseEnemyTemplatesMixin:
             armor_item_ids=tuple(json.loads(row["armor_item_ids"] or "[]")),
             spell_names=tuple(json.loads(row["spell_names"] or "[]")),
             spell_range=row["spell_range"],
+            melee_damage_filter=row["melee_damage_filter"],
+            ranged_damage_filter=row["ranged_damage_filter"],
+            natural_attacks=tuple(
+                EnemyNaturalAttack(
+                    name=record["name"],
+                    damage=record["damage"],
+                    damage_type=record.get("damage_type", "physical"),
+                    range=int(record.get("range", 0)),
+                )
+                for record in json.loads(row["natural_attacks"] or "[]")
+            ),
         )
