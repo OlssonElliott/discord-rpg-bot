@@ -80,6 +80,9 @@ class EnemyTemplate:
     natural_attacks: tuple[EnemyNaturalAttack, ...] = ()
     armor_reduction_filter: int | None = None
     dual_wield: bool = False
+    allowed_races: tuple[str, ...] = ()
+    melee_loadouts: tuple[str, ...] = ()
+    shield_item_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         non_negative = {
@@ -139,6 +142,21 @@ class EnemyTemplate:
             if value is not None and not value.strip():
                 raise ValueError(f"Enemy {label} cannot be empty.")
 
+        valid_melee_loadouts = {
+            "one_handed",
+            "shield",
+            "dual_wield",
+            "two_handed",
+            "natural",
+        }
+        if any(
+            loadout not in valid_melee_loadouts
+            for loadout in self.melee_loadouts
+        ):
+            raise ValueError(
+                "Enemy melee loadouts contain an unknown configuration."
+            )
+
         natural_attack_names = [
             attack.name.casefold()
             for attack in self.natural_attacks
@@ -151,6 +169,9 @@ class EnemyTemplate:
             "ranged weapon pool": self.ranged_weapon_ids,
             "off-hand pool": self.off_hand_item_ids,
             "armor pool": self.armor_item_ids,
+            "shield pool": self.shield_item_ids,
+            "allowed races": self.allowed_races,
+            "melee loadouts": self.melee_loadouts,
             "spell access": self.spell_names,
         }.items():
             if len(values) != len(set(values)):
@@ -174,6 +195,8 @@ class EnemyInstance:
     armor_item_id: str | None = None
     selected_spell: str | None = None
     selected_natural_attack: EnemyNaturalAttack | None = None
+    race: str = "Unknown"
+    loadout_style: str | None = None
 
     def __post_init__(self) -> None:
         if (
