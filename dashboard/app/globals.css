@@ -425,9 +425,9 @@ button, input, textarea { font: inherit; }
 .enemy-pool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .enemy-pool-grid > div { min-width: 0; padding: 9px; border: 1px solid #2b3a4f; border-radius: 7px; background: #0d1622; }
 .enemy-pool-grid h4 { margin: 0 0 7px; color: #aab5c3; font-size: .68rem; text-transform: uppercase; }
-.enemy-pool-list { display: grid; align-content: start; gap: 5px; height: 150px; overflow-y: auto; }
+.enemy-pool-list { display: grid; align-content: start; gap: 4px; height: 132px; overflow-y: auto; }
 .enemy-pool-list--empty { place-items: center; align-content: center; }
-.enemy-pool-option { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 6px; color: #d1d8e0; font-size: .68rem; border-radius: 5px; background: #121d2b; }
+.enemy-pool-option { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 4px 6px; color: #d1d8e0; font-size: .66rem; border-radius: 5px; background: #121d2b; }
 .enemy-pool-option input { margin: 0; accent-color: #d39a4a; }
 .enemy-pool-option small { color: #718096; font-size: .58rem; }
 .enemy-pool-empty { margin: 0; color: #667487; font-size: .65rem; }
@@ -447,6 +447,7 @@ button, input, textarea { font: inherit; }
   .enemy-attribute-heading { align-items: stretch; flex-direction: column; }
   .enemy-race-groups { grid-template-columns: 1fr; }
   .enemy-loadout-options { grid-template-columns: 1fr 1fr; }
+  .enemy-tab-grid { grid-template-columns: 1fr; }
   .enemy-preset-control { width: 100%; }
 }
 .enemy-library-dialog .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -455,17 +456,37 @@ button, input, textarea { font: inherit; }
 .enemy-race-pool { display: grid; gap: 8px; padding: 10px; border: 1px solid #2b3a4f; border-radius: 8px; background: #0d1622; }
 .enemy-race-pool__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .enemy-race-pool__heading strong { color: #d9e0e8; font-size: .72rem; }
-.enemy-race-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.enemy-race-group { display: grid; gap: 5px; padding: 7px; border: 1px solid #26344a; border-radius: 6px; background: #111927; }
+.enemy-race-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 7px; }
+.enemy-race-group { display: grid; align-content: start; gap: 4px; padding: 6px; border: 1px solid #26344a; border-radius: 6px; background: #111927; }
 .enemy-race-group__title { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; color: #c6d0dc; font-size: .66rem; font-weight: 750; }
 .enemy-race-group__title small { color: #6f7d90; font-size: .56rem; }
 .enemy-race-group input { margin: 0; accent-color: #d39a4a; }
-.enemy-race-options { display: grid; gap: 4px; }
-.enemy-race-options label { display: flex; align-items: center; gap: 6px; color: #9eabba; font-size: .64rem; }
+.enemy-race-options { display: grid; align-content: start; gap: 2px; }
+.enemy-race-options label { display: flex; align-items: center; gap: 5px; min-height: 20px; color: #9eabba; font-size: .62rem; }
 .enemy-pool-wide { grid-column: 1 / -1; }
-.enemy-loadout-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-top: 7px; }
+.enemy-loadout-options { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
 .enemy-loadout-options label { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 7px 8px; border: 1px solid #2b3a4f; border-radius: 6px; color: #cbd4df; font-size: .65rem; background: #111927; }
 .enemy-loadout-options input { margin: 0; accent-color: #d39a4a; }
+.enemy-combat-config { display: grid; gap: 7px; }
+.enemy-combat-config__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.enemy-combat-config__heading h4 { margin: 0 0 3px; color: #aab5c3; font-size: .68rem; text-transform: uppercase; }
+.enemy-equipment-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid #26344a; border-radius: 7px; background: #0b131f; }
+.enemy-equipment-tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 8px; color: #8492a5; font-size: .68rem; font-weight: 750; border: 1px solid transparent; border-radius: 5px; background: transparent; }
+.enemy-equipment-tabs button:hover:not(:disabled) { color: #dce3eb; background: #121d2b; }
+.enemy-equipment-tabs button.active { color: #efc27e; border-color: #5a4328; background: #1b1813; }
+.enemy-equipment-tabs button:disabled { opacity: .38; cursor: not-allowed; }
+.enemy-equipment-tabs button span { min-width: 18px; padding: 1px 5px; color: #aeb9c6; font-size: .56rem; border-radius: 999px; background: #202c3c; }
+.enemy-equipment-panel { display: grid; gap: 8px; }
+.enemy-tab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.enemy-tab-single { display: grid; gap: 8px; }
+.enemy-pool-card { min-width: 0; padding: 8px; border: 1px solid #2b3a4f; border-radius: 7px; background: #0d1622; }
+.enemy-pool-card h4 { margin: 0 0 7px; color: #aab5c3; font-size: .68rem; text-transform: uppercase; }
+.enemy-pool-card__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.enemy-pool-card__heading span { color: #718096; font-size: .58rem; }
+.enemy-dr-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 7px; }
+.enemy-dr-filters button { min-height: 26px; padding: 4px 8px; color: #8795a8; font-size: .62rem; border: 1px solid #2b3a4f; border-radius: 999px; background: #111927; }
+.enemy-dr-filters button:hover { color: #dce3eb; border-color: #42516a; }
+.enemy-dr-filters button.active { color: #efc27e; border-color: #6a4c2b; background: #211a12; }
 .enemy-preset-control { width: min(180px, 40%); }
 .enemy-natural-preset { display: flex; align-items: center; gap: 6px; }
 .enemy-library-dialog .enemy-library-filters { grid-template-columns: 2fr 1fr; }
