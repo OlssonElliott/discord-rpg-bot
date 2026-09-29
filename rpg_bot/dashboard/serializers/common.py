@@ -37,6 +37,7 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         "slot_cost": template.slot_cost,
         "stackable": template.stackable,
         "content": template.content,
+        "tags": list(template.tags),
     }
     if template.item_type is ItemType.WEAPON:
         data.update(
@@ -133,6 +134,7 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "name": template.name,
         "description": template.description or "",
         "race": template.race,
+        "lineage": template.lineage,
         "difficulty_level": template.difficulty_level,
         "strength": template.strength,
         "dexterity": template.dexterity,
