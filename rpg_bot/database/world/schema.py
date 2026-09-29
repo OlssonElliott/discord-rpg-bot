@@ -58,6 +58,7 @@ class DatabaseWorldSchemaMixin:
                 name TEXT NOT NULL,
                 description TEXT,
                 race TEXT NOT NULL DEFAULT 'Unknown',
+                lineage TEXT NOT NULL DEFAULT 'Other',
                 difficulty_level INTEGER NOT NULL DEFAULT 1 CHECK (difficulty_level >= 0),
                 strength INTEGER NOT NULL DEFAULT 0 CHECK (strength >= 0),
                 dexterity INTEGER NOT NULL DEFAULT 0 CHECK (dexterity >= 0),
