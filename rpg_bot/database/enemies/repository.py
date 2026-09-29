@@ -26,6 +26,8 @@ class DatabaseEnemiesMixin:
         armor_item_id: str | None = None,
         selected_spell: str | None = None,
         selected_natural_attack=None,
+        race: str = "Unknown",
+        loadout_style: str | None = None,
     ):
         template = self.get_enemy_template(template_id)
         if template is None:
@@ -65,8 +67,9 @@ class DatabaseEnemiesMixin:
                     INSERT INTO world_enemies (
                         entity_id, template_id, current_hp, status,
                         combat_role, main_hand_item_id, off_hand_item_id,
-                        armor_item_id, selected_spell, selected_natural_attack
-                    ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
+                        armor_item_id, selected_spell, selected_natural_attack,
+                        race, loadout_style
+                    ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         clean_id,
@@ -87,6 +90,8 @@ class DatabaseEnemiesMixin:
                             if selected_natural_attack is not None
                             else None
                         ),
+                        race,
+                        loadout_style,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -107,7 +112,8 @@ class DatabaseEnemiesMixin:
                        enemy.current_hp, enemy.status, enemy.combat_role,
                        enemy.main_hand_item_id, enemy.off_hand_item_id,
                        enemy.armor_item_id, enemy.selected_spell,
-                       enemy.selected_natural_attack
+                       enemy.selected_natural_attack, enemy.race,
+                       enemy.loadout_style
                 FROM world_entities AS entity
                 JOIN world_enemies AS enemy
                   ON enemy.entity_id = entity.id
@@ -132,7 +138,8 @@ class DatabaseEnemiesMixin:
                        enemy.current_hp, enemy.status, enemy.combat_role,
                        enemy.main_hand_item_id, enemy.off_hand_item_id,
                        enemy.armor_item_id, enemy.selected_spell,
-                       enemy.selected_natural_attack
+                       enemy.selected_natural_attack, enemy.race,
+                       enemy.loadout_style
                 FROM world_entities AS entity
                 JOIN world_enemies AS enemy
                   ON enemy.entity_id = entity.id
@@ -193,7 +200,7 @@ class DatabaseEnemiesMixin:
                 SET current_hp = ?, status = ?, combat_role = ?,
                     main_hand_item_id = ?, off_hand_item_id = ?,
                     armor_item_id = ?, selected_spell = ?,
-                    selected_natural_attack = ?
+                    selected_natural_attack = ?, race = ?, loadout_style = ?
                 WHERE entity_id = ?
                 """,
                 (
@@ -214,6 +221,8 @@ class DatabaseEnemiesMixin:
                         if enemy.selected_natural_attack is not None
                         else None
                     ),
+                    enemy.race,
+                    enemy.loadout_style,
                     enemy.id,
                 ),
             )
@@ -249,4 +258,6 @@ class DatabaseEnemiesMixin:
                 if row["selected_natural_attack"]
                 else None
             ),
+            race=row["race"],
+            loadout_style=row["loadout_style"],
         )
