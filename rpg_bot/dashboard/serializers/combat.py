@@ -68,6 +68,23 @@ def _combatant_usable_items_data(
     return usable
 
 
+def _enemy_lineage_for_race(
+    race: str,
+    fallback: str,
+) -> str:
+    groups = {
+        "Commonfolk": {"Human", "Dwarf", "Halfling"},
+        "Fey": {"Elf", "Dryad", "Faun"},
+        "Primals": {"Gnoll", "Lizardman", "Minotaur"},
+        "Felblood": {"Orc", "Troll", "Goblin"},
+        "Wretched": {"Revenant", "Hagspawn", "Swarmling"},
+    }
+    for lineage, races in groups.items():
+        if race in races:
+            return lineage
+    return fallback
+
+
 def _combatant_attack_range(
     world: WorldService,
     kind: str,
@@ -541,8 +558,11 @@ def _combatant_inspect_data(
                 "failed_death_saves": None,
                 "death_save_dc": None,
                 "stance": None,
-                "race": template.race,
-                "lineage": template.lineage,
+                "race": enemy.race,
+                "lineage": _enemy_lineage_for_race(
+                    enemy.race,
+                    template.lineage,
+                ),
                 "age": None,
                 "gender": None,
                 "attributes": {
