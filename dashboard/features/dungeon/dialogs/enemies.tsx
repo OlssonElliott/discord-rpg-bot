@@ -411,16 +411,20 @@ export function EnemyLibraryDialog({
       .map((template) => template.race),
   ].filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const normalizedSearch = search.trim().toLocaleLowerCase();
-  const filteredTemplates = templates.filter((template) => (
-    (lineageFilter === 'all' || template.lineage === lineageFilter)
-    && (raceFilter === 'all' || template.race === raceFilter)
-    && (
-      !normalizedSearch
+  const filteredTemplates = templates.filter((template) => {
+    const templateRaces = template.allowed_races.length
+      ? template.allowed_races
+      : [template.race];
+    const matchesLineage = lineageFilter === 'all'
+      || templateRaces.some((race) => lineageForRace(race) === lineageFilter);
+    const matchesRace = raceFilter === 'all'
+      || templateRaces.includes(raceFilter);
+    const matchesSearch = !normalizedSearch
       || template.name.toLocaleLowerCase().includes(normalizedSearch)
-      || template.race.toLocaleLowerCase().includes(normalizedSearch)
-      || template.typical_behaviour.toLocaleLowerCase().includes(normalizedSearch)
-    )
-  ));
+      || templateRaces.some((race) => race.toLocaleLowerCase().includes(normalizedSearch))
+      || template.typical_behaviour.toLocaleLowerCase().includes(normalizedSearch);
+    return matchesLineage && matchesRace && matchesSearch;
+  });
 
   function update<K extends keyof EnemyTemplateDraft>(
     key: K,
@@ -636,7 +640,7 @@ export function EnemyLibraryDialog({
             >
               <span>{template.name}</span>
               <Badge variant="outline">
-                {template.lineage} · {template.race} · {template.max_hp} HP
+                {(template.allowed_races.length || 1)} race{(template.allowed_races.length || 1) === 1 ? '' : 's'} · {template.max_hp} HP
               </Badge>
             </button>
           ))}
@@ -1091,6 +1095,7 @@ export function EnemyLibraryDialog({
           <Button
             disabled={
               !draft.name.trim()
+              || draft.allowed_races.length === 0
               || !draft.race.trim()
               || !draft.damage.trim()
               || !draft.attack_profile.trim()
