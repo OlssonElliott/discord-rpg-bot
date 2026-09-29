@@ -18,6 +18,13 @@ from ..characters.models import CharacterCombatStatus
 from ..world.enemies import EnemyStatus
 
 
+def _item_damage_expression(item) -> str:
+    return " + ".join(
+        f"1d{part.amount}"
+        for part in item.damage_parts
+    ) or "1d1"
+
+
 class CombatAttackMixin:
     """Character and enemy attack actions."""
 
@@ -168,6 +175,13 @@ class CombatAttackMixin:
                 reduction = max(0, template.magical_resistance)
             else:
                 reduction = max(0, template.armor)
+                if enemy.armor_item_id is not None:
+                    try:
+                        armor_item = self.world.catalog.get(enemy.armor_item_id)
+                        if armor_item.protection is not None:
+                            reduction = max(0, armor_item.protection)
+                    except ValueError:
+                        pass
             final_damage = max(1, raw_damage - reduction)
             target_hp = max(0, enemy.current_hp - final_damage)
             updated_enemy = self.world.update_enemy(
@@ -338,6 +352,8 @@ class CombatAttackMixin:
             and enemy.selected_spell is not None
             else enemy_weapon.range
             if enemy_weapon is not None
+            else enemy.selected_natural_attack.range
+            if enemy.selected_natural_attack is not None
             else 0
         )
         if weapon_range <= 0:
@@ -357,6 +373,27 @@ class CombatAttackMixin:
                     f"{target.name} is out of range "
                     f"({distance}/{weapon_range})."
                 )
+
+        damage_expression = (
+            template.damage
+            if enemy.combat_role.value == "spellcaster"
+            and enemy.selected_spell is not None
+            else _item_damage_expression(enemy_weapon)
+            if enemy_weapon is not None
+            else enemy.selected_natural_attack.damage
+            if enemy.selected_natural_attack is not None
+            else template.damage
+        )
+        attack_profile = (
+            enemy.selected_spell
+            if enemy.combat_role.value == "spellcaster"
+            and enemy.selected_spell is not None
+            else enemy_weapon.name
+            if enemy_weapon is not None
+            else enemy.selected_natural_attack.name
+            if enemy.selected_natural_attack is not None
+            else template.attack_profile
+        )
 
         character = self._character_by_source_id(target.source_id)
         assert character.character_id is not None
@@ -402,7 +439,7 @@ class CombatAttackMixin:
 
         if not defended:
             damage_rolls, raw_damage = self._roll_damage_expression(
-                template.damage
+                damage_expression
             )
             armor_reduction, _ = self._equipped_armor_stats(character_id)
             if raw_damage > 0:
@@ -437,12 +474,7 @@ class CombatAttackMixin:
             attacker_name=attacker.name,
             target_source_id=target.source_id,
             target_name=target.name,
-            attack_profile=(
-                enemy.selected_spell
-                if enemy.combat_role.value == "spellcaster"
-                and enemy.selected_spell is not None
-                else template.attack_profile
-            ),
+            attack_profile=attack_profile,
             attack_dc=template.attack_dc,
             defense_method=defense_method,
             defense_attribute=defense_attribute,
@@ -451,7 +483,7 @@ class CombatAttackMixin:
             defense_total=defense_total,
             defended=defended,
             critical_defense=critical_defense,
-            damage_expression=template.damage,
+            damage_expression=damage_expression,
             damage_rolls=damage_rolls,
             raw_damage=raw_damage,
             armor_reduction=armor_reduction,
@@ -489,7 +521,7 @@ class CombatAttackMixin:
             if defended:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
-                    f"{template.attack_profile}. "
+                    f"{attack_profile}. "
                     f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
                     f"{defense_total} vs Attack DC {template.attack_dc}, "
@@ -498,7 +530,7 @@ class CombatAttackMixin:
             else:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
-                    f"{template.attack_profile}. "
+                    f"{attack_profile}. "
                     f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
                     f"{defense_total} vs Attack DC {template.attack_dc}, "
