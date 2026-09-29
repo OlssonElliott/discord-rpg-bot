@@ -113,6 +113,8 @@ def place_enemy(
             feasible_melee_loadouts.append("two_handed")
         if template.natural_attacks:
             feasible_melee_loadouts.append("natural")
+        if not feasible_melee_loadouts:
+            feasible_melee_loadouts.append("unarmed")
     else:
         feasible_melee_loadouts = requested_loadouts
 
@@ -188,6 +190,8 @@ def place_enemy(
             selected_natural_attack = random.choice(
                 template.natural_attacks
             )
+        elif loadout_style == "unarmed":
+            pass
     elif resolved_role is EnemyCombatRole.RANGED:
         loadout_style = "ranged"
         main_hand_item_id = random.choice(ranged_pool)
