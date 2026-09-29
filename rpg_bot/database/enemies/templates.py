@@ -15,7 +15,7 @@ class DatabaseEnemyTemplatesMixin:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, name, description, race, difficulty_level,
+                SELECT id, name, description, race, lineage, difficulty_level,
                        strength, dexterity, arcana, vitality, insight, personality,
                        max_hp, armor, magical_resistance, attack_dc, defense_dc,
                        damage, attack_profile, special_ability, typical_behaviour,
@@ -34,7 +34,7 @@ class DatabaseEnemyTemplatesMixin:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT id, name, description, race, difficulty_level,
+                SELECT id, name, description, race, lineage, difficulty_level,
                        strength, dexterity, arcana, vitality, insight, personality,
                        max_hp, armor, magical_resistance, attack_dc, defense_dc,
                        damage, attack_profile, special_ability, typical_behaviour,
@@ -62,7 +62,7 @@ class DatabaseEnemyTemplatesMixin:
                 connection.execute(
                     """
                     INSERT INTO enemy_templates (
-                        id, name, description, race, difficulty_level,
+                        id, name, description, race, lineage, difficulty_level,
                         strength, dexterity, arcana, vitality, insight, personality,
                         max_hp, armor, magical_resistance, attack_dc, defense_dc,
                         damage, attack_profile, special_ability, typical_behaviour,
@@ -73,7 +73,7 @@ class DatabaseEnemyTemplatesMixin:
                         armor_reduction_filter, dual_wield
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     (
@@ -81,6 +81,7 @@ class DatabaseEnemyTemplatesMixin:
                         clean_name,
                         template.description,
                         template.race,
+                        template.lineage,
                         template.difficulty_level,
                         template.strength,
                         template.dexterity,
@@ -141,7 +142,7 @@ class DatabaseEnemyTemplatesMixin:
             cursor = connection.execute(
                 """
                 UPDATE enemy_templates
-                SET name = ?, description = ?, race = ?, difficulty_level = ?,
+                SET name = ?, description = ?, race = ?, lineage = ?, difficulty_level = ?,
                     strength = ?, dexterity = ?, arcana = ?, vitality = ?,
                     insight = ?, personality = ?, max_hp = ?, armor = ?,
                     magical_resistance = ?, attack_dc = ?, defense_dc = ?,
@@ -160,6 +161,7 @@ class DatabaseEnemyTemplatesMixin:
                     clean_name,
                     template.description,
                     template.race,
+                    template.lineage,
                     template.difficulty_level,
                     template.strength,
                     template.dexterity,
@@ -249,6 +251,7 @@ class DatabaseEnemyTemplatesMixin:
             name=row["name"],
             description=row["description"],
             race=row["race"],
+            lineage=row["lineage"],
             difficulty_level=row["difficulty_level"],
             strength=row["strength"],
             dexterity=row["dexterity"],
