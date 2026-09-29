@@ -165,6 +165,9 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "ranged_damage_filter": template.ranged_damage_filter,
         "armor_reduction_filter": template.armor_reduction_filter,
         "dual_wield": template.dual_wield,
+        "allowed_races": list(template.allowed_races),
+        "melee_loadouts": list(template.melee_loadouts),
+        "shield_item_ids": list(template.shield_item_ids),
         "natural_attacks": [
             {
                 "name": attack.name,
@@ -231,6 +234,8 @@ def _enemy_data(
         "off_hand_item_id": enemy.off_hand_item_id,
         "armor_item_id": enemy.armor_item_id,
         "selected_spell": enemy.selected_spell,
+        "race": enemy.race,
+        "loadout_style": enemy.loadout_style,
         "selected_natural_attack": (
             {
                 "name": enemy.selected_natural_attack.name,
