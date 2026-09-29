@@ -546,7 +546,7 @@ export function EnemyLibraryDialog({
           </button>
         </div>
 
-        <div className="catalog-grid enemy-library-filters">
+        <div className="enemy-library-filter-grid">
           <label className="dialog-label" htmlFor="enemy-library-search">
             Search
             <Input
@@ -555,6 +555,24 @@ export function EnemyLibraryDialog({
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Name, race or behaviour…"
             />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-library-lineage">
+            Lineage
+            <NativeSelect
+              id="enemy-library-lineage"
+              value={lineageFilter}
+              onChange={(event) => {
+                setLineageFilter(event.target.value);
+                setRaceFilter('all');
+              }}
+            >
+              <NativeSelectOption value="all">All lineages</NativeSelectOption>
+              {lineages.map((lineage) => (
+                <NativeSelectOption key={lineage} value={lineage}>
+                  {lineage}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
           </label>
           <label className="dialog-label" htmlFor="enemy-library-race">
             Race
@@ -581,35 +599,109 @@ export function EnemyLibraryDialog({
             >
               <span>{template.name}</span>
               <Badge variant="outline">
-                {template.race} · {template.max_hp} HP
+                {template.lineage} · {template.race} · {template.max_hp} HP
               </Badge>
             </button>
           ))}
         </div>
 
         <div className="enemy-editor-sections">
-          <EnemyEditorSection title="Basics" summary={draft.race} defaultOpen>
+          <EnemyEditorSection
+            title="Basics"
+            summary={`${draft.lineage} · ${draft.race}`}
+            defaultOpen
+          >
             <div className="catalog-grid">
               <label className="dialog-label">Name
                 <Input value={draft.name} onChange={(event) => update('name', event.target.value)} />
               </label>
-              <label className="dialog-label">Race
-                <Input value={draft.race} onChange={(event) => update('race', event.target.value)} />
+              <label className="dialog-label">Lineage
+                <NativeSelect
+                  value={draft.lineage}
+                  onChange={(event) => {
+                    const lineage = event.target.value;
+                    const nextRace = LINEAGE_RACES[lineage]?.[0] ?? 'Unknown';
+                    update('lineage', lineage);
+                    update('race', nextRace);
+                  }}
+                >
+                  {lineages.map((lineage) => (
+                    <NativeSelectOption key={lineage} value={lineage}>
+                      {lineage}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
               </label>
-              <label className="dialog-label">Difficulty
-                <Input type="number" min={0} value={draft.difficulty_level} onChange={(event) => update('difficulty_level', Number(event.target.value))} />
+              <label className="dialog-label">Race
+                <NativeSelect
+                  value={draft.race}
+                  onChange={(event) => update('race', event.target.value)}
+                >
+                  {Array.from(new Set([
+                    ...(LINEAGE_RACES[draft.lineage] ?? []),
+                    draft.race,
+                  ])).map((race) => (
+                    <NativeSelectOption key={race} value={race}>
+                      {race}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
               </label>
               <label className="dialog-label">Max HP
                 <Input type="number" min={1} value={draft.max_hp} onChange={(event) => update('max_hp', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Difficulty
+                <Input value="Not calculated yet" disabled />
+              </label>
+              <label className="dialog-label">Magic resistance
+                <Input
+                  type="number"
+                  min={0}
+                  value={draft.magical_resistance}
+                  onChange={(event) => update('magical_resistance', Number(event.target.value))}
+                />
               </label>
             </div>
             <label className="dialog-label">Description
               <Textarea value={draft.description} onChange={(event) => update('description', event.target.value)} />
             </label>
+            <div className="enemy-combat-summary">
+              <div>
+                <span>Melee Attack DC</span>
+                <strong>{meleeAttackDc}</strong>
+                <small>10 + STR {draft.strength}</small>
+              </div>
+              <div>
+                <span>Ranged Attack DC</span>
+                <strong>{rangedAttackDc}</strong>
+                <small>10 + DEX {draft.dexterity}</small>
+              </div>
+              <div>
+                <span>Defense DC</span>
+                <strong>{defenseSummary}</strong>
+                <small>10 + DEX + armor + shield</small>
+              </div>
+            </div>
           </EnemyEditorSection>
 
           <EnemyEditorSection title="Attribute modifiers" summary="STR · DEX · ARC · VIT · INS · PER">
-            <p className="enemy-section-help">These values are modifiers, not 1–20 character attribute scores.</p>
+            <div className="enemy-attribute-heading">
+              <p className="enemy-section-help">These values are modifiers, not 1–20 character attribute scores.</p>
+              <label className="dialog-label enemy-preset-control">
+                Preset
+                <NativeSelect
+                  value={attributePreset}
+                  onChange={(event) => applyAttributePreset(event.target.value)}
+                >
+                  {Object.keys(ATTRIBUTE_PRESETS).map((preset) => (
+                    <NativeSelectOption key={preset} value={preset}>
+                      {preset}
+                    </NativeSelectOption>
+                  ))}
+                  <NativeSelectOption value="Custom">Custom</NativeSelectOption>
+                </NativeSelect>
+              </label>
+            </div>
             <div className="enemy-attribute-grid">
               {([
                 ['strength', 'STR'],
@@ -630,41 +722,6 @@ export function EnemyLibraryDialog({
                 </label>
               ))}
             </div>
-          </EnemyEditorSection>
-
-          <EnemyEditorSection
-            title="Combat"
-            summary={`Melee ${meleeAttackDc} · Ranged ${rangedAttackDc} · DEF ${defenseSummary}`}
-          >
-            <p className="enemy-section-help">
-              Combat DCs are derived automatically from attributes and the armor an enemy actually spawns with.
-            </p>
-            <div className="enemy-combat-summary">
-              <div>
-                <span>Melee Attack DC</span>
-                <strong>{meleeAttackDc}</strong>
-                <small>10 + STR {draft.strength}</small>
-              </div>
-              <div>
-                <span>Ranged Attack DC</span>
-                <strong>{rangedAttackDc}</strong>
-                <small>10 + DEX {draft.dexterity}</small>
-              </div>
-              <div>
-                <span>Defense DC</span>
-                <strong>{defenseSummary}</strong>
-                <small>10 + DEX + armor dodge penalty</small>
-              </div>
-            </div>
-            <label className="dialog-label">
-              Magic resistance
-              <Input
-                type="number"
-                min={0}
-                value={draft.magical_resistance}
-                onChange={(event) => update('magical_resistance', Number(event.target.value))}
-              />
-            </label>
           </EnemyEditorSection>
 
           <EnemyEditorSection title="Loadout pools" summary={roleSummary}>
