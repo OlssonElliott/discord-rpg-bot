@@ -220,6 +220,9 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     natural_attacks: [],
     armor_reduction_filter: null,
     dual_wield: false,
+    allowed_races: [],
+    melee_loadouts: [],
+    shield_item_ids: [],
   };
 }
 
@@ -329,7 +332,6 @@ export function EnemyLibraryDialog({
   const [search, setSearch] = useState('');
   const [lineageFilter, setLineageFilter] = useState('all');
   const [raceFilter, setRaceFilter] = useState('all');
-  const [offhandMode, setOffhandMode] = useState<'none' | 'dual_wield' | 'shield'>('none');
   const [naturalAttackPreset, setNaturalAttackPreset] = useState<keyof typeof NATURAL_ATTACK_PRESETS>('bite');
   const editingTemplate = templates.find((template) => template.id === editingId);
 
@@ -349,11 +351,8 @@ export function EnemyLibraryDialog({
     rangedWeapons.map((item) => item.damage_expression).filter(Boolean),
   )).sort();
   const compatibleMeleeWeapons = meleeWeapons.filter(
-    (item) => (
-      (!draft.melee_damage_filter
-        || item.damage_expression === draft.melee_damage_filter)
-      && (offhandMode === 'none' || item.grip === 'one_handed')
-    ),
+    (item) => !draft.melee_damage_filter
+      || item.damage_expression === draft.melee_damage_filter,
   );
   const compatibleRangedWeapons = rangedWeapons.filter(
     (item) => !draft.ranged_damage_filter
@@ -372,10 +371,10 @@ export function EnemyLibraryDialog({
     (item) => draft.armor_item_ids.includes(item.id),
   );
   const selectedShieldItems = shieldItems.filter(
-    (item) => draft.off_hand_item_ids.includes(item.id),
+    (item) => draft.shield_item_ids.includes(item.id),
   );
   const armorChoices = selectedArmorItems.length ? selectedArmorItems : [undefined];
-  const shieldChoices = offhandMode === 'shield'
+  const shieldChoices = draft.melee_loadouts.includes('shield')
     ? (selectedShieldItems.length ? selectedShieldItems : [undefined])
     : [undefined];
   const defenseValues = Array.from(new Set(
@@ -427,7 +426,6 @@ export function EnemyLibraryDialog({
     setEditingId(template?.id);
     if (!template) {
       setDraft(emptyEnemyTemplateDraft());
-      setOffhandMode('none');
       setNaturalAttackPreset('bite');
       return;
     }
@@ -441,20 +439,38 @@ export function EnemyLibraryDialog({
       ((legacyMain.range ?? 0) > 0 ? rangedPool : meleePool).push(legacyMain.id);
     }
 
-    const existingOffhandIds = Array.from(new Set([
+    const rawOffhandIds = Array.from(new Set([
       ...template.off_hand_item_ids,
       ...(template.off_hand_item_id ? [template.off_hand_item_id] : []),
     ]));
-    const hasShieldOffhand = existingOffhandIds.some((id) => (
-      (catalogItems.find((item) => item.id === id)?.defense_bonus ?? 0) > 0
+    const existingShieldIds = Array.from(new Set([
+      ...template.shield_item_ids,
+      ...rawOffhandIds.filter((id) => (
+        (catalogItems.find((item) => item.id === id)?.defense_bonus ?? 0) > 0
+      )),
+    ]));
+    const existingSecondWeaponIds = rawOffhandIds.filter((id) => (
+      (catalogItems.find((item) => item.id === id)?.defense_bonus ?? 0) <= 0
     ));
-    setOffhandMode(
-      template.dual_wield
-        ? 'dual_wield'
-        : hasShieldOffhand
-        ? 'shield'
-        : 'none',
-    );
+    const oneHandedPool = meleePool.filter((id) => (
+      catalogItems.find((item) => item.id === id)?.grip === 'one_handed'
+    ));
+    const twoHandedPool = meleePool.filter((id) => (
+      catalogItems.find((item) => item.id === id)?.grip === 'two_handed'
+    ));
+    const inferredLoadouts = [
+      oneHandedPool.length ? 'one_handed' : '',
+      existingShieldIds.length && oneHandedPool.length ? 'shield' : '',
+      existingSecondWeaponIds.length && oneHandedPool.length ? 'dual_wield' : '',
+      twoHandedPool.length ? 'two_handed' : '',
+      template.natural_attacks.length ? 'natural' : '',
+    ].filter(Boolean) as EnemyTemplateDraft['melee_loadouts'];
+    const selectedLoadouts = template.melee_loadouts.length
+      ? template.melee_loadouts
+      : inferredLoadouts;
+    const selectedRaces = template.allowed_races.length
+      ? template.allowed_races
+      : [template.race];
 
     setDraft({
       name: template.name,
@@ -482,7 +498,7 @@ export function EnemyLibraryDialog({
       armor_item_id: null,
       melee_weapon_ids: meleePool,
       ranged_weapon_ids: rangedPool,
-      off_hand_item_ids: existingOffhandIds,
+      off_hand_item_ids: existingSecondWeaponIds,
       armor_item_ids: Array.from(new Set([
         ...template.armor_item_ids,
         ...(template.armor_item_id ? [template.armor_item_id] : []),
@@ -493,7 +509,10 @@ export function EnemyLibraryDialog({
       ranged_damage_filter: template.ranged_damage_filter,
       natural_attacks: template.natural_attacks,
       armor_reduction_filter: template.armor_reduction_filter,
-      dual_wield: template.dual_wield,
+      dual_wield: selectedLoadouts.includes('dual_wield'),
+      allowed_races: selectedRaces,
+      melee_loadouts: selectedLoadouts,
+      shield_item_ids: existingShieldIds,
     });
   }
 
@@ -533,7 +552,7 @@ export function EnemyLibraryDialog({
   }
 
   const roleSummary = [
-    (draft.melee_weapon_ids.length || draft.natural_attacks.length) ? 'Melee' : '',
+    draft.melee_loadouts.length ? 'Melee' : '',
     draft.ranged_weapon_ids.length ? 'Ranged' : '',
     draft.spell_names.length ? 'Spellcaster' : '',
   ].filter(Boolean).join(' · ') || 'No roles';
