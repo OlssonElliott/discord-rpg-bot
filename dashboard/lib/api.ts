@@ -84,6 +84,7 @@ export type CatalogItem = {
   slot_cost: number;
   stackable: boolean;
   content: string | null;
+  tags: string[];
   grip?: string;
   durability?: number;
   range?: number;
@@ -104,6 +105,7 @@ export type EnemyTemplateData = {
   name: string;
   description: string;
   race: string;
+  lineage: string;
   difficulty_level: number;
   strength: number;
   dexterity: number;
