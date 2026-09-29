@@ -101,13 +101,16 @@ def _combatant_attack_range(
             return 0
         if enemy.combat_role.value == "spellcaster" and enemy.selected_spell:
             return template.spell_range
-        if enemy.main_hand_item_id is None:
-            return 0
-        try:
-            weapon = world.catalog.get(enemy.main_hand_item_id)
-        except ValueError:
-            return 0
-        return weapon.range if weapon.item_type is ItemType.WEAPON else 0
+        if enemy.main_hand_item_id is not None:
+            try:
+                weapon = world.catalog.get(enemy.main_hand_item_id)
+                if weapon.item_type is ItemType.WEAPON:
+                    return weapon.range
+            except ValueError:
+                pass
+        if enemy.selected_natural_attack is not None:
+            return enemy.selected_natural_attack.range
+        return 0
 
     return 0
 
@@ -558,7 +561,11 @@ def _combatant_inspect_data(
                     "template_id": template.template_id,
                     "template_name": template.name,
                     "difficulty_level": template.difficulty_level,
-                    "armor": template.armor,
+                    "armor": (
+                        world.catalog.get(enemy.armor_item_id).protection
+                        if enemy.armor_item_id is not None
+                        else template.armor
+                    ),
                     "magical_resistance": template.magical_resistance,
                     "attack_dc": template.attack_dc,
                     "defense_dc": template.defense_dc,
