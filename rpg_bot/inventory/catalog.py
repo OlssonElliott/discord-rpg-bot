@@ -50,6 +50,7 @@ class ItemTemplate:
     range: int = 0
     protection: int | None = None
     dodge_penalty: int = 0
+    defense_bonus: int = 0
     strength_requirement: int | None = None
     capacity: int | None = None
     can_equip: bool = False
@@ -64,6 +65,8 @@ class ItemTemplate:
             raise ValueError("Item weight cannot be negative.")
         if self.range < 0:
             raise ValueError("Weapon range cannot be negative.")
+        if self.defense_bonus < 0:
+            raise ValueError("Defense bonus cannot be negative.")
         if self.slot_cost is None:
             object.__setattr__(
                 self,
@@ -155,6 +158,7 @@ class ItemCatalog:
             ),
             protection=protection if item_type is ItemType.ARMOR else None,
             dodge_penalty=int(record.get("dodge_penalty", 0)),
+            defense_bonus=int(record.get("defense_bonus", 0)),
             strength_requirement=(
                 int(record["strength_requirement"])
                 if record.get("strength_requirement") is not None
