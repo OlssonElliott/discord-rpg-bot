@@ -160,6 +160,8 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "spell_range": template.spell_range,
         "melee_damage_filter": template.melee_damage_filter,
         "ranged_damage_filter": template.ranged_damage_filter,
+        "armor_reduction_filter": template.armor_reduction_filter,
+        "dual_wield": template.dual_wield,
         "natural_attacks": [
             {
                 "name": attack.name,
