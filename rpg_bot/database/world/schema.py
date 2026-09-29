@@ -330,6 +330,18 @@ class DatabaseWorldSchemaMixin:
             if column not in world_enemy_columns:
                 connection.execute(statement)
 
+        connection.execute(
+            """
+            UPDATE world_enemies
+            SET race = COALESCE((
+                SELECT enemy_templates.race
+                FROM enemy_templates
+                WHERE enemy_templates.id = world_enemies.template_id
+            ), race)
+            WHERE race = 'Unknown'
+            """
+        )
+
         enemy_seed_key = "basic_enemy_templates_v1"
         if connection.execute(
             "SELECT 1 FROM world_seed_state WHERE key = ?",
