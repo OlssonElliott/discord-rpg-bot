@@ -127,7 +127,17 @@ class InventoryService:
                 ).grip is WeaponGrip.TWO_HANDED:
                     raise InventoryError("Unequip the two-handed weapon first.")
         elif template.item_type is ItemType.ARMOR:
-            slot = EquipmentSlot.ARMOR
+            if template.defense_bonus > 0:
+                slot = EquipmentSlot.OFF_HAND
+                main_id = inventory.equipment.get(EquipmentSlot.MAIN_HAND)
+                if main_id is not None and self.catalog.get(
+                    inventory.item(main_id).template_id
+                ).grip is WeaponGrip.TWO_HANDED:
+                    raise InventoryError(
+                        "Unequip the two-handed weapon before equipping a shield."
+                    )
+            else:
+                slot = EquipmentSlot.ARMOR
         elif template.item_type is ItemType.CLOTHING:
             slot = EquipmentSlot.CLOTHING
         elif template.item_type is ItemType.CONTAINER and template.can_equip:
