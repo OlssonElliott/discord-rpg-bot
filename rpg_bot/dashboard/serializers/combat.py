@@ -567,10 +567,43 @@ def _combatant_inspect_data(
                         else template.armor
                     ),
                     "magical_resistance": template.magical_resistance,
-                    "attack_dc": template.attack_dc,
-                    "defense_dc": template.defense_dc,
-                    "damage": template.damage,
-                    "attack_profile": template.attack_profile,
+                    "attack_dc": max(
+                        1,
+                        10
+                        + (
+                            template.dexterity
+                            if enemy.combat_role.value == "ranged"
+                            else template.arcana
+                            if enemy.combat_role.value == "spellcaster"
+                            else template.strength
+                        ),
+                    ),
+                    "defense_dc": max(
+                        1,
+                        10
+                        + template.dexterity
+                        + (
+                            world.catalog.get(
+                                enemy.armor_item_id
+                            ).dodge_penalty
+                            if enemy.armor_item_id is not None
+                            else 0
+                        ),
+                    ),
+                    "damage": (
+                        enemy.selected_natural_attack.damage
+                        if enemy.selected_natural_attack is not None
+                        else template.damage
+                    ),
+                    "attack_profile": (
+                        enemy.selected_natural_attack.name
+                        if enemy.selected_natural_attack is not None
+                        else world.catalog.get(enemy.main_hand_item_id).name
+                        if enemy.main_hand_item_id is not None
+                        else enemy.selected_spell
+                        if enemy.selected_spell is not None
+                        else template.attack_profile
+                    ),
                     "special_ability": template.special_ability,
                     "typical_behaviour": template.typical_behaviour,
                 },
