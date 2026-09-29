@@ -422,9 +422,17 @@ button, input, textarea { font: inherit; }
 .enemy-pool-option input { margin: 0; accent-color: #d39a4a; }
 .enemy-pool-option small { color: #718096; font-size: .58rem; }
 .enemy-pool-empty { margin: 0; color: #667487; font-size: .65rem; }
+.enemy-natural-attacks { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid #26344a; }
+.enemy-natural-attacks__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.enemy-natural-attacks__heading h4 { margin: 0 0 4px; color: #aab5c3; font-size: .68rem; text-transform: uppercase; }
+.enemy-natural-attack-row { display: grid; grid-template-columns: minmax(120px, 1.4fr) 90px minmax(100px, 1fr) 70px auto; align-items: center; gap: 6px; padding: 7px; border: 1px solid #2b3a4f; border-radius: 7px; background: #0d1622; }
+.enemy-natural-attack-row input { min-width: 0; }
+.enemy-natural-attack-row button { white-space: nowrap; }
 @media (max-width: 760px) {
   .enemy-attribute-grid { grid-template-columns: repeat(3, minmax(72px, 1fr)); }
   .enemy-pool-grid { grid-template-columns: 1fr; }
+  .enemy-natural-attack-row { grid-template-columns: 1fr 1fr; }
+  .enemy-natural-attack-row button { grid-column: 2; }
 }
 .enemy-library-dialog .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .enemy-library-dialog .enemy-library-filters { grid-template-columns: 2fr 1fr; }
