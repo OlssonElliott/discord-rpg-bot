@@ -769,10 +769,9 @@ export function EnemyLibraryDialog({
                       )),
                     )}
                   />
-                  <Input
+                  <NativeSelect
                     aria-label="Natural attack damage type"
                     value={attack.damage_type}
-                    placeholder="pierce"
                     onChange={(event) => update(
                       'natural_attacks',
                       draft.natural_attacks.map((entry, entryIndex) => (
@@ -781,21 +780,34 @@ export function EnemyLibraryDialog({
                           : entry
                       )),
                     )}
-                  />
-                  <Input
-                    aria-label="Natural attack range"
-                    type="number"
-                    min={0}
-                    value={attack.range}
-                    onChange={(event) => update(
-                      'natural_attacks',
-                      draft.natural_attacks.map((entry, entryIndex) => (
-                        entryIndex === index
-                          ? { ...entry, range: Number(event.target.value) }
-                          : entry
-                      )),
-                    )}
-                  />
+                  >
+                    {['slash', 'pierce', 'blunt', 'fire', 'cold', 'lightning', 'poison', 'necrotic', 'psychic', 'radiant', 'arcane'].map((type) => (
+                      <NativeSelectOption key={type} value={type}>
+                        {type.charAt(0).toUpperCase() + type.slice(1)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <label className="enemy-natural-range">
+                    <span>Range</span>
+                    <NativeSelect
+                      aria-label="Natural attack range"
+                      value={attack.range}
+                      onChange={(event) => update(
+                        'natural_attacks',
+                        draft.natural_attacks.map((entry, entryIndex) => (
+                          entryIndex === index
+                            ? { ...entry, range: Number(event.target.value) }
+                            : entry
+                        )),
+                      )}
+                    >
+                      <NativeSelectOption value={0}>Melee · 0</NativeSelectOption>
+                      <NativeSelectOption value={1}>Adjacent · 1</NativeSelectOption>
+                      <NativeSelectOption value={2}>Near · 2</NativeSelectOption>
+                      <NativeSelectOption value={3}>Far · 3</NativeSelectOption>
+                      <NativeSelectOption value={4}>Distant · 4</NativeSelectOption>
+                    </NativeSelect>
+                  </label>
                   <Button
                     type="button"
                     size="sm"
@@ -812,36 +824,9 @@ export function EnemyLibraryDialog({
             </div>
           </EnemyEditorSection>
 
-          <EnemyEditorSection title="Magic" summary={draft.spell_names.length ? `${draft.spell_names.length} spells` : 'None'}>
-            <p className="enemy-section-help">
-              Spell names currently define Spellcaster access and attack range. A full spell library can replace this list later.
-            </p>
-            <label className="dialog-label">Spell access
-              <Input
-                value={draft.spell_names.join(', ')}
-                placeholder="Dark Bolt, Fear, Hex"
-                onChange={(event) => update(
-                  'spell_names',
-                  Array.from(new Set(
-                    event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
-                  )),
-                )}
-              />
-            </label>
-            <label className="dialog-label">Spell range
-              <Input type="number" min={1} value={draft.spell_range} onChange={(event) => update('spell_range', Number(event.target.value))} />
-            </label>
-          </EnemyEditorSection>
-
           <EnemyEditorSection title="Behaviour">
             <label className="dialog-label">Typical behaviour
               <Textarea value={draft.typical_behaviour} onChange={(event) => update('typical_behaviour', event.target.value)} />
-            </label>
-            <label className="dialog-label">Special ability
-              <Textarea
-                value={draft.special_ability ?? ''}
-                onChange={(event) => update('special_ability', event.target.value.trim() ? event.target.value : null)}
-              />
             </label>
           </EnemyEditorSection>
         </div>
