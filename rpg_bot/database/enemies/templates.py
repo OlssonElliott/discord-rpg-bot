@@ -22,7 +22,8 @@ class DatabaseEnemyTemplatesMixin:
                        main_hand_item_id, off_hand_item_id, armor_item_id,
                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
                        armor_item_ids, spell_names, spell_range,
-                       melee_damage_filter, ranged_damage_filter, natural_attacks
+                       melee_damage_filter, ranged_damage_filter, natural_attacks,
+                       armor_reduction_filter, dual_wield
                 FROM enemy_templates
                 ORDER BY name COLLATE NOCASE, id
                 """
@@ -40,7 +41,8 @@ class DatabaseEnemyTemplatesMixin:
                        main_hand_item_id, off_hand_item_id, armor_item_id,
                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
                        armor_item_ids, spell_names, spell_range,
-                       melee_damage_filter, ranged_damage_filter, natural_attacks
+                       melee_damage_filter, ranged_damage_filter, natural_attacks,
+                       armor_reduction_filter, dual_wield
                 FROM enemy_templates
                 WHERE id = ?
                 """,
@@ -67,9 +69,11 @@ class DatabaseEnemyTemplatesMixin:
                         main_hand_item_id, off_hand_item_id, armor_item_id,
                         melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
                         armor_item_ids, spell_names, spell_range,
-                       melee_damage_filter, ranged_damage_filter, natural_attacks
+                        melee_damage_filter, ranged_damage_filter, natural_attacks,
+                        armor_reduction_filter, dual_wield
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     (
@@ -113,6 +117,8 @@ class DatabaseEnemyTemplatesMixin:
                             }
                             for attack in template.natural_attacks
                         ]),
+                        template.armor_reduction_filter,
+                        int(template.dual_wield),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -144,7 +150,10 @@ class DatabaseEnemyTemplatesMixin:
                     off_hand_item_id = ?, armor_item_id = ?,
                     melee_weapon_ids = ?, ranged_weapon_ids = ?,
                     off_hand_item_ids = ?, armor_item_ids = ?,
-                    spell_names = ?, spell_range = ?
+                    spell_names = ?, spell_range = ?,
+                    melee_damage_filter = ?, ranged_damage_filter = ?,
+                    natural_attacks = ?, armor_reduction_filter = ?,
+                    dual_wield = ?
                 WHERE id = ?
                 """,
                 (
@@ -187,6 +196,8 @@ class DatabaseEnemyTemplatesMixin:
                         }
                         for attack in template.natural_attacks
                     ]),
+                    template.armor_reduction_filter,
+                    int(template.dual_wield),
                     clean_id,
                 ),
             )
@@ -274,4 +285,6 @@ class DatabaseEnemyTemplatesMixin:
                 )
                 for record in json.loads(row["natural_attacks"] or "[]")
             ),
+            armor_reduction_filter=row["armor_reduction_filter"],
+            dual_wield=bool(row["dual_wield"]),
         )
