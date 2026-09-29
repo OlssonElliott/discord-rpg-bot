@@ -255,7 +255,11 @@ function PoolChecklist({
           />
           <span>{item.name}</span>
           {item.item_type === 'weapon' && (
-            <small>Range {item.range ?? 0}</small>
+            <small>
+              {item.damage_expression ?? `1d${item.damage ?? 1}`}
+              {item.damage_type ? ` · ${item.damage_type}` : ''}
+              {` · Range ${item.range ?? 0}`}
+            </small>
           )}
         </label>
       ))}
