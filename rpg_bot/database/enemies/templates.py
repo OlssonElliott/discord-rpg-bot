@@ -23,7 +23,8 @@ class DatabaseEnemyTemplatesMixin:
                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
                        armor_item_ids, spell_names, spell_range,
                        melee_damage_filter, ranged_damage_filter, natural_attacks,
-                       armor_reduction_filter, dual_wield
+                       armor_reduction_filter, dual_wield,
+                       allowed_races, melee_loadouts, shield_item_ids
                 FROM enemy_templates
                 ORDER BY name COLLATE NOCASE, id
                 """
@@ -42,7 +43,8 @@ class DatabaseEnemyTemplatesMixin:
                        melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
                        armor_item_ids, spell_names, spell_range,
                        melee_damage_filter, ranged_damage_filter, natural_attacks,
-                       armor_reduction_filter, dual_wield
+                       armor_reduction_filter, dual_wield,
+                       allowed_races, melee_loadouts, shield_item_ids
                 FROM enemy_templates
                 WHERE id = ?
                 """,
@@ -70,7 +72,8 @@ class DatabaseEnemyTemplatesMixin:
                         melee_weapon_ids, ranged_weapon_ids, off_hand_item_ids,
                         armor_item_ids, spell_names, spell_range,
                         melee_damage_filter, ranged_damage_filter, natural_attacks,
-                        armor_reduction_filter, dual_wield
+                        armor_reduction_filter, dual_wield,
+                       allowed_races, melee_loadouts, shield_item_ids
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -120,6 +123,9 @@ class DatabaseEnemyTemplatesMixin:
                         ]),
                         template.armor_reduction_filter,
                         int(template.dual_wield),
+                        json.dumps(template.allowed_races),
+                        json.dumps(template.melee_loadouts),
+                        json.dumps(template.shield_item_ids),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -154,7 +160,8 @@ class DatabaseEnemyTemplatesMixin:
                     spell_names = ?, spell_range = ?,
                     melee_damage_filter = ?, ranged_damage_filter = ?,
                     natural_attacks = ?, armor_reduction_filter = ?,
-                    dual_wield = ?
+                    dual_wield = ?, allowed_races = ?,
+                    melee_loadouts = ?, shield_item_ids = ?
                 WHERE id = ?
                 """,
                 (
@@ -200,6 +207,9 @@ class DatabaseEnemyTemplatesMixin:
                     ]),
                     template.armor_reduction_filter,
                     int(template.dual_wield),
+                    json.dumps(template.allowed_races),
+                    json.dumps(template.melee_loadouts),
+                    json.dumps(template.shield_item_ids),
                     clean_id,
                 ),
             )
@@ -290,4 +300,7 @@ class DatabaseEnemyTemplatesMixin:
             ),
             armor_reduction_filter=row["armor_reduction_filter"],
             dual_wield=bool(row["dual_wield"]),
+            allowed_races=tuple(json.loads(row["allowed_races"] or "[]")),
+            melee_loadouts=tuple(json.loads(row["melee_loadouts"] or "[]")),
+            shield_item_ids=tuple(json.loads(row["shield_item_ids"] or "[]")),
         )
