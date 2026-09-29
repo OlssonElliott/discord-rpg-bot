@@ -126,8 +126,19 @@ def place_enemy(
     if not available_roles:
         available_roles.append(EnemyCombatRole.MELEE)
 
+    selected_profile_style = None
     if combat_role is None or combat_role == "random":
-        resolved_role = random.choice(available_roles)
+        profiles: list[tuple[EnemyCombatRole, str]] = [
+            (EnemyCombatRole.MELEE, style)
+            for style in feasible_melee_loadouts
+        ]
+        if ranged_pool:
+            profiles.append((EnemyCombatRole.RANGED, "ranged"))
+        if template.spell_names:
+            profiles.append((EnemyCombatRole.SPELLCASTER, "spellcaster"))
+        if not profiles:
+            profiles.append((EnemyCombatRole.MELEE, "one_handed"))
+        resolved_role, selected_profile_style = random.choice(profiles)
     else:
         try:
             resolved_role = (
@@ -159,7 +170,10 @@ def place_enemy(
             raise ValueError(
                 f"{template.name} has no valid melee loadout."
             )
-        loadout_style = random.choice(feasible_melee_loadouts)
+        loadout_style = (
+            selected_profile_style
+            or random.choice(feasible_melee_loadouts)
+        )
         if loadout_style == "one_handed":
             main_hand_item_id = random.choice(one_handed_melee)
         elif loadout_style == "shield":
