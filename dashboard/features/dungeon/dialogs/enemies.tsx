@@ -654,12 +654,65 @@ export function EnemyLibraryDialog({
               </div>
 
               <div>
-                <h4>Off hand</h4>
-                <PoolChecklist items={weapons} selected={draft.off_hand_item_ids} onChange={(value) => update('off_hand_item_ids', value)} />
+                <h4>Second weapon</h4>
+                <label className="enemy-dual-wield-toggle">
+                  <input
+                    type="checkbox"
+                    checked={draft.dual_wield}
+                    onChange={(event) => {
+                      update('dual_wield', event.target.checked);
+                      if (!event.target.checked) {
+                        update('off_hand_item_ids', []);
+                      }
+                    }}
+                  />
+                  <span>Dual wield</span>
+                </label>
+                {draft.dual_wield ? (
+                  <PoolChecklist
+                    items={secondWeapons}
+                    selected={draft.off_hand_item_ids}
+                    onChange={(value) => update('off_hand_item_ids', value)}
+                  />
+                ) : (
+                  <p className="enemy-pool-empty">
+                    Enable dual wield to choose one-handed melee weapons.
+                  </p>
+                )}
               </div>
               <div>
                 <h4>Armor</h4>
-                <PoolChecklist items={armorItems} selected={draft.armor_item_ids} onChange={(value) => update('armor_item_ids', value)} />
+                <label className="dialog-label">
+                  Desired damage reduction
+                  <NativeSelect
+                    value={draft.armor_reduction_filter ?? ''}
+                    onChange={(event) => {
+                      const next = event.target.value === ''
+                        ? null
+                        : Number(event.target.value);
+                      update('armor_reduction_filter', next);
+                      update(
+                        'armor_item_ids',
+                        draft.armor_item_ids.filter((id) => {
+                          const item = armorItems.find((candidate) => candidate.id === id);
+                          return next === null || item?.protection === next;
+                        }),
+                      );
+                    }}
+                  >
+                    <NativeSelectOption value="">Any reduction</NativeSelectOption>
+                    {armorReductionOptions.map((reduction) => (
+                      <NativeSelectOption key={reduction} value={reduction}>
+                        DR {reduction}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+                <PoolChecklist
+                  items={compatibleArmorItems}
+                  selected={draft.armor_item_ids}
+                  onChange={(value) => update('armor_item_ids', value)}
+                />
               </div>
             </div>
 
