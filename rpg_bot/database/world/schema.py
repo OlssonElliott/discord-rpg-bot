@@ -85,7 +85,9 @@ class DatabaseWorldSchemaMixin:
                 spell_range INTEGER NOT NULL DEFAULT 3 CHECK (spell_range > 0),
                 melee_damage_filter TEXT,
                 ranged_damage_filter TEXT,
-                natural_attacks TEXT NOT NULL DEFAULT '[]'
+                natural_attacks TEXT NOT NULL DEFAULT '[]',
+                armor_reduction_filter INTEGER,
+                dual_wield INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS world_enemies (
                 entity_id TEXT PRIMARY KEY,
@@ -241,6 +243,14 @@ class DatabaseWorldSchemaMixin:
             "natural_attacks": (
                 "ALTER TABLE enemy_templates ADD COLUMN natural_attacks "
                 "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "armor_reduction_filter": (
+                "ALTER TABLE enemy_templates ADD COLUMN "
+                "armor_reduction_filter INTEGER"
+            ),
+            "dual_wield": (
+                "ALTER TABLE enemy_templates ADD COLUMN dual_wield "
+                "INTEGER NOT NULL DEFAULT 0"
             ),
         }
         for column, statement in enemy_template_migrations.items():
