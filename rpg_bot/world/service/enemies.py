@@ -305,7 +305,8 @@ def validate_enemy_equipment_template(
 
     melee_ids = list(template.melee_weapon_ids)
     ranged_ids = list(template.ranged_weapon_ids)
-    offhand_ids = list(template.off_hand_item_ids)
+    second_weapon_ids = list(template.off_hand_item_ids)
+    shield_ids = list(template.shield_item_ids)
     armor_ids = list(template.armor_item_ids)
 
     if template.main_hand_item_id is not None:
@@ -316,7 +317,11 @@ def validate_enemy_equipment_template(
             template.main_hand_item_id
         )
     if template.off_hand_item_id is not None:
-        offhand_ids.append(template.off_hand_item_id)
+        legacy_offhand = item(template.off_hand_item_id)
+        if legacy_offhand.defense_bonus > 0:
+            shield_ids.append(template.off_hand_item_id)
+        else:
+            second_weapon_ids.append(template.off_hand_item_id)
     if template.armor_item_id is not None:
         armor_ids.append(template.armor_item_id)
 
@@ -356,35 +361,27 @@ def validate_enemy_equipment_template(
                 f"{template.ranged_damage_filter}."
             )
 
-    if offhand_ids:
-        for item_id in dict.fromkeys(offhand_ids):
-            offhand = item(item_id)
-            if template.dual_wield:
-                if (
-                    offhand.item_type is not ItemType.WEAPON
-                    or offhand.range > 0
-                    or offhand.grip is not WeaponGrip.ONE_HANDED
-                ):
-                    raise ValueError(
-                        f"Enemy off-hand weapon '{item_id}' must be "
-                        "a one-handed melee weapon."
-                    )
-            else:
-                if (
-                    offhand.item_type is not ItemType.ARMOR
-                    or offhand.defense_bonus <= 0
-                ):
-                    raise ValueError(
-                        f"Enemy off-hand item '{item_id}' must be a shield."
-                    )
+    for item_id in dict.fromkeys(second_weapon_ids):
+        offhand = item(item_id)
+        if (
+            offhand.item_type is not ItemType.WEAPON
+            or offhand.range > 0
+            or offhand.grip is not WeaponGrip.ONE_HANDED
+        ):
+            raise ValueError(
+                f"Enemy second weapon '{item_id}' must be "
+                "a one-handed melee weapon."
+            )
 
-        for item_id in dict.fromkeys(melee_ids):
-            main_weapon = item(item_id)
-            if main_weapon.grip is WeaponGrip.TWO_HANDED:
-                raise ValueError(
-                    "Enemies with an offhand cannot include two-handed "
-                    f"melee weapon '{item_id}' in their main-hand pool."
-                )
+    for item_id in dict.fromkeys(shield_ids):
+        shield = item(item_id)
+        if (
+            shield.item_type is not ItemType.ARMOR
+            or shield.defense_bonus <= 0
+        ):
+            raise ValueError(
+                f"Enemy shield '{item_id}' must provide a defense bonus."
+            )
 
     for item_id in dict.fromkeys(armor_ids):
         armor = item(item_id)
@@ -404,6 +401,45 @@ def validate_enemy_equipment_template(
                 f"{armor.protection} does not match the selected "
                 f"damage reduction {template.armor_reduction_filter}."
             )
+
+    one_handed = [
+        item_id
+        for item_id in melee_ids
+        if item(item_id).grip is WeaponGrip.ONE_HANDED
+    ]
+    two_handed = [
+        item_id
+        for item_id in melee_ids
+        if item(item_id).grip is WeaponGrip.TWO_HANDED
+    ]
+    for loadout in template.melee_loadouts:
+        if loadout == "one_handed" and not one_handed:
+            raise ValueError(
+                "One-handed loadout requires a one-handed melee weapon."
+            )
+        if loadout == "shield" and (not one_handed or not shield_ids):
+            raise ValueError(
+                "Shield loadout requires a one-handed melee weapon and shield."
+            )
+        if (
+            loadout == "dual_wield"
+            and (not one_handed or not second_weapon_ids)
+        ):
+            raise ValueError(
+                "Dual-wield loadout requires one-handed main and second weapons."
+            )
+        if loadout == "two_handed" and not two_handed:
+            raise ValueError(
+                "Two-handed loadout requires a two-handed melee weapon."
+            )
+        if loadout == "natural" and not template.natural_attacks:
+            raise ValueError(
+                "Natural loadout requires at least one natural attack."
+            )
+
+    race_pool = template.allowed_races or (template.race,)
+    if any(not race.strip() for race in race_pool):
+        raise ValueError("Enemy allowed races must be non-empty.")
 
 
 class WorldEnemyMixin:
