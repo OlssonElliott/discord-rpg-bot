@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...world.enemies import EnemyTemplate
+from ...world.enemies import EnemyNaturalAttack, EnemyTemplate
 from ...inventory import ItemType, WeaponGrip
 from .request import (
     parse_boolean,
@@ -37,6 +37,38 @@ def enemy_template_from_body(
         if field in body:
             return parse_optional_text(body, field)
         return default
+
+    def natural_attacks_value() -> tuple[EnemyNaturalAttack, ...]:
+        if "natural_attacks" not in body:
+            return current.natural_attacks if current is not None else ()
+        value = body["natural_attacks"]
+        if not isinstance(value, list):
+            raise ValueError("'natural_attacks' must be a list.")
+        attacks: list[EnemyNaturalAttack] = []
+        for record in value:
+            if not isinstance(record, dict):
+                raise ValueError("Natural attacks must be objects.")
+            name = record.get("name")
+            damage = record.get("damage")
+            damage_type = record.get("damage_type", "physical")
+            attack_range = record.get("range", 0)
+            if (
+                not isinstance(name, str)
+                or not isinstance(damage, str)
+                or not isinstance(damage_type, str)
+                or isinstance(attack_range, bool)
+                or not isinstance(attack_range, int)
+            ):
+                raise ValueError("Natural attack fields are invalid.")
+            attacks.append(
+                EnemyNaturalAttack(
+                    name=name.strip(),
+                    damage=damage.strip(),
+                    damage_type=damage_type.strip(),
+                    range=attack_range,
+                )
+            )
+        return tuple(attacks)
 
     def list_value(
         field: str,
@@ -184,6 +216,15 @@ def enemy_template_from_body(
             "spell_range",
             default=current.spell_range if current is not None else 3,
         ),
+        melee_damage_filter=optional_value(
+            "melee_damage_filter",
+            current.melee_damage_filter if current is not None else None,
+        ),
+        ranged_damage_filter=optional_value(
+            "ranged_damage_filter",
+            current.ranged_damage_filter if current is not None else None,
+        ),
+        natural_attacks=natural_attacks_value(),
     )
 
 
