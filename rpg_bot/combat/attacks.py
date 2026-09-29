@@ -37,13 +37,23 @@ def _enemy_attack_dc(template, enemy) -> int:
 
 def _enemy_defense_dc(world, template, enemy) -> int:
     armor_penalty = 0
+    shield_bonus = 0
     if enemy.armor_item_id is not None:
         try:
             armor = world.catalog.get(enemy.armor_item_id)
             armor_penalty = armor.dodge_penalty
         except ValueError:
             armor_penalty = 0
-    return max(1, 10 + template.dexterity + armor_penalty)
+    if enemy.off_hand_item_id is not None:
+        try:
+            offhand = world.catalog.get(enemy.off_hand_item_id)
+            shield_bonus = offhand.defense_bonus
+        except ValueError:
+            shield_bonus = 0
+    return max(
+        1,
+        10 + template.dexterity + armor_penalty + shield_bonus,
+    )
 
 
 class CombatAttackMixin:
