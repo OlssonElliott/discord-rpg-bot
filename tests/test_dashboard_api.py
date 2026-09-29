@@ -1114,6 +1114,158 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(persisted.selected_natural_attack.name, "Bite")
         self.assertEqual(persisted.selected_natural_attack.damage, "1d6")
 
+    def test_enemy_armor_filter_and_dual_wield_validation(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "dual_sword",
+                "name": "Dual Sword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "one_handed",
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "dual_bow",
+                "name": "Dual Bow",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 3,
+                "grip": "two_handed",
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "dr_two_armor",
+                "name": "DR Two Armor",
+                "item_type": "armor",
+                "protection": 2,
+                "dodge_penalty": -1,
+            },
+        )
+
+        bad_offhand_status, bad_offhand = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "bad_dual_enemy",
+                "name": "Bad Dual Enemy",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "dual_wield": True,
+                "melee_weapon_ids": ["dual_sword"],
+                "off_hand_item_ids": ["dual_bow"],
+            },
+        )
+        self.assertEqual(bad_offhand_status, 400)
+        self.assertIn("one-handed melee weapon", bad_offhand["error"])
+
+        bad_armor_status, bad_armor = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "bad_armor_enemy",
+                "name": "Bad Armor Enemy",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "armor_reduction_filter": 3,
+                "armor_item_ids": ["dr_two_armor"],
+            },
+        )
+        self.assertEqual(bad_armor_status, 400)
+        self.assertIn("damage reduction 3", bad_armor["error"])
+
+    def test_enemy_inspect_uses_derived_combat_dcs_and_spawned_armor(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "derived_test", "name": "Derived Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/derived_test/rooms",
+            {"id": "arena_dc", "name": "Arena", "x": 0, "y": 0},
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "derived_sword",
+                "name": "Derived Sword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "one_handed",
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "derived_armor",
+                "name": "Derived Armor",
+                "item_type": "armor",
+                "protection": 3,
+                "dodge_penalty": -2,
+            },
+        )
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "derived_enemy",
+                "name": "Derived Enemy",
+                "race": "Human",
+                "strength": 4,
+                "dexterity": 3,
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "melee_weapon_ids": ["derived_sword"],
+                "armor_reduction_filter": 3,
+                "armor_item_ids": ["derived_armor"],
+            },
+        )
+        self.assertEqual(template_status, 201)
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/arena_dc/enemies",
+            {
+                "template_id": template["id"],
+                "combat_role": "melee",
+            },
+        )
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(placed["armor_item_id"], "derived_armor")
+
+        combat_status, _ = self.api.handle(
+            "POST",
+            "/api/combat",
+            {"room_id": "arena_dc"},
+        )
+        self.assertEqual(combat_status, 201)
+
+        inspect_status, inspected = self.api.handle(
+            "GET",
+            f"/api/combat/combatants/enemy/{placed['id']}/inspect",
+        )
+        self.assertEqual(inspect_status, 200)
+        self.assertEqual(inspected["enemy"]["attack_dc"], 14)
+        self.assertEqual(inspected["enemy"]["defense_dc"], 11)
+        self.assertEqual(inspected["enemy"]["armor"], 3)
+
     def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:
         status, templates = self.api.handle(
             "GET",
