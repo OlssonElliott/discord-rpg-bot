@@ -131,6 +131,8 @@ export type EnemyTemplateData = {
   spell_range: number;
   melee_damage_filter: string | null;
   ranged_damage_filter: string | null;
+  armor_reduction_filter: number | null;
+  dual_wield: boolean;
   natural_attacks: {
     name: string;
     damage: string;
