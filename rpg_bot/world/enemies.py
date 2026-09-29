@@ -49,6 +49,7 @@ class EnemyTemplate:
     name: str
     description: str | None = None
     race: str = "Unknown"
+    lineage: str = "Other"
     difficulty_level: int = 1
     strength: int = 0
     dexterity: int = 0
