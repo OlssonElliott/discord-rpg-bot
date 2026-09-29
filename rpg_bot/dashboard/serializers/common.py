@@ -62,6 +62,7 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         data.update(
             protection=template.protection,
             dodge_penalty=template.dodge_penalty,
+            defense_bonus=template.defense_bonus,
             strength_requirement=template.strength_requirement,
         )
     elif template.item_type is ItemType.CONTAINER:
