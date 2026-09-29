@@ -401,14 +401,33 @@ export function EnemyLibraryDialog({
   const meleeAttackDc = Math.max(1, 10 + draft.strength);
   const rangedAttackDc = Math.max(1, 10 + draft.dexterity);
 
-  const lineages = Object.keys(LINEAGE_RACES);
+  const knownRaces = new Set(Object.values(LINEAGE_RACES).flat());
+  const customRaces = Array.from(new Set([
+    ...draft.allowed_races,
+    ...templates.flatMap((template) => (
+      template.allowed_races.length
+        ? template.allowed_races
+        : [template.race]
+    )),
+  ])).filter((race) => race && !knownRaces.has(race));
+  const raceGroups: Record<string, string[]> = {
+    ...LINEAGE_RACES,
+    Other: Array.from(new Set([
+      ...LINEAGE_RACES.Other,
+      ...customRaces,
+    ])).sort((left, right) => left.localeCompare(right)),
+  };
+  const lineages = Object.keys(raceGroups);
   const races = Array.from(new Set([
     ...(lineageFilter === 'all'
-      ? Object.values(LINEAGE_RACES).flat()
-      : (LINEAGE_RACES[lineageFilter] ?? [])),
+      ? Object.values(raceGroups).flat()
+      : (raceGroups[lineageFilter] ?? [])),
     ...templates
-      .filter((template) => lineageFilter === 'all' || template.lineage === lineageFilter)
-      .map((template) => template.race),
+      .flatMap((template) => (
+        template.allowed_races.length
+          ? template.allowed_races
+          : [template.race]
+      )),
   ].filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const filteredTemplates = templates.filter((template) => {
@@ -685,7 +704,7 @@ export function EnemyLibraryDialog({
                 </Badge>
               </div>
               <div className="enemy-race-groups">
-                {Object.entries(LINEAGE_RACES).map(([lineage, races]) => {
+                {Object.entries(raceGroups).map(([lineage, races]) => {
                   const selectedCount = races.filter((race) => (
                     draft.allowed_races.includes(race)
                   )).length;
