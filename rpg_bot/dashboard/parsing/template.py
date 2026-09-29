@@ -245,6 +245,18 @@ def enemy_template_from_body(
             "dual_wield",
             default=current.dual_wield if current is not None else False,
         ),
+        allowed_races=list_value(
+            "allowed_races",
+            current.allowed_races if current is not None else (),
+        ),
+        melee_loadouts=list_value(
+            "melee_loadouts",
+            current.melee_loadouts if current is not None else (),
+        ),
+        shield_item_ids=list_value(
+            "shield_item_ids",
+            current.shield_item_ids if current is not None else (),
+        ),
     )
 
 
