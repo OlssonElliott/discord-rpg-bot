@@ -394,6 +394,27 @@ class DatabaseWorldSchemaMixin:
                 "INSERT INTO world_seed_state (key) VALUES (?)",
                 (enemy_seed_key,),
             )
+        connection.execute(
+            """
+            UPDATE enemy_templates
+            SET lineage = CASE
+                WHEN race IN ('Human', 'Dwarf', 'Halfling') THEN 'Commonfolk'
+                WHEN race IN ('Elf', 'Dryad', 'Faun') THEN 'Fey'
+                WHEN race IN ('Gnoll', 'Lizardman', 'Minotaur') THEN 'Primals'
+                WHEN race IN ('Orc', 'Troll', 'Goblin') THEN 'Felblood'
+                WHEN race IN ('Revenant', 'Hagspawn', 'Swarmling') THEN 'Wretched'
+                ELSE lineage
+            END
+            WHERE lineage = 'Other'
+            AND race IN (
+                'Human', 'Dwarf', 'Halfling',
+                'Elf', 'Dryad', 'Faun',
+                'Gnoll', 'Lizardman', 'Minotaur',
+                'Orc', 'Troll', 'Goblin',
+                'Revenant', 'Hagspawn', 'Swarmling'
+            )
+            """
+        )
         room_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(rooms)")
         }
