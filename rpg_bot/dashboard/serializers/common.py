@@ -44,6 +44,13 @@ def _template_data(template: ItemTemplate) -> JsonObject:
             durability=template.durability,
             range=template.range,
             damage=template.damage_parts[0].amount if template.damage_parts else 1,
+            damage_expression=(
+                " + ".join(
+                    f"1d{part.amount}"
+                    for part in template.damage_parts
+                )
+                or "1d1"
+            ),
             damage_type=(
                 template.damage_parts[0].damage_type
                 if template.damage_parts
@@ -151,10 +158,28 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "armor_item_ids": list(template.armor_item_ids),
         "spell_names": list(template.spell_names),
         "spell_range": template.spell_range,
+        "melee_damage_filter": template.melee_damage_filter,
+        "ranged_damage_filter": template.ranged_damage_filter,
+        "natural_attacks": [
+            {
+                "name": attack.name,
+                "damage": attack.damage,
+                "damage_type": attack.damage_type,
+                "range": attack.range,
+            }
+            for attack in template.natural_attacks
+        ],
         "available_roles": [
             role
             for role, available in (
-                ("melee", bool(template.melee_weapon_ids or template.main_hand_item_id)),
+                (
+                    "melee",
+                    bool(
+                        template.melee_weapon_ids
+                        or template.main_hand_item_id
+                        or template.natural_attacks
+                    ),
+                ),
                 ("ranged", bool(template.ranged_weapon_ids)),
                 ("spellcaster", bool(template.spell_names)),
             )
@@ -201,6 +226,16 @@ def _enemy_data(
         "off_hand_item_id": enemy.off_hand_item_id,
         "armor_item_id": enemy.armor_item_id,
         "selected_spell": enemy.selected_spell,
+        "selected_natural_attack": (
+            {
+                "name": enemy.selected_natural_attack.name,
+                "damage": enemy.selected_natural_attack.damage,
+                "damage_type": enemy.selected_natural_attack.damage_type,
+                "range": enemy.selected_natural_attack.range,
+            }
+            if enemy.selected_natural_attack is not None
+            else None
+        ),
         "inventory": inventory or [],
     }
 
