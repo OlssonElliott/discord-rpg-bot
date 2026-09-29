@@ -210,6 +210,10 @@ class DatabaseWorldSchemaMixin:
             for row in connection.execute("PRAGMA table_info(enemy_templates)")
         }
         enemy_template_migrations = {
+            "lineage": (
+                "ALTER TABLE enemy_templates ADD COLUMN lineage "
+                "TEXT NOT NULL DEFAULT 'Other'"
+            ),
             "melee_weapon_ids": (
                 "ALTER TABLE enemy_templates ADD COLUMN melee_weapon_ids "
                 "TEXT NOT NULL DEFAULT '[]'"
@@ -256,6 +260,21 @@ class DatabaseWorldSchemaMixin:
         for column, statement in enemy_template_migrations.items():
             if column not in enemy_template_columns:
                 connection.execute(statement)
+
+        connection.execute(
+            """
+            UPDATE enemy_templates
+            SET lineage = CASE
+                WHEN race IN ('Human', 'Dwarf', 'Halfling') THEN 'Commonfolk'
+                WHEN race IN ('Elf', 'Dryad', 'Faun') THEN 'Fey'
+                WHEN race IN ('Gnoll', 'Lizardman', 'Minotaur') THEN 'Primals'
+                WHEN race IN ('Orc', 'Troll', 'Goblin') THEN 'Felblood'
+                WHEN race IN ('Revenant', 'Hagspawn', 'Swarmling') THEN 'Wretched'
+                ELSE lineage
+            END
+            WHERE lineage = 'Other'
+            """
+        )
 
         world_enemy_columns = {
             row["name"]
