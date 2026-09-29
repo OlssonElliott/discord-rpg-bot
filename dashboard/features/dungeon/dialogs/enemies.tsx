@@ -551,24 +551,39 @@ export function EnemyLibraryDialog({
             </div>
           </EnemyEditorSection>
 
-          <EnemyEditorSection title="Combat" summary={`ATK ${draft.attack_dc} · DEF ${draft.defense_dc}`}>
-            <div className="catalog-grid">
-              <label className="dialog-label">Armor
-                <Input type="number" min={0} value={draft.armor} onChange={(event) => update('armor', Number(event.target.value))} />
-              </label>
-              <label className="dialog-label">Magic resistance
-                <Input type="number" min={0} value={draft.magical_resistance} onChange={(event) => update('magical_resistance', Number(event.target.value))} />
-              </label>
-              <label className="dialog-label">Attack DC
-                <Input type="number" min={1} value={draft.attack_dc} onChange={(event) => update('attack_dc', Number(event.target.value))} />
-              </label>
-              <label className="dialog-label">Defense DC
-                <Input type="number" min={1} value={draft.defense_dc} onChange={(event) => update('defense_dc', Number(event.target.value))} />
-              </label>
-              <label className="dialog-label">Attack profile
-                <Input value={draft.attack_profile} onChange={(event) => update('attack_profile', event.target.value)} />
-              </label>
+          <EnemyEditorSection
+            title="Combat"
+            summary={`Melee ${meleeAttackDc} · Ranged ${rangedAttackDc} · DEF ${defenseSummary}`}
+          >
+            <p className="enemy-section-help">
+              Combat DCs are derived automatically from attributes and the armor an enemy actually spawns with.
+            </p>
+            <div className="enemy-combat-summary">
+              <div>
+                <span>Melee Attack DC</span>
+                <strong>{meleeAttackDc}</strong>
+                <small>10 + STR {draft.strength}</small>
+              </div>
+              <div>
+                <span>Ranged Attack DC</span>
+                <strong>{rangedAttackDc}</strong>
+                <small>10 + DEX {draft.dexterity}</small>
+              </div>
+              <div>
+                <span>Defense DC</span>
+                <strong>{defenseSummary}</strong>
+                <small>10 + DEX + armor dodge penalty</small>
+              </div>
             </div>
+            <label className="dialog-label">
+              Magic resistance
+              <Input
+                type="number"
+                min={0}
+                value={draft.magical_resistance}
+                onChange={(event) => update('magical_resistance', Number(event.target.value))}
+              />
+            </label>
           </EnemyEditorSection>
 
           <EnemyEditorSection title="Loadout pools" summary={roleSummary}>
