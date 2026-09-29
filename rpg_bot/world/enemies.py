@@ -77,6 +77,8 @@ class EnemyTemplate:
     melee_damage_filter: str | None = None
     ranged_damage_filter: str | None = None
     natural_attacks: tuple[EnemyNaturalAttack, ...] = ()
+    armor_reduction_filter: int | None = None
+    dual_wield: bool = False
 
     def __post_init__(self) -> None:
         non_negative = {
@@ -114,6 +116,20 @@ class EnemyTemplate:
         }.items():
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"Enemy {label} is required.")
+
+        if (
+            self.armor_reduction_filter is not None
+            and (
+                isinstance(self.armor_reduction_filter, bool)
+                or not isinstance(self.armor_reduction_filter, int)
+                or self.armor_reduction_filter < 0
+            )
+        ):
+            raise ValueError(
+                "Enemy armor reduction filter must be a non-negative integer."
+            )
+        if not isinstance(self.dual_wield, bool):
+            raise ValueError("Enemy dual wield setting must be boolean.")
 
         for label, value in {
             "melee damage filter": self.melee_damage_filter,
