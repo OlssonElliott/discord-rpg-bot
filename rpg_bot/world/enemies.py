@@ -148,6 +148,7 @@ class EnemyTemplate:
             "dual_wield",
             "two_handed",
             "natural",
+            "unarmed",
         }
         if any(
             loadout not in valid_melee_loadouts
