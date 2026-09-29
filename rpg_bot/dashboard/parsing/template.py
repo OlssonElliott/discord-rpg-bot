@@ -99,6 +99,10 @@ def enemy_template_from_body(
             "race",
             current.race if current is not None else "Unknown",
         ),
+        lineage=text_value(
+            "lineage",
+            current.lineage if current is not None else "Other",
+        ),
         difficulty_level=parse_integer(
             body,
             "difficulty_level",
