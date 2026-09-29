@@ -18,6 +18,29 @@ import { Textarea } from '@/components/ui/textarea';
 import type { CatalogItem, EnemyTemplateData } from '@/lib/api';
 import type { EnemyTemplateDraft } from '../types';
 
+const LINEAGE_RACES: Record<string, string[]> = {
+  Commonfolk: ['Human', 'Dwarf', 'Halfling'],
+  Fey: ['Elf', 'Dryad', 'Faun'],
+  Primals: ['Gnoll', 'Lizardman', 'Minotaur'],
+  Felblood: ['Orc', 'Troll', 'Goblin'],
+  Wretched: ['Revenant', 'Hagspawn', 'Swarmling'],
+  Other: ['Undead', 'Undead Beast', 'Beast', 'Construct', 'Aberration', 'Demon', 'Elemental', 'Unknown'],
+};
+
+const ATTRIBUTE_PRESETS = {
+  Balanced: { strength: 2, dexterity: 2, arcana: 1, vitality: 2, insight: 1, personality: 1 },
+  Melee: { strength: 4, dexterity: 2, arcana: 0, vitality: 3, insight: 1, personality: 1 },
+  Ranged: { strength: 1, dexterity: 4, arcana: 0, vitality: 2, insight: 2, personality: 1 },
+  Tank: { strength: 3, dexterity: 1, arcana: 0, vitality: 4, insight: 2, personality: 1 },
+} as const;
+
+const NATURAL_ATTACK_PRESETS = {
+  bite: { name: 'Bite', damage: '1d6', damage_type: 'pierce', range: 0 },
+  claws: { name: 'Claws', damage: '1d6', damage_type: 'slash', range: 0 },
+  gore: { name: 'Gore', damage: '1d8', damage_type: 'pierce', range: 0 },
+  slam: { name: 'Slam', damage: '1d6', damage_type: 'blunt', range: 0 },
+} as const;
+
 export function EnemyPlacementDialog({
   open,
   templates,
@@ -166,6 +189,7 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     name: '',
     description: '',
     race: 'Unknown',
+    lineage: 'Other',
     difficulty_level: 1,
     strength: 0,
     dexterity: 0,
