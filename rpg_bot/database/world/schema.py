@@ -82,7 +82,10 @@ class DatabaseWorldSchemaMixin:
                 off_hand_item_ids TEXT NOT NULL DEFAULT '[]',
                 armor_item_ids TEXT NOT NULL DEFAULT '[]',
                 spell_names TEXT NOT NULL DEFAULT '[]',
-                spell_range INTEGER NOT NULL DEFAULT 3 CHECK (spell_range > 0)
+                spell_range INTEGER NOT NULL DEFAULT 3 CHECK (spell_range > 0),
+                melee_damage_filter TEXT,
+                ranged_damage_filter TEXT,
+                natural_attacks TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS world_enemies (
                 entity_id TEXT PRIMARY KEY,
@@ -96,6 +99,7 @@ class DatabaseWorldSchemaMixin:
                 off_hand_item_id TEXT,
                 armor_item_id TEXT,
                 selected_spell TEXT,
+                selected_natural_attack TEXT,
                 FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
                 FOREIGN KEY (template_id) REFERENCES enemy_templates(id)
             );
@@ -228,6 +232,16 @@ class DatabaseWorldSchemaMixin:
                 "ALTER TABLE enemy_templates ADD COLUMN spell_range "
                 "INTEGER NOT NULL DEFAULT 3"
             ),
+            "melee_damage_filter": (
+                "ALTER TABLE enemy_templates ADD COLUMN melee_damage_filter TEXT"
+            ),
+            "ranged_damage_filter": (
+                "ALTER TABLE enemy_templates ADD COLUMN ranged_damage_filter TEXT"
+            ),
+            "natural_attacks": (
+                "ALTER TABLE enemy_templates ADD COLUMN natural_attacks "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
         }
         for column, statement in enemy_template_migrations.items():
             if column not in enemy_template_columns:
@@ -253,6 +267,9 @@ class DatabaseWorldSchemaMixin:
             ),
             "selected_spell": (
                 "ALTER TABLE world_enemies ADD COLUMN selected_spell TEXT"
+            ),
+            "selected_natural_attack": (
+                "ALTER TABLE world_enemies ADD COLUMN selected_natural_attack TEXT"
             ),
         }
         for column, statement in world_enemy_migrations.items():
