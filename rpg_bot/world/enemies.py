@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 
 
 class EnemyStatus(str, Enum):
@@ -14,6 +15,32 @@ class EnemyCombatRole(str, Enum):
     MELEE = "melee"
     RANGED = "ranged"
     SPELLCASTER = "spellcaster"
+
+
+@dataclass(frozen=True, slots=True)
+class EnemyNaturalAttack:
+    name: str
+    damage: str
+    damage_type: str = "physical"
+    range: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("Natural attack name is required.")
+        if not self.damage.strip():
+            raise ValueError("Natural attack damage is required.")
+        if not re.fullmatch(
+            r"\d+d\d+(?:\s*\+\s*\d+d\d+)*",
+            self.damage.strip(),
+            flags=re.IGNORECASE,
+        ):
+            raise ValueError(
+                "Natural attack damage must use dice notation such as 1d6."
+            )
+        if not self.damage_type.strip():
+            raise ValueError("Natural attack damage type is required.")
+        if isinstance(self.range, bool) or not isinstance(self.range, int) or self.range < 0:
+            raise ValueError("Natural attack range must be a non-negative integer.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +74,9 @@ class EnemyTemplate:
     armor_item_ids: tuple[str, ...] = ()
     spell_names: tuple[str, ...] = ()
     spell_range: int = 3
+    melee_damage_filter: str | None = None
+    ranged_damage_filter: str | None = None
+    natural_attacks: tuple[EnemyNaturalAttack, ...] = ()
 
     def __post_init__(self) -> None:
         non_negative = {
@@ -85,6 +115,20 @@ class EnemyTemplate:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"Enemy {label} is required.")
 
+        for label, value in {
+            "melee damage filter": self.melee_damage_filter,
+            "ranged damage filter": self.ranged_damage_filter,
+        }.items():
+            if value is not None and not value.strip():
+                raise ValueError(f"Enemy {label} cannot be empty.")
+
+        natural_attack_names = [
+            attack.name.casefold()
+            for attack in self.natural_attacks
+        ]
+        if len(natural_attack_names) != len(set(natural_attack_names)):
+            raise ValueError("Natural attack names cannot contain duplicates.")
+
         for label, values in {
             "melee weapon pool": self.melee_weapon_ids,
             "ranged weapon pool": self.ranged_weapon_ids,
@@ -112,6 +156,7 @@ class EnemyInstance:
     off_hand_item_id: str | None = None
     armor_item_id: str | None = None
     selected_spell: str | None = None
+    selected_natural_attack: EnemyNaturalAttack | None = None
 
     def __post_init__(self) -> None:
         if (
