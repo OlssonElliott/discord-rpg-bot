@@ -195,8 +195,8 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
   return {
     name: '',
     description: '',
-    race: 'Unknown',
-    lineage: 'Other',
+    race: 'Human',
+    lineage: 'Commonfolk',
     difficulty_level: 1,
     strength: 0,
     dexterity: 0,
@@ -227,7 +227,7 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     natural_attacks: [],
     armor_reduction_filter: null,
     dual_wield: false,
-    allowed_races: [],
+    allowed_races: ['Human'],
     melee_loadouts: [],
     shield_item_ids: [],
   };
@@ -863,53 +863,59 @@ export function EnemyLibraryDialog({
                 />
               </div>
 
+              <div className="enemy-pool-wide">
+                <h4>Melee configurations</h4>
+                <p className="enemy-section-help">
+                  A valid configuration is chosen at spawn, then compatible equipment is selected from the pools below.
+                </p>
+                <div className="enemy-loadout-options">
+                  {([
+                    ['one_handed', 'One-handed'],
+                    ['shield', 'One-handed + Shield'],
+                    ['dual_wield', 'Dual wield'],
+                    ['two_handed', 'Two-handed'],
+                    ['natural', 'Natural attack'],
+                  ] as const).map(([id, label]) => (
+                    <label key={id}>
+                      <input
+                        type="checkbox"
+                        checked={draft.melee_loadouts.includes(id)}
+                        onChange={(event) => {
+                          const next = event.target.checked
+                            ? [...draft.melee_loadouts, id]
+                            : draft.melee_loadouts.filter((value) => value !== id);
+                          update('melee_loadouts', next);
+                          update('dual_wield', next.includes('dual_wield'));
+                        }}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               <div>
-                <h4>Offhand</h4>
-                <label className="dialog-label">
-                  Mode
-                  <NativeSelect
-                    value={offhandMode}
-                    onChange={(event) => {
-                      const mode = event.target.value as 'none' | 'dual_wield' | 'shield';
-                      setOffhandMode(mode);
-                      update('dual_wield', mode === 'dual_wield');
-                      update('off_hand_item_ids', []);
-                      if (mode !== 'none') {
-                        update(
-                          'melee_weapon_ids',
-                          draft.melee_weapon_ids.filter((id) => (
-                            meleeWeapons.find((item) => item.id === id)?.grip === 'one_handed'
-                          )),
-                        );
-                      }
-                    }}
-                  >
-                    <NativeSelectOption value="none">None</NativeSelectOption>
-                    <NativeSelectOption value="dual_wield">Dual wield</NativeSelectOption>
-                    <NativeSelectOption value="shield">Shield</NativeSelectOption>
-                  </NativeSelect>
-                </label>
-                {offhandMode === 'dual_wield' && (
-                  <PoolChecklist
-                    items={secondWeapons}
-                    selected={draft.off_hand_item_ids}
-                    onChange={(value) => update('off_hand_item_ids', value)}
-                  />
-                )}
-                {offhandMode === 'shield' && (
-                  <PoolChecklist
-                    items={shieldItems}
-                    selected={draft.off_hand_item_ids}
-                    onChange={(value) => update('off_hand_item_ids', value)}
-                  />
-                )}
-                {offhandMode === 'none' && (
-                  <div className="enemy-pool-list enemy-pool-list--empty">
-                    <p className="enemy-pool-empty">
-                      No offhand equipment.
-                    </p>
-                  </div>
-                )}
+                <h4>Second weapon pool</h4>
+                <p className="enemy-section-help">
+                  Used only when Dual wield is selected.
+                </p>
+                <PoolChecklist
+                  items={secondWeapons}
+                  selected={draft.off_hand_item_ids}
+                  onChange={(value) => update('off_hand_item_ids', value)}
+                />
+              </div>
+
+              <div>
+                <h4>Shield pool</h4>
+                <p className="enemy-section-help">
+                  Used only when One-handed + Shield is selected.
+                </p>
+                <PoolChecklist
+                  items={shieldItems}
+                  selected={draft.shield_item_ids}
+                  onChange={(value) => update('shield_item_ids', value)}
+                />
               </div>
               <div>
                 <h4>Armor</h4>
