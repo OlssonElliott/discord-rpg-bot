@@ -316,13 +316,18 @@ export function EnemyLibraryDialog({
     () => emptyEnemyTemplateDraft(),
   );
   const [search, setSearch] = useState('');
+  const [lineageFilter, setLineageFilter] = useState('all');
   const [raceFilter, setRaceFilter] = useState('all');
+  const [offhandMode, setOffhandMode] = useState<'none' | 'dual_wield' | 'shield'>('none');
+  const [naturalAttackPreset, setNaturalAttackPreset] = useState<keyof typeof NATURAL_ATTACK_PRESETS>('bite');
   const editingTemplate = templates.find((template) => template.id === editingId);
 
   const weapons = catalogItems.filter((item) => item.item_type === 'weapon');
   const meleeWeapons = weapons.filter((item) => (item.range ?? 0) <= 0);
   const rangedWeapons = weapons.filter((item) => (item.range ?? 0) > 0);
   const armorItems = catalogItems.filter((item) => item.item_type === 'armor');
+  const bodyArmorItems = armorItems.filter((item) => (item.defense_bonus ?? 0) <= 0);
+  const shieldItems = armorItems.filter((item) => (item.defense_bonus ?? 0) > 0);
   const secondWeapons = meleeWeapons.filter(
     (item) => item.grip === 'one_handed',
   );
@@ -333,32 +338,45 @@ export function EnemyLibraryDialog({
     rangedWeapons.map((item) => item.damage_expression).filter(Boolean),
   )).sort();
   const compatibleMeleeWeapons = meleeWeapons.filter(
-    (item) => !draft.melee_damage_filter
-      || item.damage_expression === draft.melee_damage_filter,
+    (item) => (
+      (!draft.melee_damage_filter
+        || item.damage_expression === draft.melee_damage_filter)
+      && (offhandMode === 'none' || item.grip === 'one_handed')
+    ),
   );
   const compatibleRangedWeapons = rangedWeapons.filter(
     (item) => !draft.ranged_damage_filter
       || item.damage_expression === draft.ranged_damage_filter,
   );
   const armorReductionOptions = Array.from(new Set(
-    armorItems
+    bodyArmorItems
       .map((item) => item.protection)
       .filter((value): value is number => value !== undefined),
   )).sort((left, right) => left - right);
-  const compatibleArmorItems = armorItems.filter(
+  const compatibleArmorItems = bodyArmorItems.filter(
     (item) => draft.armor_reduction_filter === null
       || item.protection === draft.armor_reduction_filter,
   );
-  const selectedArmorItems = armorItems.filter(
+  const selectedArmorItems = bodyArmorItems.filter(
     (item) => draft.armor_item_ids.includes(item.id),
   );
+  const selectedShieldItems = shieldItems.filter(
+    (item) => draft.off_hand_item_ids.includes(item.id),
+  );
+  const armorChoices = selectedArmorItems.length ? selectedArmorItems : [undefined];
+  const shieldChoices = offhandMode === 'shield'
+    ? (selectedShieldItems.length ? selectedShieldItems : [undefined])
+    : [undefined];
   const defenseValues = Array.from(new Set(
-    (selectedArmorItems.length ? selectedArmorItems : [undefined]).map(
-      (armor) => Math.max(
+    armorChoices.flatMap((armor) => (
+      shieldChoices.map((shield) => Math.max(
         1,
-        10 + draft.dexterity + (armor?.dodge_penalty ?? 0),
-      ),
-    ),
+        10
+          + draft.dexterity
+          + (armor?.dodge_penalty ?? 0)
+          + (shield?.defense_bonus ?? 0),
+      ))
+    )),
   )).sort((left, right) => left - right);
   const defenseSummary = defenseValues.length > 1
     ? `${defenseValues[0]}–${defenseValues[defenseValues.length - 1]}`
@@ -366,12 +384,19 @@ export function EnemyLibraryDialog({
   const meleeAttackDc = Math.max(1, 10 + draft.strength);
   const rangedAttackDc = Math.max(1, 10 + draft.dexterity);
 
-  const races = Array.from(
-    new Set(templates.map((template) => template.race).filter(Boolean)),
-  ).sort((left, right) => left.localeCompare(right));
+  const lineages = Object.keys(LINEAGE_RACES);
+  const races = Array.from(new Set([
+    ...(lineageFilter === 'all'
+      ? Object.values(LINEAGE_RACES).flat()
+      : (LINEAGE_RACES[lineageFilter] ?? [])),
+    ...templates
+      .filter((template) => lineageFilter === 'all' || template.lineage === lineageFilter)
+      .map((template) => template.race),
+  ].filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const filteredTemplates = templates.filter((template) => (
-    (raceFilter === 'all' || template.race === raceFilter)
+    (lineageFilter === 'all' || template.lineage === lineageFilter)
+    && (raceFilter === 'all' || template.race === raceFilter)
     && (
       !normalizedSearch
       || template.name.toLocaleLowerCase().includes(normalizedSearch)
