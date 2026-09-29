@@ -1020,6 +1020,100 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(persisted.combat_role.value, "ranged")
         self.assertEqual(persisted.main_hand_item_id, "role_bow")
 
+    def test_enemy_damage_filter_rejects_incompatible_weapon(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "filter_dagger",
+                "name": "Filter Dagger",
+                "item_type": "weapon",
+                "damage": 4,
+                "range": 0,
+            },
+        )
+        status, payload = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "filter_enemy",
+                "name": "Filter Enemy",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "melee_damage_filter": "1d6",
+                "melee_weapon_ids": ["filter_dagger"],
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("does not match", payload["error"])
+
+    def test_enemy_can_persist_natural_attack_without_inventory_weapon(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "natural_test", "name": "Natural Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/natural_test/rooms",
+            {"id": "den", "name": "Den", "x": 0, "y": 0},
+        )
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "bone_hound_test",
+                "name": "Bone Hound Test",
+                "race": "Undead Beast",
+                "damage": "1d4",
+                "attack_profile": "Bite",
+                "typical_behaviour": "Rushes prey.",
+                "natural_attacks": [
+                    {
+                        "name": "Bite",
+                        "damage": "1d6",
+                        "damage_type": "pierce",
+                        "range": 0,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(template_status, 201)
+        self.assertIn("melee", template["available_roles"])
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/den/enemies",
+            {
+                "template_id": "bone_hound_test",
+                "combat_role": "melee",
+            },
+        )
+
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(placed["combat_role"], "melee")
+        self.assertIsNone(placed["main_hand_item_id"])
+        self.assertEqual(placed["inventory"], [])
+        self.assertEqual(
+            placed["selected_natural_attack"]["name"],
+            "Bite",
+        )
+        self.assertEqual(
+            placed["selected_natural_attack"]["damage"],
+            "1d6",
+        )
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(placed["id"])
+        self.assertIsNotNone(persisted)
+        self.assertIsNotNone(persisted.selected_natural_attack)
+        self.assertEqual(persisted.selected_natural_attack.name, "Bite")
+        self.assertEqual(persisted.selected_natural_attack.damage, "1d6")
+
     def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:
         status, templates = self.api.handle(
             "GET",
