@@ -1266,6 +1266,109 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(inspected["enemy"]["defense_dc"], 11)
         self.assertEqual(inspected["enemy"]["armor"], 3)
 
+    def test_enemy_spawn_pools_choose_persistent_race_and_legal_loadout(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "spawn_pool_test", "name": "Spawn Pool Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/spawn_pool_test/rooms",
+            {"id": "yard_pool", "name": "Yard", "x": 0, "y": 0},
+        )
+        for item in (
+            {
+                "id": "pool_sword",
+                "name": "Pool Sword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "one_handed",
+            },
+            {
+                "id": "pool_greatsword",
+                "name": "Pool Greatsword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "two_handed",
+            },
+            {
+                "id": "pool_shield",
+                "name": "Pool Shield",
+                "item_type": "armor",
+                "protection": 1,
+                "defense_bonus": 1,
+            },
+        ):
+            status, _ = self.api.handle("POST", "/api/items", item)
+            self.assertEqual(status, 201)
+
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "mixed_bandit",
+                "name": "Mixed Bandit",
+                "race": "Human",
+                "lineage": "Commonfolk",
+                "allowed_races": ["Human", "Orc"],
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Varied loadout.",
+                "melee_weapon_ids": [
+                    "pool_sword",
+                    "pool_greatsword",
+                ],
+                "shield_item_ids": ["pool_shield"],
+                "melee_loadouts": ["shield", "two_handed"],
+            },
+        )
+        self.assertEqual(template_status, 201)
+        self.assertEqual(
+            template["allowed_races"],
+            ["Human", "Orc"],
+        )
+        self.assertEqual(
+            set(template["melee_loadouts"]),
+            {"shield", "two_handed"},
+        )
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/yard_pool/enemies",
+            {
+                "template_id": "mixed_bandit",
+                "combat_role": "melee",
+            },
+        )
+        self.assertEqual(placed_status, 201)
+        self.assertIn(placed["race"], {"Human", "Orc"})
+        self.assertIn(
+            placed["loadout_style"],
+            {"shield", "two_handed"},
+        )
+        if placed["loadout_style"] == "shield":
+            self.assertEqual(placed["main_hand_item_id"], "pool_sword")
+            self.assertEqual(placed["off_hand_item_id"], "pool_shield")
+        else:
+            self.assertEqual(
+                placed["main_hand_item_id"],
+                "pool_greatsword",
+            )
+            self.assertIsNone(placed["off_hand_item_id"])
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(placed["id"])
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.race, placed["race"])
+        self.assertEqual(
+            persisted.loadout_style,
+            placed["loadout_style"],
+        )
+
     def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:
         status, templates = self.api.handle(
             "GET",
