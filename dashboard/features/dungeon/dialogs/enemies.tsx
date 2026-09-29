@@ -416,6 +416,8 @@ export function EnemyLibraryDialog({
     setEditingId(template?.id);
     if (!template) {
       setDraft(emptyEnemyTemplateDraft());
+      setOffhandMode('none');
+      setNaturalAttackPreset('bite');
       return;
     }
 
@@ -428,10 +430,26 @@ export function EnemyLibraryDialog({
       ((legacyMain.range ?? 0) > 0 ? rangedPool : meleePool).push(legacyMain.id);
     }
 
+    const existingOffhandIds = Array.from(new Set([
+      ...template.off_hand_item_ids,
+      ...(template.off_hand_item_id ? [template.off_hand_item_id] : []),
+    ]));
+    const hasShieldOffhand = existingOffhandIds.some((id) => (
+      (catalogItems.find((item) => item.id === id)?.defense_bonus ?? 0) > 0
+    ));
+    setOffhandMode(
+      template.dual_wield
+        ? 'dual_wield'
+        : hasShieldOffhand
+        ? 'shield'
+        : 'none',
+    );
+
     setDraft({
       name: template.name,
       description: template.description,
       race: template.race,
+      lineage: template.lineage,
       difficulty_level: template.difficulty_level,
       strength: template.strength,
       dexterity: template.dexterity,
@@ -453,10 +471,7 @@ export function EnemyLibraryDialog({
       armor_item_id: null,
       melee_weapon_ids: meleePool,
       ranged_weapon_ids: rangedPool,
-      off_hand_item_ids: Array.from(new Set([
-        ...template.off_hand_item_ids,
-        ...(template.off_hand_item_id ? [template.off_hand_item_id] : []),
-      ])),
+      off_hand_item_ids: existingOffhandIds,
       armor_item_ids: Array.from(new Set([
         ...template.armor_item_ids,
         ...(template.armor_item_id ? [template.armor_item_id] : []),
@@ -488,6 +503,23 @@ export function EnemyLibraryDialog({
     draft.defense_dc,
     draft.spell_range,
   ].some((value) => !Number.isInteger(value) || value < 1);
+
+  const attributePreset = (
+    Object.entries(ATTRIBUTE_PRESETS).find(([, values]) => (
+      draft.strength === values.strength
+      && draft.dexterity === values.dexterity
+      && draft.arcana === values.arcana
+      && draft.vitality === values.vitality
+      && draft.insight === values.insight
+      && draft.personality === values.personality
+    ))?.[0] ?? 'Custom'
+  );
+
+  function applyAttributePreset(name: string) {
+    if (name === 'Custom') return;
+    const preset = ATTRIBUTE_PRESETS[name as keyof typeof ATTRIBUTE_PRESETS];
+    setDraft((current) => ({ ...current, ...preset }));
+  }
 
   const roleSummary = [
     (draft.melee_weapon_ids.length || draft.natural_attacks.length) ? 'Melee' : '',
