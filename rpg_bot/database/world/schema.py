@@ -88,7 +88,10 @@ class DatabaseWorldSchemaMixin:
                 ranged_damage_filter TEXT,
                 natural_attacks TEXT NOT NULL DEFAULT '[]',
                 armor_reduction_filter INTEGER,
-                dual_wield INTEGER NOT NULL DEFAULT 0
+                dual_wield INTEGER NOT NULL DEFAULT 0,
+                allowed_races TEXT NOT NULL DEFAULT '[]',
+                melee_loadouts TEXT NOT NULL DEFAULT '[]',
+                shield_item_ids TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS world_enemies (
                 entity_id TEXT PRIMARY KEY,
@@ -103,6 +106,8 @@ class DatabaseWorldSchemaMixin:
                 armor_item_id TEXT,
                 selected_spell TEXT,
                 selected_natural_attack TEXT,
+                race TEXT NOT NULL DEFAULT 'Unknown',
+                loadout_style TEXT,
                 FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
                 FOREIGN KEY (template_id) REFERENCES enemy_templates(id)
             );
@@ -257,6 +262,18 @@ class DatabaseWorldSchemaMixin:
                 "ALTER TABLE enemy_templates ADD COLUMN dual_wield "
                 "INTEGER NOT NULL DEFAULT 0"
             ),
+            "allowed_races": (
+                "ALTER TABLE enemy_templates ADD COLUMN allowed_races "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "melee_loadouts": (
+                "ALTER TABLE enemy_templates ADD COLUMN melee_loadouts "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "shield_item_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN shield_item_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
         }
         for column, statement in enemy_template_migrations.items():
             if column not in enemy_template_columns:
@@ -300,6 +317,13 @@ class DatabaseWorldSchemaMixin:
             ),
             "selected_natural_attack": (
                 "ALTER TABLE world_enemies ADD COLUMN selected_natural_attack TEXT"
+            ),
+            "race": (
+                "ALTER TABLE world_enemies ADD COLUMN race "
+                "TEXT NOT NULL DEFAULT 'Unknown'"
+            ),
+            "loadout_style": (
+                "ALTER TABLE world_enemies ADD COLUMN loadout_style TEXT"
             ),
         }
         for column, statement in world_enemy_migrations.items():
