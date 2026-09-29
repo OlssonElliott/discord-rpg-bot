@@ -363,6 +363,11 @@ def item_record(
                 "dodge_penalty",
                 default=0,
             ),
+            defense_bonus=parse_integer(
+                body,
+                "defense_bonus",
+                default=0,
+            ),
             strength_requirement=strength_requirement or None,
         )
     elif item_type is ItemType.CONTAINER:
