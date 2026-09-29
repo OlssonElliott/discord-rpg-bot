@@ -93,6 +93,7 @@ export type CatalogItem = {
   damage_type?: string;
   protection?: number;
   dodge_penalty?: number;
+  defense_bonus?: number;
   strength_requirement?: number | null;
   capacity?: number;
   can_equip?: boolean;
