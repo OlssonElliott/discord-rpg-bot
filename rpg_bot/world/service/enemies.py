@@ -14,6 +14,13 @@ from ..enemies import (
 from ..models import InventoryHolder, NotFoundError
 
 
+def _weapon_damage_expression(item) -> str:
+    return " + ".join(
+        f"1d{part.amount}"
+        for part in item.damage_parts
+    ) or "1d1"
+
+
 def list_enemy_templates(service) -> tuple[EnemyTemplate, ...]:
     return service.database.list_enemy_templates()
 
@@ -73,7 +80,7 @@ def place_enemy(
             legacy_pool.append(template.main_hand_item_id)
 
     available_roles: list[EnemyCombatRole] = []
-    if melee_pool:
+    if melee_pool or template.natural_attacks:
         available_roles.append(EnemyCombatRole.MELEE)
     if ranged_pool:
         available_roles.append(EnemyCombatRole.RANGED)
@@ -103,8 +110,11 @@ def place_enemy(
 
     main_hand_item_id = None
     selected_spell = None
+    selected_natural_attack = None
     if resolved_role is EnemyCombatRole.MELEE and melee_pool:
         main_hand_item_id = random.choice(melee_pool)
+    elif resolved_role is EnemyCombatRole.MELEE and template.natural_attacks:
+        selected_natural_attack = random.choice(template.natural_attacks)
     elif resolved_role is EnemyCombatRole.RANGED and ranged_pool:
         main_hand_item_id = random.choice(ranged_pool)
     elif resolved_role is EnemyCombatRole.SPELLCASTER:
@@ -133,6 +143,7 @@ def place_enemy(
         off_hand_item_id=off_hand_item_id,
         armor_item_id=armor_item_id,
         selected_spell=selected_spell,
+        selected_natural_attack=selected_natural_attack,
     )
 
     try:
@@ -216,6 +227,7 @@ def update_enemy(
             off_hand_item_id=current.off_hand_item_id,
             armor_item_id=current.armor_item_id,
             selected_spell=current.selected_spell,
+            selected_natural_attack=current.selected_natural_attack,
         )
     )
 
@@ -269,6 +281,23 @@ def validate_enemy_equipment_template(
         if expected_range == "ranged" and item.range <= 0:
             raise ValueError(
                 f"Enemy ranged weapon '{item_id}' must have Range above 0."
+            )
+
+        damage_filter = (
+            template.melee_damage_filter
+            if expected_range == "melee"
+            else template.ranged_damage_filter
+            if expected_range == "ranged"
+            else None
+        )
+        if (
+            damage_filter is not None
+            and _weapon_damage_expression(item) != damage_filter
+        ):
+            raise ValueError(
+                f"Enemy {label} '{item_id}' damage "
+                f"{_weapon_damage_expression(item)} does not match "
+                f"the selected damage filter {damage_filter}."
             )
 
 
