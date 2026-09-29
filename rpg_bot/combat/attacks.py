@@ -25,6 +25,27 @@ def _item_damage_expression(item) -> str:
     ) or "1d1"
 
 
+def _enemy_attack_dc(template, enemy) -> int:
+    if enemy.combat_role.value == "ranged":
+        modifier = template.dexterity
+    elif enemy.combat_role.value == "spellcaster":
+        modifier = template.arcana
+    else:
+        modifier = template.strength
+    return max(1, 10 + modifier)
+
+
+def _enemy_defense_dc(world, template, enemy) -> int:
+    armor_penalty = 0
+    if enemy.armor_item_id is not None:
+        try:
+            armor = world.catalog.get(enemy.armor_item_id)
+            armor_penalty = armor.dodge_penalty
+        except ValueError:
+            armor_penalty = 0
+    return max(1, 10 + template.dexterity + armor_penalty)
+
+
 class CombatAttackMixin:
     """Character and enemy attack actions."""
 
@@ -123,10 +144,15 @@ class CombatAttackMixin:
             disadvantage=recovering,
         )
         attack_total = attack_roll + attack_modifier
+        target_defense_dc = _enemy_defense_dc(
+            self.world,
+            template,
+            enemy,
+        )
         critical = attack_roll == 20
         hit = critical or (
             attack_roll != 1
-            and attack_total >= template.defense_dc
+            and attack_total >= target_defense_dc
         )
 
         damage_rolls: tuple[DamageRoll, ...] = ()
@@ -205,7 +231,7 @@ class CombatAttackMixin:
             attack_roll=attack_roll,
             attack_modifier=attack_modifier,
             attack_total=attack_total,
-            defense_dc=template.defense_dc,
+            defense_dc=target_defense_dc,
             hit=hit,
             critical=critical,
             damage_rolls=damage_rolls,
@@ -239,7 +265,7 @@ class CombatAttackMixin:
                     f"{attacker.name} attacked {target.name} with "
                     f"{weapon_name}: {roll_text}"
                     f"{attack_modifier:+d} = {attack_total} vs "
-                    f"Defense {template.defense_dc},"
+                    f"Defense {target_defense_dc},"
                     f"{critical_text} hit for {final_damage} damage "
                     f"({raw_damage} raw, {reduction} "
                     f"{reduction_label} reduction). "
@@ -256,7 +282,7 @@ class CombatAttackMixin:
                     f"{attacker.name} attacked {target.name} with "
                     f"{weapon_name}: {roll_text}"
                     f"{attack_modifier:+d} = {attack_total} vs "
-                    f"Defense {template.defense_dc}, miss."
+                    f"Defense {target_defense_dc}, miss."
                 )
 
             self.repository.append_log(
@@ -425,10 +451,11 @@ class CombatAttackMixin:
             disadvantage=recovering,
         )
         defense_total = defense_roll + defense_modifier
+        attack_dc = _enemy_attack_dc(template, enemy)
         critical_defense = defense_roll == 20
         defended = critical_defense or (
             defense_roll != 1
-            and defense_total >= template.attack_dc
+            and defense_total >= attack_dc
         )
 
         damage_rolls: tuple[int, ...] = ()
@@ -475,7 +502,7 @@ class CombatAttackMixin:
             target_source_id=target.source_id,
             target_name=target.name,
             attack_profile=attack_profile,
-            attack_dc=template.attack_dc,
+            attack_dc=attack_dc,
             defense_method=defense_method,
             defense_attribute=defense_attribute,
             defense_roll=defense_roll,
@@ -524,7 +551,7 @@ class CombatAttackMixin:
                     f"{attack_profile}. "
                     f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
-                    f"{defense_total} vs Attack DC {template.attack_dc}, "
+                    f"{defense_total} vs Attack DC {attack_dc}, "
                     f"defended."
                 )
             else:
@@ -533,7 +560,7 @@ class CombatAttackMixin:
                     f"{attack_profile}. "
                     f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
-                    f"{defense_total} vs Attack DC {template.attack_dc}, "
+                    f"{defense_total} vs Attack DC {attack_dc}, "
                     f"failed. {final_damage} damage "
                     f"({raw_damage} raw, {armor_reduction} armor reduction). "
                     f"{target.name} has {target_hp}/{character.max_hp} HP."
