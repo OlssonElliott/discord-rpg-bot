@@ -133,7 +133,6 @@ def place_enemy(
         random.choice(off_hand_pool)
         if (
             resolved_role is EnemyCombatRole.MELEE
-            and template.dual_wield
             and main_hand_item_id is not None
             and off_hand_pool
         )
@@ -245,87 +244,114 @@ def validate_enemy_equipment_template(
     service,
     template: EnemyTemplate,
 ) -> None:
-    equipment = [
-        ("main hand", template.main_hand_item_id, ItemType.WEAPON, None),
-        ("off hand", template.off_hand_item_id, ItemType.WEAPON, "offhand"),
-        ("armor", template.armor_item_id, ItemType.ARMOR, "armor"),
-        *(
-            ("melee weapon", item_id, ItemType.WEAPON, "melee")
-            for item_id in template.melee_weapon_ids
-        ),
-        *(
-            ("ranged weapon", item_id, ItemType.WEAPON, "ranged")
-            for item_id in template.ranged_weapon_ids
-        ),
-        *(
-            ("off-hand", item_id, ItemType.WEAPON, "offhand")
-            for item_id in template.off_hand_item_ids
-        ),
-        *(
-            ("armor", item_id, ItemType.ARMOR, "armor")
-            for item_id in template.armor_item_ids
-        ),
-    ]
-
-    for label, item_id, expected_type, expected_range in equipment:
-        if item_id is None:
-            continue
-
+    def item(item_id: str):
         try:
-            item = service.catalog.get(item_id)
+            return service.catalog.get(item_id)
         except ValueError as error:
             raise ValueError(
-                f"Enemy {label} item '{item_id}' does not exist."
+                f"Enemy equipment item '{item_id}' does not exist."
             ) from error
 
-        if item.item_type is not expected_type:
+    melee_ids = list(template.melee_weapon_ids)
+    ranged_ids = list(template.ranged_weapon_ids)
+    offhand_ids = list(template.off_hand_item_ids)
+    armor_ids = list(template.armor_item_ids)
+
+    if template.main_hand_item_id is not None:
+        legacy = item(template.main_hand_item_id)
+        if legacy.item_type is not ItemType.WEAPON:
+            raise ValueError("Enemy main hand item must be a weapon.")
+        (ranged_ids if legacy.range > 0 else melee_ids).append(
+            template.main_hand_item_id
+        )
+    if template.off_hand_item_id is not None:
+        offhand_ids.append(template.off_hand_item_id)
+    if template.armor_item_id is not None:
+        armor_ids.append(template.armor_item_id)
+
+    for item_id in dict.fromkeys(melee_ids):
+        weapon = item(item_id)
+        if weapon.item_type is not ItemType.WEAPON or weapon.range > 0:
             raise ValueError(
-                f"Enemy {label} item '{item_id}' must be "
-                f"{expected_type.value}."
+                f"Enemy melee weapon '{item_id}' must be a melee weapon."
             )
-        if expected_range == "melee" and item.range > 0:
+        if (
+            template.melee_damage_filter is not None
+            and _weapon_damage_expression(weapon)
+            != template.melee_damage_filter
+        ):
             raise ValueError(
-                f"Enemy melee weapon '{item_id}' must have Range 0."
+                f"Enemy melee weapon '{item_id}' damage "
+                f"{_weapon_damage_expression(weapon)} does not match "
+                f"the selected damage filter "
+                f"{template.melee_damage_filter}."
             )
-        if expected_range == "ranged" and item.range <= 0:
+
+    for item_id in dict.fromkeys(ranged_ids):
+        weapon = item(item_id)
+        if weapon.item_type is not ItemType.WEAPON or weapon.range <= 0:
             raise ValueError(
                 f"Enemy ranged weapon '{item_id}' must have Range above 0."
             )
-        if expected_range == "offhand":
-            if (
-                item.range > 0
-                or item.grip is not WeaponGrip.ONE_HANDED
-            ):
-                raise ValueError(
-                    f"Enemy off-hand weapon '{item_id}' must be "
-                    "a one-handed melee weapon."
-                )
-        if expected_range == "armor":
-            if (
-                template.armor_reduction_filter is not None
-                and item.protection != template.armor_reduction_filter
-            ):
-                raise ValueError(
-                    f"Enemy armor '{item_id}' protection "
-                    f"{item.protection} does not match the selected "
-                    f"damage reduction {template.armor_reduction_filter}."
-                )
-
-        damage_filter = (
-            template.melee_damage_filter
-            if expected_range == "melee"
-            else template.ranged_damage_filter
-            if expected_range == "ranged"
-            else None
-        )
         if (
-            damage_filter is not None
-            and _weapon_damage_expression(item) != damage_filter
+            template.ranged_damage_filter is not None
+            and _weapon_damage_expression(weapon)
+            != template.ranged_damage_filter
         ):
             raise ValueError(
-                f"Enemy {label} '{item_id}' damage "
-                f"{_weapon_damage_expression(item)} does not match "
-                f"the selected damage filter {damage_filter}."
+                f"Enemy ranged weapon '{item_id}' damage "
+                f"{_weapon_damage_expression(weapon)} does not match "
+                f"the selected damage filter "
+                f"{template.ranged_damage_filter}."
+            )
+
+    if offhand_ids:
+        for item_id in dict.fromkeys(offhand_ids):
+            offhand = item(item_id)
+            if template.dual_wield:
+                if (
+                    offhand.item_type is not ItemType.WEAPON
+                    or offhand.range > 0
+                    or offhand.grip is not WeaponGrip.ONE_HANDED
+                ):
+                    raise ValueError(
+                        f"Enemy off-hand weapon '{item_id}' must be "
+                        "a one-handed melee weapon."
+                    )
+            else:
+                if (
+                    offhand.item_type is not ItemType.ARMOR
+                    or offhand.defense_bonus <= 0
+                ):
+                    raise ValueError(
+                        f"Enemy off-hand item '{item_id}' must be a shield."
+                    )
+
+        for item_id in dict.fromkeys(melee_ids):
+            main_weapon = item(item_id)
+            if main_weapon.grip is WeaponGrip.TWO_HANDED:
+                raise ValueError(
+                    "Enemies with an offhand cannot include two-handed "
+                    f"melee weapon '{item_id}' in their main-hand pool."
+                )
+
+    for item_id in dict.fromkeys(armor_ids):
+        armor = item(item_id)
+        if (
+            armor.item_type is not ItemType.ARMOR
+            or armor.defense_bonus > 0
+        ):
+            raise ValueError(
+                f"Enemy armor '{item_id}' must be body armor, not a shield."
+            )
+        if (
+            template.armor_reduction_filter is not None
+            and armor.protection != template.armor_reduction_filter
+        ):
+            raise ValueError(
+                f"Enemy armor '{item_id}' protection "
+                f"{armor.protection} does not match the selected "
+                f"damage reduction {template.armor_reduction_filter}."
             )
 
 
