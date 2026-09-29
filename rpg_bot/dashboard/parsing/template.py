@@ -225,6 +225,18 @@ def enemy_template_from_body(
             current.ranged_damage_filter if current is not None else None,
         ),
         natural_attacks=natural_attacks_value(),
+        armor_reduction_filter=(
+            parse_integer(body, "armor_reduction_filter")
+            if body.get("armor_reduction_filter") is not None
+            else current.armor_reduction_filter
+            if current is not None
+            else None
+        ),
+        dual_wield=parse_boolean(
+            body,
+            "dual_wield",
+            default=current.dual_wield if current is not None else False,
+        ),
     )
 
 
