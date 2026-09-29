@@ -226,8 +226,12 @@ def enemy_template_from_body(
         ),
         natural_attacks=natural_attacks_value(),
         armor_reduction_filter=(
-            parse_integer(body, "armor_reduction_filter")
-            if body.get("armor_reduction_filter") is not None
+            (
+                parse_integer(body, "armor_reduction_filter")
+                if body["armor_reduction_filter"] is not None
+                else None
+            )
+            if "armor_reduction_filter" in body
             else current.armor_reduction_filter
             if current is not None
             else None
