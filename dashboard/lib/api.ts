@@ -88,6 +88,7 @@ export type CatalogItem = {
   durability?: number;
   range?: number;
   damage?: number;
+  damage_expression?: string;
   damage_type?: string;
   protection?: number;
   dodge_penalty?: number;
@@ -128,6 +129,14 @@ export type EnemyTemplateData = {
   armor_item_ids: string[];
   spell_names: string[];
   spell_range: number;
+  melee_damage_filter: string | null;
+  ranged_damage_filter: string | null;
+  natural_attacks: {
+    name: string;
+    damage: string;
+    damage_type: string;
+    range: number;
+  }[];
   available_roles: ('melee' | 'ranged' | 'spellcaster')[];
 };
 
@@ -146,6 +155,12 @@ export type PlacedEnemy = {
   off_hand_item_id: string | null;
   armor_item_id: string | null;
   selected_spell: string | null;
+  selected_natural_attack: {
+    name: string;
+    damage: string;
+    damage_type: string;
+    range: number;
+  } | null;
   inventory: {
     id: string;
     name: string;
