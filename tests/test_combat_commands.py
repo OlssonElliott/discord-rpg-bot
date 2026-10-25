@@ -107,8 +107,8 @@ class CombatMoveDestinationsTests(unittest.TestCase):
         self.assertEqual(
             by_location[("pillar", LandmarkRelation.AT)], 2,
         )
-        self.assertEqual(
-            by_location[("pillar", LandmarkRelation.BEHIND)], 2,
+        self.assertNotIn(
+            ("pillar", LandmarkRelation.BEHIND), by_location,
         )
         # A longer route is offered so the engine can move partway.
         self.assertEqual(
