@@ -2,8 +2,70 @@
 
 import discord
 
-from ..combat.models import CombatantKind
+from dataclasses import dataclass
+
+from ..combat.models import (
+    CombatScene,
+    CombatantKind,
+    CombatantState,
+    CoverLevel,
+    LandmarkRelation,
+)
+from ..combat.navigation import movement_legs
 from ..combat.service import CombatError
+
+
+@dataclass(frozen=True)
+class MoveDestination:
+    """One reachable combat location and stance for the player's turn."""
+
+    landmark_id: str
+    name: str
+    relation: LandmarkRelation
+    cost: int
+
+
+def move_destinations(
+    scene: CombatScene,
+    actor: CombatantState,
+) -> list[MoveDestination]:
+    """Preview destinations using the same route costs as CombatService.
+
+    Destinations beyond the remaining movement are still offered if the
+    character can make partial progress toward them this turn.
+    """
+    destinations: list[MoveDestination] = []
+    for landmark in scene.landmarks:
+        try:
+            legs = movement_legs(scene, actor, landmark.id)
+        except ValueError:
+            continue  # No valid unblocked route to this location.
+
+        cost = sum(route.movement_cost - already_moved
+                   for _, _, route, already_moved in legs)
+        if cost > 0 and actor.movement_remaining <= 0:
+            continue
+
+        for relation in (
+            (LandmarkRelation.AT, LandmarkRelation.BEHIND)
+            if landmark.cover is not CoverLevel.NONE
+            else (LandmarkRelation.AT,)
+        ):
+            if (cost == 0 and not actor.is_between_landmarks
+                    and actor.landmark_id == landmark.id
+                    and actor.relation is relation):
+                continue
+            destinations.append(
+                MoveDestination(landmark.id, landmark.name, relation, cost)
+            )
+    return sorted(
+        destinations,
+        key=lambda destination: (
+            destination.cost,
+            destination.name.casefold(),
+            destination.relation.value,
+        ),
+    )
 
 
 class CombatActionView(discord.ui.View):
@@ -71,6 +133,22 @@ class CombatActionView(discord.ui.View):
         view = CombatTargetView(self.cog, self.scene_id, self.character_id, options)
         await interaction.response.edit_message(content="Choose an enemy to attack:", view=view)
 
+    @discord.ui.button(label="Move", style=discord.ButtonStyle.secondary)
+    async def move(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            scene, actor = self._check(interaction)
+            options = move_destinations(scene, actor)
+            if not options:
+                raise CombatError("No locations can be reached with your remaining movement.")
+        except (CombatError, ValueError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+
+        view = CombatMoveView(self.cog, self.scene_id, self.character_id, options)
+        await interaction.response.edit_message(
+            content=view.prompt(scene, actor), view=view,
+        )
+
     @discord.ui.button(label="Defend", style=discord.ButtonStyle.secondary)
     async def defend(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._perform(interaction, "defend")
@@ -119,3 +197,156 @@ class CombatTargetView(discord.ui.View):
         self.add_item(CombatTargetSelect(self, options))
 
     _check = CombatActionView._check
+
+
+class CombatMoveSelect(discord.ui.Select):
+    """Choose a location; CombatService revalidates distance and movement."""
+
+    def __init__(self, move_view):
+        self.move_view = move_view
+        first = move_view.page * 25
+        page_destinations = move_view.destinations[first:first + 25]
+        options = []
+        for index, destination in enumerate(page_destinations, start=first):
+            stance = " · Behind cover" if destination.relation is LandmarkRelation.BEHIND else ""
+            progress = (
+                "Arrive" if destination.cost <= move_view.movement_remaining
+                else "Partial movement"
+            )
+            options.append(discord.SelectOption(
+                label=f"{destination.name}{stance}"[:100],
+                value=str(index),
+                description=f"{destination.cost} movement · {progress}"[:100],
+            ))
+        super().__init__(
+            placeholder="Choose a location",
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.move_view
+        try:
+            scene, actor = view._check(interaction)
+            destination = view.destinations[int(self.values[0])]
+            # The scene may have changed in the DM dashboard since this
+            # menu was displayed. Recompute availability before mutating.
+            allowed = move_destinations(scene, actor)
+            if destination not in allowed:
+                raise CombatError(
+                    "That destination is no longer reachable. Open Move again."
+                )
+            updated = view.cog.service.move_combatant_toward(
+                interaction.guild_id,
+                CombatantKind.CHARACTER,
+                view.character_id,
+                destination.landmark_id,
+                destination.relation,
+            )
+        except (CombatError, ValueError, IndexError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+
+        moved = updated.current_combatant()
+        assert moved is not None
+        if moved.is_between_landmarks:
+            source = updated.landmark(moved.route_source_landmark_id)
+            target = updated.landmark(moved.route_destination_landmark_id)
+            where = (
+                f"between {source.name if source else moved.route_source_landmark_id} "
+                f"and {target.name if target else moved.route_destination_landmark_id}"
+                f" ({moved.route_progress}/{moved.route_cost})"
+            )
+        else:
+            location = updated.landmark(moved.landmark_id)
+            where = f"{moved.relation.value} {location.name if location else moved.landmark_id}"
+        await interaction.response.edit_message(
+            content=(
+                f"{moved.name} moved {where}. "
+                f"Movement remaining: {moved.movement_remaining}."
+            ),
+            view=None,
+        )
+        await view.cog._publish_scene(interaction.guild, updated)
+
+
+class CombatMoveView(discord.ui.View):
+    """Paginated location picker for the current character's combat turn."""
+
+    _check = CombatActionView._check
+
+    def __init__(self, cog, scene_id, character_id, destinations, page=0):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.scene_id = scene_id
+        self.character_id = character_id
+        self.destinations = destinations
+        self.page = page
+        self.movement_remaining = 0
+        # Will be populated with the actor's actual budget before display.
+        self._populate(remaining=0)
+
+    def _populate(self, remaining: int):
+        self.movement_remaining = remaining
+        self.clear_items()
+        self.add_item(CombatMoveSelect(self))
+        self.add_item(CombatMovePageButton(self, "Previous", -1))
+        self.add_item(CombatMovePageButton(self, "Next", 1))
+
+    def prompt(self, scene, actor):
+        self._populate(actor.movement_remaining)
+        location = scene.landmark(actor.landmark_id)
+        if actor.is_between_landmarks:
+            origin = scene.landmark(actor.route_source_landmark_id)
+            target = scene.landmark(actor.route_destination_landmark_id)
+            position = (
+                f"Between {origin.name if origin else actor.route_source_landmark_id} "
+                f"and {target.name if target else actor.route_destination_landmark_id}"
+                f" ({actor.route_progress}/{actor.route_cost})"
+            )
+        else:
+            position = location.name if location else actor.landmark_id
+        return (
+            f"**Move · {actor.name}**\n"
+            f"Current location: {position}\n"
+            f"Movement remaining: {actor.movement_remaining}\n"
+            "Choose a destination. Longer routes use your remaining movement "
+            "and may leave you between locations."
+        )
+
+
+class CombatMovePageButton(discord.ui.Button):
+    def __init__(self, move_view, label, direction):
+        self.move_view = move_view
+        self.direction = direction
+        page_count = (len(move_view.destinations) + 24) // 25
+        target = move_view.page + direction
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            row=1,
+            disabled=not (0 <= target < page_count),
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            scene, actor = self.move_view._check(interaction)
+        except (CombatError, ValueError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        view = CombatMoveView(
+            self.move_view.cog,
+            self.move_view.scene_id,
+            self.move_view.character_id,
+            move_destinations(scene, actor),
+            page=self.move_view.page + self.direction,
+        )
+        if not (0 <= view.page * 25 < len(view.destinations)):
+            await interaction.response.send_message(
+                "These locations are no longer available. Open Move again.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.edit_message(
+            content=view.prompt(scene, actor), view=view,
+        )
