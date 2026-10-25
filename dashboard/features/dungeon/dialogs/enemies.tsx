@@ -206,6 +206,7 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     personality: 0,
     max_hp: 7,
     armor: 0,
+    armor_mode: 'unset',
     magical_resistance: 0,
     attack_dc: 12,
     defense_dc: 12,
@@ -409,7 +410,30 @@ export function EnemyLibraryDialog({
     ...(draft.melee_loadouts.includes('shield') ? draft.shield_item_ids : []),
   ]).size + (draft.melee_loadouts.includes('natural') ? draft.natural_attacks.length : 0);
   const rangedSelectionCount = draft.ranged_weapon_ids.length;
-  const armorSelectionCount = draft.armor_item_ids.length;
+  const armorSelectionCount = draft.armor_mode === 'natural'
+    ? draft.armor
+    : draft.armor_item_ids.length;
+  const requiresMeleeWeapons = draft.melee_loadouts.some((loadout) =>
+    ['one_handed', 'shield', 'dual_wield', 'two_handed'].includes(loadout)
+  );
+  const meleeValid = draft.melee_loadouts.length > 0
+    && (!requiresMeleeWeapons || draft.melee_weapon_ids.length > 0)
+    && (!draft.melee_loadouts.includes('natural') || draft.natural_attacks.length > 0)
+    && (!draft.melee_loadouts.includes('shield') || draft.shield_item_ids.length > 0)
+    && (!draft.melee_loadouts.includes('dual_wield') || draft.off_hand_item_ids.length > 0)
+    && (!draft.melee_loadouts.includes('one_handed') || draft.melee_weapon_ids.some((id) => catalogItems.find((item) => item.id === id)?.grip === 'one_handed'))
+    && (!draft.melee_loadouts.includes('shield') || draft.melee_weapon_ids.some((id) => catalogItems.find((item) => item.id === id)?.grip === 'one_handed'))
+    && (!draft.melee_loadouts.includes('dual_wield') || draft.melee_weapon_ids.some((id) => catalogItems.find((item) => item.id === id)?.grip === 'one_handed'))
+    && (!draft.melee_loadouts.includes('two_handed') || draft.melee_weapon_ids.some((id) => catalogItems.find((item) => item.id === id)?.grip === 'two_handed'));
+  const armorValid = draft.armor_mode === 'unarmored'
+    || (draft.armor_mode === 'natural' && Number.isInteger(draft.armor)
+      && draft.armor >= 1 && draft.armor <= 5)
+    || (draft.armor_mode === 'equipment' && draft.armor_item_ids.length > 0);
+  const equipmentWarnings = [
+    !meleeValid && 'Choose a melee loadout and its required weapons, or select Natural attack / Unarmed.',
+    !armorValid && 'Choose equipment armor, Natural armor (DR 1–5), or Unarmored.',
+    rangedEnabled && draft.ranged_weapon_ids.length === 0 && 'Select a ranged weapon.',
+  ].filter((warning): warning is string => Boolean(warning));
 
   const knownRaces = new Set(Object.values(LINEAGE_RACES).flat());
   const customRaces = Array.from(new Set([
@@ -541,6 +565,13 @@ export function EnemyLibraryDialog({
       personality: template.personality,
       max_hp: template.max_hp,
       armor: template.armor,
+      armor_mode: template.armor_mode === 'unset'
+        ? (template.armor_item_ids.length || template.armor_item_id
+          ? 'equipment'
+          : template.armor > 0 && template.armor <= 5
+            ? 'natural'
+            : 'unset')
+        : template.armor_mode,
       magical_resistance: template.magical_resistance,
       attack_dc: template.attack_dc,
       defense_dc: template.defense_dc,
@@ -861,6 +892,7 @@ export function EnemyLibraryDialog({
                   ['dual_wield', 'Dual wield'],
                   ['two_handed', 'Two-handed'],
                   ['natural', 'Natural attack'],
+                  ['unarmed', 'Unarmed'],
                 ] as const).map(([id, label]) => (
                   <label key={id}>
                     <input
@@ -1158,8 +1190,48 @@ export function EnemyLibraryDialog({
               {equipmentTab === 'armor' && (
                 <div className="enemy-tab-single">
                   <p className="enemy-section-help">
-                    Armor is chosen independently when the enemy spawns. Select armor across several DR values to create variation.
+                    Choose how this enemy is protected. Natural armor provides innate DR without an item.
                   </p>
+                  <label className="dialog-label">
+                    Armor type
+                    <NativeSelect
+                      value={draft.armor_mode}
+                      onChange={(event) => {
+                        const mode = event.target.value as EnemyTemplateDraft['armor_mode'];
+                        setDraft((current) => ({
+                          ...current,
+                          armor_mode: mode,
+                          armor: mode === 'natural' ? Math.max(1, Math.min(5, current.armor || 1)) : 0,
+                          armor_item_ids: mode === 'equipment' ? current.armor_item_ids : [],
+                        }));
+                      }}
+                    >
+                      <NativeSelectOption value="unset">Choose armor type…</NativeSelectOption>
+                      <NativeSelectOption value="equipment">Equipment armor</NativeSelectOption>
+                      <NativeSelectOption value="natural">Natural armor</NativeSelectOption>
+                      <NativeSelectOption value="unarmored">Unarmored (DR 0)</NativeSelectOption>
+                    </NativeSelect>
+                  </label>
+                  {draft.armor_mode === 'natural' && (
+                    <label className="dialog-label">
+                      Natural armor
+                      <NativeSelect
+                        value={String(draft.armor)}
+                        onChange={(event) => update('armor', Number(event.target.value))}
+                      >
+                        {[1, 2, 3, 4, 5].map((dr) => (
+                          <NativeSelectOption key={dr} value={String(dr)}>DR {dr}</NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </label>
+                  )}
+                  {draft.armor_mode === 'unarmored' && (
+                    <p className="enemy-section-help">This enemy receives no armor damage reduction.</p>
+                  )}
+                  {draft.armor_mode === 'unset' && (
+                    <p className="enemy-equipment-warning" role="alert">Select an armor type before saving.</p>
+                  )}
+                  {draft.armor_mode === 'equipment' && (
                   <div className="enemy-pool-card">
                     <div className="enemy-pool-card__heading">
                       <h4>Armor pool</h4>
@@ -1202,6 +1274,7 @@ export function EnemyLibraryDialog({
                       onChange={(value) => update('armor_item_ids', value)}
                     />
                   </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1214,6 +1287,12 @@ export function EnemyLibraryDialog({
           </EnemyEditorSection>
         </div>
 
+        {equipmentWarnings.length > 0 && (
+          <div className="enemy-equipment-warning" role="alert">
+            <strong>Incomplete enemy equipment</strong>
+            {equipmentWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+          </div>
+        )}
         <DialogFooter className="enemy-library-footer">
           {editingTemplate && (
             <Button
@@ -1235,12 +1314,13 @@ export function EnemyLibraryDialog({
               || !draft.typical_behaviour.trim()
               || invalidNumber
               || invalidPositive
-              || (rangedEnabled && draft.ranged_weapon_ids.length === 0)
+              || equipmentWarnings.length > 0
             }
             onClick={async () => {
               const record: EnemyTemplateDraft = {
                 ...draft,
                 armor_reduction_filter: null,
+                armor_item_ids: draft.armor_mode === 'equipment' ? draft.armor_item_ids : [],
                 ranged_weapon_ids: rangedEnabled ? draft.ranged_weapon_ids : [],
                 ranged_damage_filter: rangedEnabled ? draft.ranged_damage_filter : null,
               };

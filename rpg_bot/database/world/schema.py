@@ -88,6 +88,7 @@ class DatabaseWorldSchemaMixin:
                 ranged_damage_filter TEXT,
                 natural_attacks TEXT NOT NULL DEFAULT '[]',
                 armor_reduction_filter INTEGER,
+                armor_mode TEXT NOT NULL DEFAULT 'unset',
                 dual_wield INTEGER NOT NULL DEFAULT 0,
                 allowed_races TEXT NOT NULL DEFAULT '[]',
                 melee_loadouts TEXT NOT NULL DEFAULT '[]',
@@ -216,6 +217,10 @@ class DatabaseWorldSchemaMixin:
             for row in connection.execute("PRAGMA table_info(enemy_templates)")
         }
         enemy_template_migrations = {
+            "armor_mode": (
+                "ALTER TABLE enemy_templates ADD COLUMN armor_mode "
+                "TEXT NOT NULL DEFAULT 'unset'"
+            ),
             "lineage": (
                 "ALTER TABLE enemy_templates ADD COLUMN lineage "
                 "TEXT NOT NULL DEFAULT 'Other'"

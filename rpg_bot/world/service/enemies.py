@@ -113,7 +113,7 @@ def place_enemy(
             feasible_melee_loadouts.append("two_handed")
         if template.natural_attacks:
             feasible_melee_loadouts.append("natural")
-        if not feasible_melee_loadouts:
+        if not feasible_melee_loadouts and not ranged_pool and not template.spell_names:
             feasible_melee_loadouts.append("unarmed")
     else:
         feasible_melee_loadouts = requested_loadouts
@@ -203,7 +203,7 @@ def place_enemy(
     if template.armor_item_id is not None:
         if template.armor_item_id not in armor_pool:
             armor_pool.append(template.armor_item_id)
-    armor_item_id = random.choice(armor_pool) if armor_pool else None
+    armor_item_id = random.choice(armor_pool) if armor_pool and template.armor_mode not in {"natural", "unarmored"} else None
 
     enemy = service.database.create_enemy_instance(
         room_id,
@@ -455,6 +455,19 @@ def validate_enemy_equipment_template(
                 "Natural loadout requires at least one natural attack."
             )
 
+    if template.armor_mode == "equipment" and not armor_ids:
+        raise ValueError("Equipment armor requires at least one armor pool item.")
+    if template.armor_mode in {"natural", "unarmored"} and armor_ids:
+        raise ValueError("Natural or no armor cannot be combined with equipment armor.")
+    # Old templates retain their previous implicit equipment behavior.
+    # Explicitly configured enemies must have a valid melee option.
+    if template.armor_mode != "unset":
+        if not template.melee_loadouts:
+            raise ValueError("Choose a melee loadout before saving.")
+        has_weapon = bool(melee_ids)
+        if any(style in {"one_handed", "shield", "dual_wield", "two_handed"}
+               for style in template.melee_loadouts) and not has_weapon:
+            raise ValueError("Melee weapon pool is required for weapon loadouts.")
     race_pool = template.allowed_races or (template.race,)
     if any(not race.strip() for race in race_pool):
         raise ValueError("Enemy allowed races must be non-empty.")

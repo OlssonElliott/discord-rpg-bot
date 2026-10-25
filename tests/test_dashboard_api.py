@@ -2114,3 +2114,64 @@ class DashboardAPITests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_explicit_enemy_armor_modes_and_loadouts_are_validated(self) -> None:
+        def create(enemy_id, **options):
+            return self.api.handle(
+                "POST",
+                "/api/enemy-templates",
+                {
+                    "id": enemy_id,
+                    "name": enemy_id,
+                    "melee_loadouts": ["unarmed"],
+                    **options,
+                },
+            )
+
+        for dr in (1, 3, 5):
+            status, payload = create(
+                f"natural_dr_{dr}", armor_mode="natural", armor=dr,
+            )
+            self.assertEqual(status, 201)
+            self.assertEqual(payload["armor_mode"], "natural")
+            self.assertEqual(payload["armor"], dr)
+            self.assertEqual(
+                self.database.get_enemy_template(payload["id"]).armor_mode,
+                "natural",
+            )
+
+        for dr in (0, 6):
+            status, payload = create(
+                f"invalid_natural_dr_{dr}", armor_mode="natural", armor=dr,
+            )
+            self.assertEqual(status, 400)
+            self.assertIn("DR 1", payload["error"])
+
+        status, payload = create("unarmored_enemy", armor_mode="unarmored", armor=0)
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["armor_mode"], "unarmored")
+
+        status, payload = create("missing_armor", armor_mode="equipment")
+        self.assertEqual(status, 400)
+        self.assertIn("armor pool", payload["error"])
+
+        status, payload = create(
+            "missing_melee", armor_mode="unarmored", melee_loadouts=[],
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("melee loadout", payload["error"])
+
+        status, payload = create(
+            "missing_weapon",
+            armor_mode="unarmored",
+            melee_loadouts=["one_handed"],
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("one-handed melee weapon", payload["error"])
+
+        status, payload = create(
+            "mixed_armor", armor_mode="natural", armor=2,
+            armor_item_ids=["anything"],
+        )
+        self.assertEqual(status, 400)
