@@ -334,6 +334,7 @@ export function EnemyLibraryDialog({
   onDelete: (template: EnemyTemplateData) => Promise<boolean>;
 }) {
   const [editingId, setEditingId] = useState<string | undefined>();
+  const [isCreating, setIsCreating] = useState(false);
   const [draft, setDraft] = useState<EnemyTemplateDraft>(
     () => emptyEnemyTemplateDraft(),
   );
@@ -487,11 +488,13 @@ export function EnemyLibraryDialog({
     key: K,
     value: EnemyTemplateDraft[K],
   ) {
+    if (!editingId) setIsCreating(true);
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  function editTemplate(template?: EnemyTemplateData) {
+  function editTemplate(template?: EnemyTemplateData, startNew = false) {
     setEditingId(template?.id);
+    setIsCreating(startNew);
     if (!template) {
       setDraft(emptyEnemyTemplateDraft());
       setNaturalAttackPreset('bite');
@@ -634,6 +637,7 @@ export function EnemyLibraryDialog({
   function applyAttributePreset(name: string) {
     if (name === 'Custom') return;
     const preset = ATTRIBUTE_PRESETS[name as keyof typeof ATTRIBUTE_PRESETS];
+    if (!editingId) setIsCreating(true);
     setDraft((current) => ({ ...current, ...preset }));
   }
 
@@ -657,7 +661,7 @@ export function EnemyLibraryDialog({
           <div className="catalog-count">
             {filteredTemplates.length} of {templates.length} enemy types
           </div>
-          <button type="button" onClick={() => editTemplate()}>
+          <button type="button" onClick={() => editTemplate(undefined, true)}>
             New enemy
           </button>
         </div>
@@ -917,6 +921,7 @@ export function EnemyLibraryDialog({
                     onChange={(event) => {
                       const enabled = event.target.checked;
                       setRangedEnabled(enabled);
+                      if (!editingId) setIsCreating(true);
                       if (enabled) {
                         setEquipmentTab('ranged');
                       } else {
@@ -1198,6 +1203,7 @@ export function EnemyLibraryDialog({
                       value={draft.armor_mode}
                       onChange={(event) => {
                         const mode = event.target.value as EnemyTemplateDraft['armor_mode'];
+                        if (!editingId) setIsCreating(true);
                         setDraft((current) => ({
                           ...current,
                           armor_mode: mode,
@@ -1287,7 +1293,7 @@ export function EnemyLibraryDialog({
           </EnemyEditorSection>
         </div>
 
-        {equipmentWarnings.length > 0 && (
+        {(editingId !== undefined || isCreating) && equipmentWarnings.length > 0 && (
           <div className="enemy-equipment-warning" role="alert">
             <strong>Incomplete enemy equipment</strong>
             {equipmentWarnings.map((warning) => <p key={warning}>{warning}</p>)}
