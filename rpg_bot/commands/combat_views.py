@@ -1,5 +1,8 @@
 """Discord combat controls backed exclusively by the shared CombatService."""
 
+import asyncio
+import logging
+
 import discord
 
 from dataclasses import dataclass
@@ -8,11 +11,12 @@ from ..combat.models import (
     CombatScene,
     CombatantKind,
     CombatantState,
-    CoverLevel,
     LandmarkRelation,
 )
 from ..combat.navigation import movement_legs
 from ..combat.service import CombatError
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -46,18 +50,9 @@ def move_destinations(
         if cost > 0 and actor.movement_remaining <= 0:
             continue
 
-        for relation in (
-            (LandmarkRelation.AT, LandmarkRelation.BEHIND)
-            if landmark.cover is not CoverLevel.NONE
-            else (LandmarkRelation.AT,)
-        ):
-            if (cost == 0 and not actor.is_between_landmarks
-                    and actor.landmark_id == landmark.id
-                    and actor.relation is relation):
-                continue
-            destinations.append(
-                MoveDestination(landmark.id, landmark.name, relation, cost)
-            )
+        if not actor.is_between_landmarks and actor.landmark_id == landmark.id:
+            continue
+        destinations.append(MoveDestination(landmark.id, landmark.name, LandmarkRelation.AT, cost))
     return sorted(
         destinations,
         key=lambda destination: (
@@ -135,17 +130,22 @@ class CombatActionView(discord.ui.View):
 
     @discord.ui.button(label="Move", style=discord.ButtonStyle.secondary)
     async def move(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         try:
-            scene, actor = self._check(interaction)
-            options = move_destinations(scene, actor)
+            scene, actor = await asyncio.to_thread(self._check, interaction)
+            options = await asyncio.to_thread(move_destinations, scene, actor)
             if not options:
                 raise CombatError("No locations can be reached with your remaining movement.")
         except (CombatError, ValueError) as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        except Exception:
+            LOGGER.exception("Could not open combat movement menu")
+            await interaction.followup.send("Could not open Move. Check bot logs.", ephemeral=True)
             return
 
         view = CombatMoveView(self.cog, self.scene_id, self.character_id, options)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=view.prompt(scene, actor), view=view,
         )
 
@@ -225,18 +225,20 @@ class CombatMoveSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         view = self.move_view
         try:
-            scene, actor = view._check(interaction)
+            scene, actor = await asyncio.to_thread(view._check, interaction)
             destination = view.destinations[int(self.values[0])]
             # The scene may have changed in the DM dashboard since this
             # menu was displayed. Recompute availability before mutating.
-            allowed = move_destinations(scene, actor)
+            allowed = await asyncio.to_thread(move_destinations, scene, actor)
             if destination not in allowed:
                 raise CombatError(
                     "That destination is no longer reachable. Open Move again."
                 )
-            updated = view.cog.service.move_combatant_toward(
+            updated = await asyncio.to_thread(
+                view.cog.service.move_combatant_toward,
                 interaction.guild_id,
                 CombatantKind.CHARACTER,
                 view.character_id,
@@ -244,7 +246,11 @@ class CombatMoveSelect(discord.ui.Select):
                 destination.relation,
             )
         except (CombatError, ValueError, IndexError) as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        except Exception:
+            LOGGER.exception("Move failed")
+            await interaction.followup.send("Movement failed. Check bot logs.", ephemeral=True)
             return
 
         moved = updated.current_combatant()
@@ -260,7 +266,7 @@ class CombatMoveSelect(discord.ui.Select):
         else:
             location = updated.landmark(moved.landmark_id)
             where = f"{moved.relation.value} {location.name if location else moved.landmark_id}"
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=(
                 f"{moved.name} moved {where}. "
                 f"Movement remaining: {moved.movement_remaining}."
@@ -329,24 +335,25 @@ class CombatMovePageButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         try:
-            scene, actor = self.move_view._check(interaction)
+            scene, actor = await asyncio.to_thread(self.move_view._check, interaction)
         except (CombatError, ValueError) as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
+            await interaction.followup.send(str(error), ephemeral=True)
             return
         view = CombatMoveView(
             self.move_view.cog,
             self.move_view.scene_id,
             self.move_view.character_id,
-            move_destinations(scene, actor),
+            await asyncio.to_thread(move_destinations, scene, actor),
             page=self.move_view.page + self.direction,
         )
         if not (0 <= view.page * 25 < len(view.destinations)):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "These locations are no longer available. Open Move again.",
                 ephemeral=True,
             )
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=view.prompt(scene, actor), view=view,
         )
