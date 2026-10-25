@@ -110,10 +110,12 @@ class CombatTargetSelect(discord.ui.Select):
         await self.target_view.cog._publish_scene(interaction.guild, scene)
 
 
-class CombatTargetView(CombatActionView):
+class CombatTargetView(discord.ui.View):
     def __init__(self, cog, scene_id, character_id, options):
-        discord.ui.View.__init__(self, timeout=180)
+        super().__init__(timeout=180)
         self.cog = cog
         self.scene_id = scene_id
         self.character_id = character_id
         self.add_item(CombatTargetSelect(self, options))
+
+    _check = CombatActionView._check
