@@ -657,6 +657,7 @@ export function EnemyLibraryDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <div className="enemy-library-body">
         <div className="catalog-heading">
           <div className="catalog-count">
             {filteredTemplates.length} of {templates.length} enemy types
@@ -1299,6 +1300,7 @@ export function EnemyLibraryDialog({
             {equipmentWarnings.map((warning) => <p key={warning}>{warning}</p>)}
           </div>
         )}
+        </div>
         <DialogFooter className="enemy-library-footer">
           {editingTemplate && (
             <Button
