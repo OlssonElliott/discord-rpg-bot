@@ -10,6 +10,8 @@ from ..app.checks import dm_only
 from ..combat import CombatScene
 from ..combat.service import CombatError, CombatService
 from ..database import Database
+from ..discord_support.combat_messages import CombatMessageStore
+from .combat_views import CombatActionView
 from ..world.service import WorldService
 
 
@@ -74,6 +76,15 @@ def combat_scene_embed(scene: CombatScene, room_name: str) -> discord.Embed:
         value=_field_text(route_lines, "Not arranged yet."),
         inline=False,
     )
+    active = scene.current_combatant()
+    order = [
+        f"{'▶ ' if active is not None and actor.kind == active.kind and actor.source_id == active.source_id else ''}"
+        f"{actor.name} ({actor.initiative_score})"
+        for actor in scene.initiative_order()
+    ]
+    embed.add_field(name=f"Round {scene.round_number} · Initiative", value=_field_text(order, "No combatants"), inline=False)
+    if active is not None:
+        embed.description = f"Current turn: **{active.name}** · Use the Actions button below."
     embed.set_footer(text=f"Scene #{scene.id} · room {scene.room_id}")
     return embed
 
@@ -121,6 +132,7 @@ class CombatCommands(commands.Cog):
         self.service = CombatService(self.database)
         self.world = WorldService(self.database)
         self._scene_messages: dict[int, discord.Message] = {}
+        self.message_store = CombatMessageStore(self.database.path)
         self._last_scenes: dict[int, CombatScene] = {}
         self.sync_dashboard_combat.start()
 
@@ -141,9 +153,18 @@ class CombatCommands(commands.Cog):
         room_name = room.name if room is not None else scene.room_id
         embed = combat_scene_embed(scene, room_name)
         message = self._scene_messages.get(guild.id)
+        saved = self.message_store.get(guild.id)
+        if message is None and saved is not None and saved.scene_id == scene.id:
+            try:
+                saved_channel = guild.get_channel(saved.channel_id)
+                if saved_channel is not None:
+                    message = await saved_channel.fetch_message(saved.message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                message = None
         if message is not None:
             try:
-                await message.edit(embed=embed)
+                await message.edit(embed=embed, view=CombatOpenView(self, scene.id))
+                self._scene_messages[guild.id] = message
                 self._last_scenes[guild.id] = scene
                 return channel
             except discord.NotFound:
@@ -155,7 +176,9 @@ class CombatCommands(commands.Cog):
                 )
                 return channel
         try:
-            self._scene_messages[guild.id] = await channel.send(embed=embed)
+            self._scene_messages[guild.id] = await channel.send(embed=embed, view=CombatOpenView(self, scene.id))
+            sent = self._scene_messages[guild.id]
+            self.message_store.save(guild.id, scene.id, channel.id, sent.id)
             self._last_scenes[guild.id] = scene
         except discord.HTTPException:
             LOGGER.exception(
@@ -176,9 +199,18 @@ class CombatCommands(commands.Cog):
             colour=discord.Colour.from_rgb(91, 78, 59),
         )
         message = self._scene_messages.pop(guild.id, None)
+        saved = self.message_store.get(guild.id)
+        if message is None and saved is not None:
+            try:
+                old_channel = guild.get_channel(saved.channel_id)
+                if old_channel is not None:
+                    message = await old_channel.fetch_message(saved.message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                message = None
+        self.message_store.clear(guild.id)
         if message is not None:
             try:
-                await message.edit(embed=embed)
+                await message.edit(embed=embed, view=None)
             except discord.HTTPException:
                 LOGGER.exception(
                     "Could not close combat scene message in guild %s",
@@ -205,7 +237,7 @@ class CombatCommands(commands.Cog):
                 if previous is not None:
                     await self._publish_ended(guild, previous)
                 continue
-            if previous != scene:
+            if previous != scene or guild.id not in self._scene_messages:
                 await self._publish_scene(guild, scene)
 
     @sync_dashboard_combat.before_loop
@@ -321,6 +353,35 @@ class CombatCommands(commands.Cog):
         else:
             confirmation = "Combat ended."
         await interaction.response.send_message(confirmation, ephemeral=True)
+
+
+class CombatOpenView(discord.ui.View):
+    """Public button opening an owner-validated ephemeral turn menu."""
+
+    def __init__(self, cog: CombatCommands, scene_id: int) -> None:
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.scene_id = scene_id
+
+    @discord.ui.button(label="Actions", style=discord.ButtonStyle.primary, custom_id="rpg:combat:actions")
+    async def actions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        scene = self.cog.service.current(interaction.guild_id)
+        if scene is None or scene.id != self.scene_id:
+            await interaction.response.send_message("That encounter has ended.", ephemeral=True)
+            return
+        actor = scene.current_combatant()
+        if actor is None or actor.kind.value != "character":
+            await interaction.response.send_message("It is not a player character's turn.", ephemeral=True)
+            return
+        character = self.cog.database.get_character(interaction.user.id)
+        if character is None or str(character.character_id) != actor.source_id:
+            await interaction.response.send_message("It is not your character's turn.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Round {scene.round_number} · {actor.name}'s turn",
+            view=CombatActionView(self.cog, scene.id, actor.source_id),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
