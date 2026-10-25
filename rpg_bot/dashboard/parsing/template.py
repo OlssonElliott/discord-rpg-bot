@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...world.enemies import EnemyTemplate
+from ...world.enemies import EnemyNaturalAttack, EnemyTemplate
 from ...inventory import ItemType, WeaponGrip
 from .request import (
     parse_boolean,
@@ -38,6 +38,52 @@ def enemy_template_from_body(
             return parse_optional_text(body, field)
         return default
 
+    def natural_attacks_value() -> tuple[EnemyNaturalAttack, ...]:
+        if "natural_attacks" not in body:
+            return current.natural_attacks if current is not None else ()
+        value = body["natural_attacks"]
+        if not isinstance(value, list):
+            raise ValueError("'natural_attacks' must be a list.")
+        attacks: list[EnemyNaturalAttack] = []
+        for record in value:
+            if not isinstance(record, dict):
+                raise ValueError("Natural attacks must be objects.")
+            name = record.get("name")
+            damage = record.get("damage")
+            damage_type = record.get("damage_type", "physical")
+            attack_range = record.get("range", 0)
+            if (
+                not isinstance(name, str)
+                or not isinstance(damage, str)
+                or not isinstance(damage_type, str)
+                or isinstance(attack_range, bool)
+                or not isinstance(attack_range, int)
+            ):
+                raise ValueError("Natural attack fields are invalid.")
+            attacks.append(
+                EnemyNaturalAttack(
+                    name=name.strip(),
+                    damage=damage.strip(),
+                    damage_type=damage_type.strip(),
+                    range=attack_range,
+                )
+            )
+        return tuple(attacks)
+
+    def list_value(
+        field: str,
+        default: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if field not in body:
+            return default
+        value = body[field]
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip()
+            for item in value
+        ):
+            raise ValueError(f"'{field}' must be a list of text values.")
+        return tuple(dict.fromkeys(item.strip() for item in value))
+
     return EnemyTemplate(
         template_id=template_id or parse_text(body, "id"),
         name=(
@@ -52,6 +98,10 @@ def enemy_template_from_body(
         race=text_value(
             "race",
             current.race if current is not None else "Unknown",
+        ),
+        lineage=text_value(
+            "lineage",
+            current.lineage if current is not None else "Other",
         ),
         difficulty_level=parse_integer(
             body,
@@ -145,6 +195,68 @@ def enemy_template_from_body(
             "armor_item_id",
             current.armor_item_id if current is not None else None,
         ),
+        melee_weapon_ids=list_value(
+            "melee_weapon_ids",
+            current.melee_weapon_ids if current is not None else (),
+        ),
+        ranged_weapon_ids=list_value(
+            "ranged_weapon_ids",
+            current.ranged_weapon_ids if current is not None else (),
+        ),
+        off_hand_item_ids=list_value(
+            "off_hand_item_ids",
+            current.off_hand_item_ids if current is not None else (),
+        ),
+        armor_item_ids=list_value(
+            "armor_item_ids",
+            current.armor_item_ids if current is not None else (),
+        ),
+        spell_names=list_value(
+            "spell_names",
+            current.spell_names if current is not None else (),
+        ),
+        spell_range=parse_integer(
+            body,
+            "spell_range",
+            default=current.spell_range if current is not None else 3,
+        ),
+        melee_damage_filter=optional_value(
+            "melee_damage_filter",
+            current.melee_damage_filter if current is not None else None,
+        ),
+        ranged_damage_filter=optional_value(
+            "ranged_damage_filter",
+            current.ranged_damage_filter if current is not None else None,
+        ),
+        natural_attacks=natural_attacks_value(),
+        armor_reduction_filter=(
+            (
+                parse_integer(body, "armor_reduction_filter")
+                if body["armor_reduction_filter"] is not None
+                else None
+            )
+            if "armor_reduction_filter" in body
+            else current.armor_reduction_filter
+            if current is not None
+            else None
+        ),
+        dual_wield=parse_boolean(
+            body,
+            "dual_wield",
+            default=current.dual_wield if current is not None else False,
+        ),
+        allowed_races=list_value(
+            "allowed_races",
+            current.allowed_races if current is not None else (),
+        ),
+        melee_loadouts=list_value(
+            "melee_loadouts",
+            current.melee_loadouts if current is not None else (),
+        ),
+        shield_item_ids=list_value(
+            "shield_item_ids",
+            current.shield_item_ids if current is not None else (),
+        ),
     )
 
 
@@ -218,9 +330,17 @@ def item_record(
             "damage",
             default=1,
         )
+        weapon_range = parse_integer(
+            body,
+            "range",
+            default=0,
+        )
+        if weapon_range < 0:
+            raise ValueError("Weapon range cannot be negative.")
         record.update(
             grip=grip.value,
             durability=durability,
+            range=weapon_range,
             damage_parts=[
                 {
                     "amount": damage,
@@ -253,6 +373,11 @@ def item_record(
             dodge_penalty=parse_integer(
                 body,
                 "dodge_penalty",
+                default=0,
+            ),
+            defense_bonus=parse_integer(
+                body,
+                "defense_bonus",
                 default=0,
             ),
             strength_requirement=strength_requirement or None,

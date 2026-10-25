@@ -69,14 +69,46 @@ def handle_combat_request(
         )
         return 201, _combat_state_data(scene, api.world)
 
-    match = re.fullmatch(r"/api/combat/landmarks/([^/]+)", path)
-    if match and method == "PATCH":
-        scene = api.combat.set_landmark_position(
+    match = re.fullmatch(r"/api/combat/landmarks/([^/]+)/auto-connect", path)
+    if match and method == "POST":
+        scene = api.combat.auto_connect_landmark(
             _combat_guild_id(api),
             match.group(1),
-            parse_number(body, "x"),
-            parse_number(body, "y"),
         )
+        return 200, _combat_state_data(scene, api.world)
+
+    match = re.fullmatch(r"/api/combat/landmarks/([^/]+)/routes", path)
+    if match and method == "DELETE":
+        scene = api.combat.disconnect_landmark_routes(
+            _combat_guild_id(api),
+            match.group(1),
+        )
+        return 200, _combat_state_data(scene, api.world)
+
+    match = re.fullmatch(r"/api/combat/landmarks/([^/]+)", path)
+    if match and method == "PATCH":
+        guild_id = _combat_guild_id(api)
+        landmark_id = match.group(1)
+        scene = None
+        if "x" in body or "y" in body:
+            if "x" not in body or "y" not in body:
+                raise ValueError("Both 'x' and 'y' are required to move a landmark.")
+            scene = api.combat.set_landmark_position(
+                guild_id,
+                landmark_id,
+                parse_number(body, "x"),
+                parse_number(body, "y"),
+            )
+        if "cover" in body:
+            scene = api.combat.set_landmark_cover(
+                guild_id,
+                landmark_id,
+                parse_text(body, "cover"),
+            )
+        if scene is None:
+            raise ValueError(
+                "Landmark PATCH requires position or cover."
+            )
         return 200, _combat_state_data(scene, api.world)
     if match and method == "DELETE":
         scene = api.combat.remove_landmark(
@@ -85,14 +117,22 @@ def handle_combat_request(
         )
         return 200, _combat_state_data(scene, api.world)
 
+    if path == "/api/combat/routes/auto-connect" and method == "POST":
+        scene = api.combat.auto_connect_all(_combat_guild_id(api))
+        return 200, _combat_state_data(scene, api.world)
+
+    if path == "/api/combat/routes/all" and method == "DELETE":
+        scene = api.combat.disconnect_all_routes(_combat_guild_id(api))
+        return 200, _combat_state_data(scene, api.world)
+
     if path == "/api/combat/routes" and method == "PUT":
         scene = api.combat.connect_landmarks(
             _combat_guild_id(api),
             parse_text(body, "source_landmark_id"),
             parse_text(body, "destination_landmark_id"),
             parse_text(body, "distance"),
-            obstacle=parse_optional_text(body, "obstacle"),
-            blocked=parse_boolean(body, "blocked", default=False),
+            terrain=parse_text(body, "terrain"),
+            base_blocked=parse_boolean(body, "base_blocked", default=False),
         )
         return 200, _combat_state_data(scene, api.world)
     if path == "/api/combat/routes" and method == "DELETE":
@@ -109,6 +149,7 @@ def handle_combat_request(
             parse_text(body, "template_id"),
             landmark_id=parse_optional_text(body, "landmark_id"),
             quantity=parse_integer(body, "quantity", default=1),
+            combat_role=parse_optional_text(body, "combat_role"),
         )
         return 201, _combat_state_data(scene, api.world)
 
@@ -175,6 +216,21 @@ def handle_combat_request(
             }
         return 200, data
 
+    if path == "/api/combat/actions/dash" and method == "POST":
+        scene = api.combat.dash(_combat_guild_id(api))
+        return 200, _combat_state_data(scene, api.world)
+
+    if path == "/api/combat/actions/defend" and method == "POST":
+        scene = api.combat.defend(_combat_guild_id(api))
+        return 200, _combat_state_data(scene, api.world)
+
+    if path == "/api/combat/actions/use-item" and method == "POST":
+        scene = api.combat.use_item(
+            _combat_guild_id(api),
+            parse_text(body, "item_instance_id"),
+        )
+        return 200, _combat_state_data(scene, api.world)
+
     if path == "/api/combat/actions/attack" and method == "POST":
         scene, result = api.combat.attack_enemy(
             _combat_guild_id(api),
@@ -192,6 +248,23 @@ def handle_combat_request(
         payload = _combat_state_data(scene, api.world)
         payload["enemy_attack_result"] = _enemy_attack_result_data(result)
         return 200, payload
+
+    combatant_movement_match = re.fullmatch(
+        r"/api/combat/movement/(character|enemy)/([^/]+)/toward/(character|enemy)/([^/]+)",
+        path,
+    )
+    if combatant_movement_match and method == "PATCH":
+        kind, source_id, target_kind, target_source_id = (
+            combatant_movement_match.groups()
+        )
+        scene = api.combat.move_combatant_toward_combatant(
+            _combat_guild_id(api),
+            kind,
+            source_id,
+            target_kind,
+            target_source_id,
+        )
+        return 200, _combat_state_data(scene, api.world)
 
     movement_match = re.fullmatch(
         r"/api/combat/movement/(character|enemy)/([^/]+)",

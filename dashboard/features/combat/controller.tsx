@@ -54,6 +54,34 @@ export function CombatWorkspaceController({
         },
         'Landmark position saved',
       )}
+      onSetLandmarkCover={(landmarkId, cover) => updateCombat(
+        `/combat/landmarks/${landmarkId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ cover }),
+        },
+        'Landmark cover updated',
+      )}
+      onAutoConnectLandmark={(landmarkId) => updateCombat(
+        `/combat/landmarks/${landmarkId}/auto-connect`,
+        { method: 'POST' },
+        'Landmark auto-connected',
+      )}
+      onDisconnectLandmarkRoutes={(landmarkId) => updateCombat(
+        `/combat/landmarks/${landmarkId}/routes`,
+        { method: 'DELETE' },
+        'Landmark connections removed',
+      )}
+      onAutoConnectAll={() => updateCombat(
+        '/combat/routes/auto-connect',
+        { method: 'POST' },
+        'Connections auto-created',
+      )}
+      onDisconnectAllRoutes={() => updateCombat(
+        '/combat/routes/all',
+        { method: 'DELETE' },
+        'All combat connections removed',
+      )}
       onMoveCombatant={(combatant, landmarkId, relation) => updateCombat(
         `/combat/movement/${combatant.kind}/${combatant.source_id}`,
         {
@@ -62,7 +90,12 @@ export function CombatWorkspaceController({
         },
         `${combatant.name} moved`,
       )}
-      onAddEnemy={(templateId, landmarkId, quantity) => updateCombat(
+      onMoveTowardCombatant={(combatant, target) => updateCombat(
+        `/combat/movement/${combatant.kind}/${combatant.source_id}/toward/${target.kind}/${target.source_id}`,
+        { method: 'PATCH' },
+        `${combatant.name} moved toward ${target.name}`,
+      )}
+      onAddEnemy={(templateId, landmarkId, quantity, combatRole) => updateCombat(
         '/combat/enemies',
         {
           method: 'POST',
@@ -70,6 +103,7 @@ export function CombatWorkspaceController({
             template_id: templateId,
             landmark_id: landmarkId,
             quantity,
+            combat_role: combatRole,
           }),
         },
         `${quantity} enem${quantity === 1 ? 'y' : 'ies'} added`,
@@ -78,6 +112,24 @@ export function CombatWorkspaceController({
         `/combat/combatants/enemy/${enemyId}`,
         { method: 'DELETE' },
         'Enemy removed from combat',
+      )}
+      onDefend={() => updateCombat(
+        '/combat/actions/defend',
+        { method: 'POST' },
+        'Defend prepared',
+      )}
+      onDash={() => updateCombat(
+        '/combat/actions/dash',
+        { method: 'POST' },
+        'Dash used',
+      )}
+      onUseItem={(itemInstanceId) => updateCombat(
+        '/combat/actions/use-item',
+        {
+          method: 'POST',
+          body: JSON.stringify({ item_instance_id: itemInstanceId }),
+        },
+        'Item used',
       )}
       onAttack={(attacker, targetId) => updateCombat(
         attacker.kind === 'character'
@@ -111,7 +163,7 @@ export function CombatWorkspaceController({
         },
         `${combatant.name}'s initiative updated`,
       )}
-      onConnectLandmarks={(sourceId, destinationId, distance, obstacle, blocked) => updateCombat(
+      onConnectLandmarks={(sourceId, destinationId, distance, terrain, baseBlocked) => updateCombat(
         '/combat/routes',
         {
           method: 'PUT',
@@ -119,8 +171,8 @@ export function CombatWorkspaceController({
             source_landmark_id: sourceId,
             destination_landmark_id: destinationId,
             distance,
-            obstacle,
-            blocked,
+            terrain,
+            base_blocked: baseBlocked,
           }),
         },
         'Combat connection saved',

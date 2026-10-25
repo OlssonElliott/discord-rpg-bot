@@ -12,10 +12,48 @@ from .models import (
     DamageRoll,
     EnemyAttackResult,
 )
-from .navigation import same_combat_position
+from .navigation import same_combat_position, tactical_distance
 from ..inventory import DamagePart
 from ..characters.models import CharacterCombatStatus
 from ..world.enemies import EnemyStatus
+
+
+def _item_damage_expression(item) -> str:
+    return " + ".join(
+        f"1d{part.amount}"
+        for part in item.damage_parts
+    ) or "1d1"
+
+
+def _enemy_attack_dc(template, enemy) -> int:
+    if enemy.combat_role.value == "ranged":
+        modifier = template.dexterity
+    elif enemy.combat_role.value == "spellcaster":
+        modifier = template.arcana
+    else:
+        modifier = template.strength
+    return max(1, 10 + modifier)
+
+
+def _enemy_defense_dc(world, template, enemy) -> int:
+    armor_penalty = 0
+    shield_bonus = 0
+    if enemy.armor_item_id is not None:
+        try:
+            armor = world.catalog.get(enemy.armor_item_id)
+            armor_penalty = armor.dodge_penalty
+        except ValueError:
+            armor_penalty = 0
+    if enemy.off_hand_item_id is not None:
+        try:
+            offhand = world.catalog.get(enemy.off_hand_item_id)
+            shield_bonus = offhand.defense_bonus
+        except ValueError:
+            shield_bonus = 0
+    return max(
+        1,
+        10 + template.dexterity + armor_penalty + shield_bonus,
+    )
 
 
 class CombatAttackMixin:
@@ -52,11 +90,6 @@ class CombatAttackMixin:
             raise CombatError(
                 f"Enemy '{target_enemy_id}' is not in the active combat."
             )
-        if not same_combat_position(attacker, target):
-            raise CombatError(
-                f"{target.name} is not within melee range of {attacker.name}."
-            )
-
         enemy = self.world.get_enemy(target_enemy_id)
         if enemy is None:
             raise CombatError(
@@ -89,6 +122,25 @@ class CombatAttackMixin:
 
         weapon = self._equipped_attack_weapon(character_id)
         weapon_name = weapon.name if weapon is not None else "Unarmed"
+        weapon_range = weapon.range if weapon is not None else 0
+        if weapon_range <= 0:
+            if not same_combat_position(attacker, target):
+                raise CombatError(
+                    f"{target.name} is not within melee range of "
+                    f"{attacker.name}."
+                )
+        else:
+            distance = tactical_distance(scene, attacker, target)
+            if distance is None:
+                raise CombatError(
+                    f"No clear route reaches {target.name}."
+                )
+            if distance > weapon_range:
+                raise CombatError(
+                    f"{target.name} is out of range "
+                    f"({distance}/{weapon_range})."
+                )
+
         attack_attribute = self._weapon_attack_attribute(weapon)
         attribute_score = self.database.get_character_attribute(
             character_id,
@@ -102,10 +154,15 @@ class CombatAttackMixin:
             disadvantage=recovering,
         )
         attack_total = attack_roll + attack_modifier
+        target_defense_dc = _enemy_defense_dc(
+            self.world,
+            template,
+            enemy,
+        )
         critical = attack_roll == 20
         hit = critical or (
             attack_roll != 1
-            and attack_total >= template.defense_dc
+            and attack_total >= target_defense_dc
         )
 
         damage_rolls: tuple[DamageRoll, ...] = ()
@@ -154,6 +211,13 @@ class CombatAttackMixin:
                 reduction = max(0, template.magical_resistance)
             else:
                 reduction = max(0, template.armor)
+                if enemy.armor_item_id is not None:
+                    try:
+                        armor_item = self.world.catalog.get(enemy.armor_item_id)
+                        if armor_item.protection is not None:
+                            reduction = max(0, armor_item.protection)
+                    except ValueError:
+                        pass
             final_damage = max(1, raw_damage - reduction)
             target_hp = max(0, enemy.current_hp - final_damage)
             updated_enemy = self.world.update_enemy(
@@ -177,7 +241,7 @@ class CombatAttackMixin:
             attack_roll=attack_roll,
             attack_modifier=attack_modifier,
             attack_total=attack_total,
-            defense_dc=template.defense_dc,
+            defense_dc=target_defense_dc,
             hit=hit,
             critical=critical,
             damage_rolls=damage_rolls,
@@ -211,7 +275,7 @@ class CombatAttackMixin:
                     f"{attacker.name} attacked {target.name} with "
                     f"{weapon_name}: {roll_text}"
                     f"{attack_modifier:+d} = {attack_total} vs "
-                    f"Defense {template.defense_dc},"
+                    f"Defense {target_defense_dc},"
                     f"{critical_text} hit for {final_damage} damage "
                     f"({raw_damage} raw, {reduction} "
                     f"{reduction_label} reduction). "
@@ -228,7 +292,7 @@ class CombatAttackMixin:
                     f"{attacker.name} attacked {target.name} with "
                     f"{weapon_name}: {roll_text}"
                     f"{attack_modifier:+d} = {attack_total} vs "
-                    f"Defense {template.defense_dc}, miss."
+                    f"Defense {target_defense_dc}, miss."
                 )
 
             self.repository.append_log(
@@ -292,11 +356,6 @@ class CombatAttackMixin:
             raise CombatError(
                 f"Character '{target_character_id}' is not in the active combat."
             )
-        if not same_combat_position(attacker, target):
-            raise CombatError(
-                f"{target.name} is not within melee range of {attacker.name}."
-            )
-
         enemy = self.world.get_enemy(attacker.source_id)
         if enemy is None:
             raise CombatError(
@@ -311,6 +370,66 @@ class CombatAttackMixin:
             raise CombatError(
                 f"Enemy template '{enemy.template_id}' does not exist."
             )
+
+        enemy_weapon = None
+        if enemy.main_hand_item_id is not None:
+            try:
+                candidate = self.world.catalog.get(
+                    enemy.main_hand_item_id
+                )
+                if candidate.item_type.value == "weapon":
+                    enemy_weapon = candidate
+            except ValueError:
+                enemy_weapon = None
+
+        weapon_range = (
+            template.spell_range
+            if enemy.combat_role.value == "spellcaster"
+            and enemy.selected_spell is not None
+            else enemy_weapon.range
+            if enemy_weapon is not None
+            else enemy.selected_natural_attack.range
+            if enemy.selected_natural_attack is not None
+            else 0
+        )
+        if weapon_range <= 0:
+            if not same_combat_position(attacker, target):
+                raise CombatError(
+                    f"{target.name} is not within melee range of "
+                    f"{attacker.name}."
+                )
+        else:
+            distance = tactical_distance(scene, attacker, target)
+            if distance is None:
+                raise CombatError(
+                    f"No clear route reaches {target.name}."
+                )
+            if distance > weapon_range:
+                raise CombatError(
+                    f"{target.name} is out of range "
+                    f"({distance}/{weapon_range})."
+                )
+
+        damage_expression = (
+            template.damage
+            if enemy.combat_role.value == "spellcaster"
+            and enemy.selected_spell is not None
+            else _item_damage_expression(enemy_weapon)
+            if enemy_weapon is not None
+            else enemy.selected_natural_attack.damage
+            if enemy.selected_natural_attack is not None
+            else template.damage
+        )
+        attack_profile = (
+            enemy.selected_spell
+            if enemy.combat_role.value == "spellcaster"
+            and enemy.selected_spell is not None
+            else enemy_weapon.name
+            if enemy_weapon is not None
+            else enemy.selected_natural_attack.name
+            if enemy.selected_natural_attack is not None
+            else template.attack_profile
+        )
 
         character = self._character_by_source_id(target.source_id)
         assert character.character_id is not None
@@ -336,14 +455,17 @@ class CombatAttackMixin:
         recovering = (
             character_state.status is CharacterCombatStatus.RECOVERING
         )
+        defending = target.defending
         defense_rolls, defense_roll = self._roll_d20(
+            advantage=defending,
             disadvantage=recovering,
         )
         defense_total = defense_roll + defense_modifier
+        attack_dc = _enemy_attack_dc(template, enemy)
         critical_defense = defense_roll == 20
         defended = critical_defense or (
             defense_roll != 1
-            and defense_total >= template.attack_dc
+            and defense_total >= attack_dc
         )
 
         damage_rolls: tuple[int, ...] = ()
@@ -354,7 +476,7 @@ class CombatAttackMixin:
 
         if not defended:
             damage_rolls, raw_damage = self._roll_damage_expression(
-                template.damage
+                damage_expression
             )
             armor_reduction, _ = self._equipped_armor_stats(character_id)
             if raw_damage > 0:
@@ -364,6 +486,12 @@ class CombatAttackMixin:
                 )
                 updated_character = self.database.damage_character_by_id(
                     character_id,
+                    final_damage,
+                )
+                self.repository.add_damage_taken(
+                    scene.id,
+                    target.kind,
+                    target.source_id,
                     final_damage,
                 )
                 target_hp = updated_character.hp
@@ -383,8 +511,8 @@ class CombatAttackMixin:
             attacker_name=attacker.name,
             target_source_id=target.source_id,
             target_name=target.name,
-            attack_profile=template.attack_profile,
-            attack_dc=template.attack_dc,
+            attack_profile=attack_profile,
+            attack_dc=attack_dc,
             defense_method=defense_method,
             defense_attribute=defense_attribute,
             defense_roll=defense_roll,
@@ -392,7 +520,7 @@ class CombatAttackMixin:
             defense_total=defense_total,
             defended=defended,
             critical_defense=critical_defense,
-            damage_expression=template.damage,
+            damage_expression=damage_expression,
             damage_rolls=damage_rolls,
             raw_damage=raw_damage,
             armor_reduction=armor_reduction,
@@ -411,30 +539,38 @@ class CombatAttackMixin:
                 attacker.source_id,
                 True,
             )
+            if defending:
+                self.repository.set_defending(
+                    scene.id,
+                    target.kind,
+                    target.source_id,
+                    False,
+                )
 
             defense_label = defense_method.replace("_", " ")
             defense_roll_text = (
                 f"{'/'.join(str(value) for value in defense_rolls)} "
                 f"-> {defense_roll}"
-                if recovering
+                if len(defense_rolls) > 1
                 else str(defense_roll)
             )
+            defend_text = " with Defend Advantage" if defending else ""
             if defended:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
-                    f"{template.attack_profile}. "
-                    f"{target.name} automatically used {defense_label}: "
+                    f"{attack_profile}. "
+                    f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
-                    f"{defense_total} vs Attack DC {template.attack_dc}, "
+                    f"{defense_total} vs Attack DC {attack_dc}, "
                     f"defended."
                 )
             else:
                 message = (
                     f"{attacker.name} attacked {target.name} with "
-                    f"{template.attack_profile}. "
-                    f"{target.name} automatically used {defense_label}: "
+                    f"{attack_profile}. "
+                    f"{target.name} automatically used {defense_label}{defend_text}: "
                     f"{defense_roll_text}{defense_modifier:+d} = "
-                    f"{defense_total} vs Attack DC {template.attack_dc}, "
+                    f"{defense_total} vs Attack DC {attack_dc}, "
                     f"failed. {final_damage} damage "
                     f"({raw_damage} raw, {armor_reduction} armor reduction). "
                     f"{target.name} has {target_hp}/{character.max_hp} HP."

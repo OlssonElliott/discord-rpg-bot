@@ -9,7 +9,7 @@ from ...inventory import ItemTemplate, ItemType
 from ...characters.models import CharacterCombatStatus
 from ...media.portraits import CharacterPortraitStore
 from ...media.room_images import RoomImageStore
-from ...world import AreaGraph, Room, RoomEditorNode
+from ...world import AreaGraph, InventoryHolder, Room, RoomEditorNode
 from ...world.service import WorldService
 
 
@@ -37,12 +37,21 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         "slot_cost": template.slot_cost,
         "stackable": template.stackable,
         "content": template.content,
+        "tags": list(template.tags),
     }
     if template.item_type is ItemType.WEAPON:
         data.update(
             grip=template.grip.value if template.grip else "one_handed",
             durability=template.durability,
+            range=template.range,
             damage=template.damage_parts[0].amount if template.damage_parts else 1,
+            damage_expression=(
+                " + ".join(
+                    f"1d{part.amount}"
+                    for part in template.damage_parts
+                )
+                or "1d1"
+            ),
             damage_type=(
                 template.damage_parts[0].damage_type
                 if template.damage_parts
@@ -53,11 +62,13 @@ def _template_data(template: ItemTemplate) -> JsonObject:
         data.update(
             protection=template.protection,
             dodge_penalty=template.dodge_penalty,
+            defense_bonus=template.defense_bonus,
             strength_requirement=template.strength_requirement,
         )
     elif template.item_type is ItemType.CONTAINER:
         data.update(capacity=template.capacity, can_equip=template.can_equip)
     elif template.item_type is ItemType.CONSUMABLE:
+        data["affected_stat"] = template.affected_stat
         data["affected_amount"] = template.affected_amount
     return data
 
@@ -124,6 +135,7 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "name": template.name,
         "description": template.description or "",
         "race": template.race,
+        "lineage": template.lineage,
         "difficulty_level": template.difficulty_level,
         "strength": template.strength,
         "dexterity": template.dexterity,
@@ -143,12 +155,69 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "main_hand_item_id": template.main_hand_item_id,
         "off_hand_item_id": template.off_hand_item_id,
         "armor_item_id": template.armor_item_id,
+        "melee_weapon_ids": list(template.melee_weapon_ids),
+        "ranged_weapon_ids": list(template.ranged_weapon_ids),
+        "off_hand_item_ids": list(template.off_hand_item_ids),
+        "armor_item_ids": list(template.armor_item_ids),
+        "spell_names": list(template.spell_names),
+        "spell_range": template.spell_range,
+        "melee_damage_filter": template.melee_damage_filter,
+        "ranged_damage_filter": template.ranged_damage_filter,
+        "armor_reduction_filter": template.armor_reduction_filter,
+        "dual_wield": template.dual_wield,
+        "allowed_races": list(template.allowed_races),
+        "melee_loadouts": list(template.melee_loadouts),
+        "shield_item_ids": list(template.shield_item_ids),
+        "natural_attacks": [
+            {
+                "name": attack.name,
+                "damage": attack.damage,
+                "damage_type": attack.damage_type,
+                "range": attack.range,
+            }
+            for attack in template.natural_attacks
+        ],
+        "available_roles": [
+            role
+            for role, available in (
+                (
+                    "melee",
+                    bool(
+                        template.melee_weapon_ids
+                        or template.main_hand_item_id
+                        or template.natural_attacks
+                    ),
+                ),
+                ("ranged", bool(template.ranged_weapon_ids)),
+                ("spellcaster", bool(template.spell_names)),
+            )
+            if available
+        ],
     }
+
+
+def _enemy_inventory_data(
+    world: WorldService,
+    enemy: EnemyInstance,
+) -> list[JsonObject]:
+    return [
+        {
+            "id": stack.item.id,
+            "name": stack.item.name,
+            "description": stack.item.description or "",
+            "quantity": stack.quantity,
+        }
+        for stack in world.inventory(
+            InventoryHolder.entity(enemy.id)
+        )
+    ]
 
 
 def _enemy_data(
     enemy: EnemyInstance,
     template: EnemyTemplate,
+    *,
+    inventory: list[JsonObject] | None = None,
 ) -> JsonObject:
     return {
         "id": enemy.id,
@@ -160,6 +229,24 @@ def _enemy_data(
         "current_hp": enemy.current_hp,
         "max_hp": template.max_hp,
         "status": enemy.status.value,
+        "combat_role": enemy.combat_role.value,
+        "main_hand_item_id": enemy.main_hand_item_id,
+        "off_hand_item_id": enemy.off_hand_item_id,
+        "armor_item_id": enemy.armor_item_id,
+        "selected_spell": enemy.selected_spell,
+        "race": enemy.race,
+        "loadout_style": enemy.loadout_style,
+        "selected_natural_attack": (
+            {
+                "name": enemy.selected_natural_attack.name,
+                "damage": enemy.selected_natural_attack.damage,
+                "damage_type": enemy.selected_natural_attack.damage_type,
+                "range": enemy.selected_natural_attack.range,
+            }
+            if enemy.selected_natural_attack is not None
+            else None
+        ),
+        "inventory": inventory or [],
     }
 
 
@@ -174,6 +261,7 @@ def _legacy_enemy_data(entity: object) -> JsonObject:
         "current_hp": None,
         "max_hp": None,
         "status": "active",
+        "inventory": [],
     }
 
 
@@ -278,6 +366,7 @@ def _character_data(
         "lineage": character.lineage,
         "hp": character.hp,
         "max_hp": character.max_hp,
+        "hunger": character.hunger,
         "status": state.status.value,
     }
 
@@ -376,6 +465,7 @@ def _character_admin_data(
         "portrait_url": _character_portrait_url(character, portraits),
         "hp": character.hp,
         "max_hp": character.max_hp,
+        "hunger": character.hunger,
         "status": combat_state.status.value,
         "failed_death_saves": combat_state.failed_death_saves,
         "death_save_dc": death_save_dc,

@@ -101,14 +101,17 @@ export function DungeonContentDialogs({
         open={enemyPlacementOpen}
         templates={enemyTemplates}
         onOpenChange={onEnemyPlacementOpenChange}
-        onPlace={async (templateId, quantity) => {
+        onPlace={async (templateId, quantity, combatRole) => {
           if (!room) return false;
           const template = enemyTemplates.find((item) => item.id === templateId);
           const ok = await mutate(async () => {
             for (let index = 0; index < quantity; index += 1) {
               await api(`/rooms/${room.id}/enemies`, {
                 method: 'POST',
-                body: JSON.stringify({ template_id: templateId }),
+                body: JSON.stringify({
+                  template_id: templateId,
+                  combat_role: combatRole,
+                }),
               });
             }
           }, `${template?.name || 'Enemy'} ×${quantity} added`);

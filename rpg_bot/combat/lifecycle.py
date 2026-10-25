@@ -11,6 +11,7 @@ from .models import (
     CombatScene,
     CombatantKind,
     CombatantState,
+    CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
 )
@@ -19,8 +20,32 @@ from ..world.dungeon import ConnectionType
 from ..world.enemies import EnemyStatus
 
 
+ROOM_CORNER_SPECS = (
+    ("room:corner:nw", "Northwest Corner", 0.12, 0.18),
+    ("room:corner:ne", "Northeast Corner", 0.80, 0.18),
+    ("room:corner:sw", "Southwest Corner", 0.12, 0.82),
+    ("room:corner:se", "Southeast Corner", 0.80, 0.82),
+)
+
+
 class CombatLifecycleMixin:
     """Start, access, and end combat scenes."""
+
+    @staticmethod
+    def _combat_hunger_damage_bonus(
+        damage_taken: int,
+        max_hp: int,
+    ) -> int:
+        if damage_taken <= 0 or max_hp <= 0:
+            return 0
+        damage_percent = (damage_taken / max_hp) * 100
+        if damage_percent <= 25:
+            return 0
+        if damage_percent <= 50:
+            return 2
+        if damage_percent <= 75:
+            return 4
+        return 6
 
     def start(self, guild_id: int, room_id: str) -> CombatScene:
         if self.repository.get_active_scene(guild_id) is not None:
@@ -42,11 +67,24 @@ class CombatLifecycleMixin:
         ]
         landmarks.extend(
             CombatLandmark(
+                id=landmark_id,
+                name=name,
+                description="A tactical position near the corner of the room.",
+                feature_type="corner",
+                synthetic=True,
+                x=x,
+                y=y,
+            )
+            for landmark_id, name, x, y in ROOM_CORNER_SPECS
+        )
+        landmarks.extend(
+            CombatLandmark(
                 id=f"feature:{feature.id}",
                 name=feature.name,
                 description=feature.description,
                 source_feature_id=feature.id,
                 feature_type=feature.feature_type.value,
+                cover=CoverLevel.HALF,
             )
             for feature in self.world.list_room_features(room_id)
         )
@@ -77,8 +115,6 @@ class CombatLifecycleMixin:
             if direction is not None:
                 direction_counts[direction] = direction_counts.get(direction, 0) + 1
         direction_indices: dict[str, int] = {}
-        door_landmark_ids: list[str] = []
-
         for connection, exit_name, adjacent_room_id, direction in door_specs:
             adjacent_room = self.world.get_room(adjacent_room_id)
             connection_key = connection.connection_id or f"{room_id}:{len(landmarks)}"
@@ -107,7 +143,6 @@ class CombatLifecycleMixin:
                     y=y,
                 )
             )
-            door_landmark_ids.append(landmark_id)
 
         occupied_landmarks = [
             landmark
@@ -187,12 +222,14 @@ class CombatLifecycleMixin:
                 tuple(landmarks),
                 tuple(combatants),
             )
-            for landmark_id in door_landmark_ids:
+            for landmark in landmarks:
+                if landmark.id == self.CENTER_LANDMARK_ID:
+                    continue
                 self.repository.set_route(
                     scene.id,
                     self.CENTER_LANDMARK_ID,
-                    landmark_id,
-                    LandmarkDistance.CLOSE,
+                    landmark.id,
+                    LandmarkDistance.NEAR,
                 )
             self.repository.append_log(
                 scene.id,
@@ -221,6 +258,51 @@ class CombatLifecycleMixin:
 
     def end(self, guild_id: int) -> CombatScene:
         current = self._require_current(guild_id)
+
+        for combatant in current.combatants:
+            if combatant.kind is not CombatantKind.CHARACTER:
+                continue
+            try:
+                character_id = int(combatant.source_id)
+            except ValueError:
+                continue
+            character = self.database.get_character_by_global_id(character_id)
+            if character is None:
+                continue
+            state = self.database.get_character_combat_state(character_id)
+            if state.status is CharacterCombatStatus.DEAD:
+                continue
+
+            base_hunger = 5
+            exertion_hunger = 2 if combatant.heavy_exertion else 0
+            damage_hunger = self._combat_hunger_damage_bonus(
+                combatant.damage_taken,
+                character.max_hp,
+            )
+            hunger_gain = base_hunger + exertion_hunger + damage_hunger
+            updated = self.database.adjust_character_hunger(
+                character_id,
+                hunger_gain,
+            )
+            hunger_parts = ["5 combat"]
+            if exertion_hunger:
+                hunger_parts.append("2 exertion")
+            if damage_hunger:
+                hunger_parts.append(f"{damage_hunger} damage")
+            self.repository.append_log(
+                current.id,
+                current.round_number,
+                "hunger_changed",
+                (
+                    f"{combatant.name} gained {hunger_gain} Hunger "
+                    f"({' + '.join(hunger_parts)}). "
+                    f"Hunger is now {updated.hunger}/100."
+                ),
+                actor_kind=combatant.kind,
+                actor_source_id=combatant.source_id,
+                actor_name=combatant.name,
+            )
+
         self.repository.append_log(
             current.id,
             current.round_number,

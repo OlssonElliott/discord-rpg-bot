@@ -47,7 +47,7 @@ export type RoomFeatureTemplateData = {
   feature_type: string;
 };
 
-export type EnemyTemplateDraft = Omit<EnemyTemplateData, 'id'>;
+export type EnemyTemplateDraft = Omit<EnemyTemplateData, 'id' | 'available_roles'>;
 
 export type ContainerContentItem = {
   id: string;

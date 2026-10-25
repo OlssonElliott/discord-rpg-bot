@@ -2,25 +2,15 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
-  Background,
-  ConnectionMode,
-  Controls,
-  Handle,
-  MiniMap,
-  Position,
-  ReactFlow,
   useEdgesState,
   useNodesState,
   type Connection,
   type Edge,
   type Node,
-  type NodeProps,
 } from '@xyflow/react';
 import {
   ChevronDown,
   ChevronRight,
-  CircleAlert,
-  Eye,
   Flag,
   RefreshCw,
   Route,
@@ -28,19 +18,10 @@ import {
   Shield,
   Skull,
   Swords,
-  Trash2,
-  Users,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import {
@@ -53,8 +34,24 @@ import {
   type RoomData,
 } from '@/lib/api';
 
+import {
+  COMBAT_LAYOUT_HEIGHT,
+  COMBAT_LAYOUT_WIDTH,
+  clamp,
+  combatantKey,
+  combatEdges,
+  combatNodes,
+  routeKey,
+  type CombatLandmarkNodeData,
+} from './combat-graph';
+import { CombatantEditor } from './combatant-editor';
+import { CombatantInspectDialog } from './combatant-inspect-dialog';
+import { CombatMap } from './combat-map';
+import { ConnectionsPanel } from './connections-panel';
+import { SelectionPanel } from './selection-panel';
+
 type Relation = CombatantData['relation'];
-type Distance = 'close' | 'far' | 'distant';
+type Distance = 'adjacent' | 'near' | 'far' | 'distant';
 
 type CombatWorkspaceProps = {
   scene: CombatSceneData | null;
@@ -66,21 +63,37 @@ type CombatWorkspaceProps = {
   onEnd: () => Promise<boolean>;
   onRefresh: () => Promise<void>;
   onPositionLandmark: (landmarkId: string, x: number, y: number) => Promise<boolean>;
+  onSetLandmarkCover: (
+    landmarkId: string,
+    cover: CombatLandmarkData['cover'],
+  ) => Promise<boolean>;
+  onAutoConnectLandmark: (landmarkId: string) => Promise<boolean>;
+  onDisconnectLandmarkRoutes: (landmarkId: string) => Promise<boolean>;
+  onAutoConnectAll: () => Promise<boolean>;
+  onDisconnectAllRoutes: () => Promise<boolean>;
   onMoveCombatant: (
     combatant: CombatantData,
     landmarkId: string,
     relation: Relation,
   ) => Promise<boolean>;
+  onMoveTowardCombatant: (
+    combatant: CombatantData,
+    target: CombatantData,
+  ) => Promise<boolean>;
   onAddEnemy: (
     templateId: string,
     landmarkId: string,
     quantity: number,
+    combatRole: 'random' | 'melee' | 'ranged' | 'spellcaster',
   ) => Promise<boolean>;
   onRemoveEnemy: (enemyId: string) => Promise<boolean>;
   onAttack: (
     attacker: CombatantData,
     targetId: string,
   ) => Promise<boolean>;
+  onDefend: () => Promise<boolean>;
+  onDash: () => Promise<boolean>;
+  onUseItem: (itemInstanceId: string) => Promise<boolean>;
   onNextTurn: () => Promise<boolean>;
   onPreviousTurn: () => Promise<boolean>;
   onSetInitiative: (
@@ -91,8 +104,8 @@ type CombatWorkspaceProps = {
     sourceId: string,
     destinationId: string,
     distance: Distance,
-    obstacle: string,
-    blocked: boolean,
+    terrain: 'normal' | 'difficult',
+    baseBlocked: boolean,
   ) => Promise<boolean>;
   onDeleteLandmark: (landmarkId: string) => Promise<boolean>;
   onDeleteConnection: (
@@ -100,212 +113,6 @@ type CombatWorkspaceProps = {
     destinationId: string,
   ) => Promise<boolean>;
 };
-
-const SAFE_FALLBACK_POSITIONS = [
-  { x: 0.12, y: 0.18 },
-  { x: 0.80, y: 0.18 },
-  { x: 0.12, y: 0.82 },
-  { x: 0.80, y: 0.82 },
-  { x: 0.12, y: 0.34 },
-  { x: 0.80, y: 0.34 },
-  { x: 0.12, y: 0.66 },
-  { x: 0.80, y: 0.66 },
-  { x: 0.32, y: 0.34 },
-  { x: 0.60, y: 0.34 },
-  { x: 0.32, y: 0.66 },
-  { x: 0.60, y: 0.66 },
-];
-
-function fallbackPosition(index: number) {
-  if (index === 0) return { x: 0.5, y: 0.5 };
-  return SAFE_FALLBACK_POSITIONS[
-    (index - 1) % SAFE_FALLBACK_POSITIONS.length
-  ];
-}
-
-function clamp(value: number) {
-  return Math.min(0.94, Math.max(0.06, value));
-}
-
-const COMBAT_LAYOUT_WIDTH = 1000;
-const COMBAT_LAYOUT_HEIGHT = 700;
-
-type CombatLandmarkNodeData = {
-  landmark: CombatLandmarkData;
-  combatants: CombatantData[];
-} & Record<string, unknown>;
-
-type CardinalHandle = 'top' | 'right' | 'bottom' | 'left';
-
-function routeKey(sourceId: string, destinationId: string) {
-  return [sourceId, destinationId].sort().join('::');
-}
-
-function combatantKey(combatant: CombatantData) {
-  return `${combatant.kind}:${combatant.source_id}`;
-}
-
-function connectionHandles(
-  source: { x: number; y: number } | undefined,
-  target: { x: number; y: number } | undefined,
-): { sourceHandle?: CardinalHandle; targetHandle?: CardinalHandle } {
-  if (!source || !target) return {};
-  const horizontal = Math.abs(target.x - source.x) > Math.abs(target.y - source.y);
-  if (horizontal) {
-    return target.x >= source.x
-      ? { sourceHandle: 'right', targetHandle: 'left' }
-      : { sourceHandle: 'left', targetHandle: 'right' };
-  }
-  return target.y >= source.y
-    ? { sourceHandle: 'bottom', targetHandle: 'top' }
-    : { sourceHandle: 'top', targetHandle: 'bottom' };
-}
-
-function CombatLandmarkNode({
-  data,
-  selected,
-}: NodeProps<Node<CombatLandmarkNodeData>>) {
-  const { landmark, combatants } = data;
-  const kind = landmark.synthetic
-    ? 'Anchor'
-    : landmark.feature_type === 'door'
-      ? 'Door'
-      : 'Landmark';
-
-  return (
-    <article
-      className={[
-        'combat-landmark-node',
-        landmark.synthetic ? 'combat-landmark-node--synthetic' : '',
-        landmark.feature_type === 'door' ? 'combat-landmark-node--door' : '',
-        selected ? 'combat-landmark-node--selected' : '',
-      ].filter(Boolean).join(' ')}
-    >
-      <Handle id="top" type="source" position={Position.Top} />
-      <Handle id="right" type="source" position={Position.Right} />
-      <Handle id="bottom" type="source" position={Position.Bottom} />
-      <Handle id="left" type="source" position={Position.Left} />
-      <div className="combat-landmark-node__eyebrow">{kind}</div>
-      <div className="combat-landmark-node__title">
-        <Flag size={14} />
-        <strong>{landmark.name}</strong>
-      </div>
-      {landmark.feature_type && landmark.feature_type !== 'door' && (
-        <span className="combat-landmark-node__type">{landmark.feature_type}</span>
-      )}
-      {landmark.source_connection_id && (
-        <span className="combat-landmark-node__type">linked room exit</span>
-      )}
-      <div className="combat-landmark-node__occupants">
-        {combatants.map((combatant) => (
-          <span
-            key={`${combatant.kind}:${combatant.source_id}`}
-            className={[
-              'combat-token',
-              `combat-token--${combatant.kind}`,
-              combatant.is_current_turn ? 'combat-token--current' : '',
-            ].filter(Boolean).join(' ')}
-          >
-            {combatant.kind === 'character' ? <Users size={12} /> : <Skull size={12} />}
-            {combatant.name}
-            {combatant.is_current_turn && <small>TURN</small>}
-            {!combatant.is_current_turn && combatant.relation !== 'at' && (
-              <small>{combatant.relation}</small>
-            )}
-          </span>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-const combatNodeTypes = { landmark: CombatLandmarkNode };
-
-function combatNodes(
-  scene: CombatSceneData,
-  selectedLandmarkId: string | null,
-): Node<CombatLandmarkNodeData>[] {
-  return scene.landmarks.map((landmark, index) => {
-    const fallback = fallbackPosition(index);
-    const x = landmark.x ?? fallback.x;
-    const y = landmark.y ?? fallback.y;
-    return {
-      id: landmark.id,
-      type: 'landmark',
-      position: {
-        x: x * COMBAT_LAYOUT_WIDTH,
-        y: y * COMBAT_LAYOUT_HEIGHT,
-      },
-      selected: landmark.id === selectedLandmarkId,
-      data: {
-        landmark,
-        combatants: scene.combatants.filter(
-          (combatant) => (
-            !combatant.is_between_landmarks
-            && combatant.landmark_id === landmark.id
-          ),
-        ),
-      },
-    };
-  });
-}
-
-function combatEdges(
-  scene: CombatSceneData,
-  nodes: Node<CombatLandmarkNodeData>[],
-  selectedRouteId: string | null,
-): Edge[] {
-  const positions = new globalThis.Map(
-    nodes.map((node) => [node.id, node.position]),
-  );
-  return scene.routes.map((route) => {
-    const id = routeKey(
-      route.source_landmark_id,
-      route.destination_landmark_id,
-    );
-    const travellers = scene.combatants.filter(
-      (combatant) => (
-        combatant.is_between_landmarks
-        && combatant.route_source_landmark_id
-        && combatant.route_destination_landmark_id
-        && routeKey(
-          combatant.route_source_landmark_id,
-          combatant.route_destination_landmark_id,
-        ) === id
-      ),
-    );
-    const travellerLabel = travellers
-      .map(
-        (combatant) => (
-          `${combatant.name} ${combatant.route_progress}/${combatant.route_cost}`
-        ),
-      )
-      .join(', ');
-    const routeLabel = route.blocked
-      ? `${route.distance} · move ${route.movement_cost} · blocked`
-      : `${route.distance} · move ${route.movement_cost}`;
-
-    return {
-      id,
-      source: route.source_landmark_id,
-      target: route.destination_landmark_id,
-      ...connectionHandles(
-        positions.get(route.source_landmark_id),
-        positions.get(route.destination_landmark_id),
-      ),
-      type: 'straight',
-      label: travellerLabel
-        ? `${routeLabel} · ${travellerLabel}`
-        : routeLabel,
-      selected: id === selectedRouteId,
-      className: [
-        'combat-connection-edge',
-        route.blocked ? 'combat-connection-edge--blocked' : '',
-        travellers.length ? 'combat-connection-edge--occupied' : '',
-      ].filter(Boolean).join(' '),
-    };
-  });
-}
 
 function CollapsibleCombatSection({
   open,
@@ -337,457 +144,6 @@ function CollapsibleCombatSection({
   );
 }
 
-function label(value: string) {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function CombatantInspectDialog({
-  open,
-  data,
-  loading,
-  error,
-  onOpenChange,
-}: {
-  open: boolean;
-  data: CombatantInspectData | null;
-  loading: boolean;
-  error: string;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const hpLabel = (
-    data?.hp == null || data.max_hp == null
-      ? 'HP unknown'
-      : `${data.hp} / ${data.max_hp} HP`
-  );
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="combat-inspect-dialog sm:max-w-[760px]">
-        <DialogHeader>
-          <DialogTitle>{data?.name || 'Combatant inspector'}</DialogTitle>
-          <DialogDescription>
-            Read-only combat reference for stats, equipment and inventory.
-          </DialogDescription>
-        </DialogHeader>
-
-        {loading && <p className="combat-inspect-loading">Loading combatant…</p>}
-        {error && <p className="combat-inspect-error">{error}</p>}
-
-        {data && !loading && (
-          <div className="combat-inspect-content">
-            <div className="combat-inspect-summary">
-              <div>
-                <small>{data.kind}</small>
-                <strong>{hpLabel}</strong>
-              </div>
-              <Badge variant="outline">{label(data.status)}</Badge>
-              {data.failed_death_saves != null && data.failed_death_saves > 0 && (
-                <Badge variant="outline">
-                  Death saves {data.failed_death_saves}/3
-                </Badge>
-              )}
-              {data.death_save_dc != null && (
-                <Badge variant="outline">Death Save DC {data.death_save_dc}</Badge>
-              )}
-              {data.stance && <Badge variant="outline">{label(data.stance)}</Badge>}
-              {data.race && <Badge variant="outline">{data.race}</Badge>}
-            </div>
-
-            {data.status === 'recovering' && (
-              <p className="combat-inspect-description">
-                Recovering: active d20 rolls are made with disadvantage until a Short Rest.
-              </p>
-            )}
-
-            {data.description && (
-              <p className="combat-inspect-description">{data.description}</p>
-            )}
-
-            <section className="combat-inspect-section">
-              <h3>Attributes</h3>
-              <div className="combat-inspect-stats">
-                {Object.entries(data.attributes).map(([name, value]) => (
-                  <div key={name}>
-                    <small>{label(name)}</small>
-                    <strong>{value}</strong>
-                  </div>
-                ))}
-                {!Object.keys(data.attributes).length && (
-                  <p className="muted-row">No structured attributes available.</p>
-                )}
-              </div>
-            </section>
-
-            {data.enemy && (
-              <section className="combat-inspect-section">
-                <h3>Combat profile</h3>
-                <div className="combat-inspect-stats">
-                  <div><small>Difficulty</small><strong>{data.enemy.difficulty_level}</strong></div>
-                  <div><small>Armor</small><strong>{data.enemy.armor}</strong></div>
-                  <div><small>Magic resistance</small><strong>{data.enemy.magical_resistance}</strong></div>
-                  <div><small>Attack DC</small><strong>{data.enemy.attack_dc}</strong></div>
-                  <div><small>Defense DC</small><strong>{data.enemy.defense_dc}</strong></div>
-                  <div><small>Damage</small><strong>{data.enemy.damage}</strong></div>
-                </div>
-                <dl className="combat-inspect-details">
-                  <div><dt>Attack profile</dt><dd>{data.enemy.attack_profile}</dd></div>
-                  {data.enemy.special_ability && (
-                    <div><dt>Special ability</dt><dd>{data.enemy.special_ability}</dd></div>
-                  )}
-                  <div><dt>Typical behaviour</dt><dd>{data.enemy.typical_behaviour}</dd></div>
-                </dl>
-              </section>
-            )}
-
-            {!!Object.keys(data.skills).length && (
-              <section className="combat-inspect-section">
-                <h3>Skills</h3>
-                <div className="combat-inspect-stats">
-                  {Object.entries(data.skills).map(([name, value]) => (
-                    <div key={name}>
-                      <small>{label(name)}</small>
-                      <strong>{value}</strong>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            <section className="combat-inspect-section">
-              <h3>Equipment</h3>
-              <div className="combat-inspect-list">
-                {data.equipment.map((item) => (
-                  <div key={`${item.slot}:${item.id}`}>
-                    <span>
-                      <small>{label(item.slot || '')}</small>
-                      <strong>{item.name}</strong>
-                    </span>
-                  </div>
-                ))}
-                {!data.equipment.length && <p className="muted-row">Nothing equipped.</p>}
-              </div>
-            </section>
-
-            <section className="combat-inspect-section">
-              <h3>Inventory</h3>
-              <div className="combat-inspect-list">
-                {data.inventory.map((item) => (
-                  <div key={item.id}>
-                    <span>
-                      <strong>{item.name}</strong>
-                      {item.equipped_slot && <small>{label(item.equipped_slot)}</small>}
-                    </span>
-                    <Badge variant="outline">×{item.quantity ?? 1}</Badge>
-                  </div>
-                ))}
-                {!data.inventory.length && <p className="muted-row">Inventory is empty.</p>}
-              </div>
-            </section>
-
-            {data.wallet && (
-              <section className="combat-inspect-wallet">
-                <span>{data.wallet.copper} copper</span>
-                <span>{data.wallet.silver} silver</span>
-                <span>{data.wallet.gold} gold</span>
-              </section>
-            )}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CombatantEditor({
-  combatant,
-  scene,
-  busy,
-  selected,
-  onMove,
-  onInspect,
-  onRemoveEnemy,
-  onAttack,
-  onSetInitiative,
-}: {
-  combatant: CombatantData;
-  scene: CombatSceneData;
-  busy: boolean;
-  selected: boolean;
-  onMove: (
-    combatant: CombatantData,
-    landmarkId: string,
-    relation: Relation,
-  ) => Promise<boolean>;
-  onInspect: (combatant: CombatantData) => void;
-  onRemoveEnemy: (enemyId: string) => Promise<boolean>;
-  onAttack: (
-    attacker: CombatantData,
-    targetId: string,
-  ) => Promise<boolean>;
-  onSetInitiative: (
-    combatant: CombatantData,
-    initiativeScore: number,
-  ) => Promise<boolean>;
-}) {
-  const [landmarkId, setLandmarkId] = useState(
-    combatant.route_destination_landmark_id || combatant.landmark_id,
-  );
-  const [relation, setRelation] = useState<Relation>(combatant.relation);
-  const [initiativeScore, setInitiativeScore] = useState(combatant.initiative_score);
-  const targetKind = combatant.kind === 'character' ? 'enemy' : 'character';
-  const incapacitated = (
-    combatant.kind === 'character'
-    && ['downed', 'stable', 'dead'].includes(combatant.character_status || '')
-  );
-  const attackTargets = scene.combatants.filter(
-    (candidate) => (
-      candidate.kind === targetKind
-      && (
-        candidate.kind !== 'character'
-        || ['active', 'recovering'].includes(candidate.character_status || '')
-      )
-    ),
-  );
-  const [attackTargetId, setAttackTargetId] = useState(
-    attackTargets[0]?.source_id || '',
-  );
-
-  useEffect(() => {
-    setLandmarkId(
-      combatant.route_destination_landmark_id || combatant.landmark_id,
-    );
-    setRelation(combatant.relation);
-    setInitiativeScore(combatant.initiative_score);
-  }, [
-    combatant.initiative_score,
-    combatant.landmark_id,
-    combatant.relation,
-    combatant.route_destination_landmark_id,
-  ]);
-
-  useEffect(() => {
-    const validTarget = scene.combatants.some(
-      (candidate) => (
-        candidate.source_id === attackTargetId
-        && candidate.kind === targetKind
-        && (
-          candidate.kind !== 'character'
-          || ['active', 'recovering'].includes(candidate.character_status || '')
-        )
-      ),
-    );
-    if (attackTargetId && validTarget) return;
-
-    const firstTarget = scene.combatants.find(
-      (candidate) => (
-        candidate.kind === targetKind
-        && (
-          candidate.kind !== 'character'
-          || ['active', 'recovering'].includes(candidate.character_status || '')
-        )
-      ),
-    );
-    setAttackTargetId(firstTarget?.source_id || '');
-  }, [attackTargetId, scene.combatants, targetKind]);
-
-  const routeSource = combatant.route_source_landmark_id
-    ? scene.landmarks.find(
-      (landmark) => landmark.id === combatant.route_source_landmark_id,
-    )
-    : null;
-  const routeDestination = combatant.route_destination_landmark_id
-    ? scene.landmarks.find(
-      (landmark) => landmark.id === combatant.route_destination_landmark_id,
-    )
-    : null;
-
-  return (
-    <div
-      className={[
-        'combatant-editor',
-        combatant.is_current_turn ? 'combatant-editor--current' : '',
-        selected ? 'combatant-editor--selected' : '',
-      ].filter(Boolean).join(' ')}
-    >
-      <div className="combatant-editor__name">
-        {combatant.kind === 'character' ? <Users size={15} /> : <Skull size={15} />}
-        <span>{combatant.name}</span>
-        {combatant.is_current_turn && <Badge>Current turn</Badge>}
-        {combatant.character_status && (
-          <Badge variant="outline">{label(combatant.character_status)}</Badge>
-        )}
-        {combatant.hp != null && combatant.max_hp != null && (
-          <Badge variant="outline">{combatant.hp}/{combatant.max_hp} HP</Badge>
-        )}
-        <Badge variant="outline">
-          Move {combatant.movement_remaining}/{combatant.movement_budget}
-        </Badge>
-        <Badge variant="outline">Init {combatant.initiative_score}</Badge>
-      </div>
-      {combatant.character_status === 'downed' && (
-        <p className="combatant-editor__condition-state">
-          Death Save DC {combatant.death_save_dc ?? 10}
-          {' · '}
-          Failed {combatant.failed_death_saves ?? 0}/3
-          {' · '}
-          Death save resolves when this turn begins
-        </p>
-      )}
-      {combatant.character_status === 'stable' && (
-        <p className="combatant-editor__condition-state">
-          Stable at {combatant.hp} HP · Cannot act until healed above 0 HP
-        </p>
-      )}
-      {combatant.character_status === 'recovering' && (
-        <p className="combatant-editor__condition-state">
-          Recovering · Disadvantage on active d20 rolls until a Short Rest
-        </p>
-      )}
-      {combatant.is_between_landmarks && (
-        <p className="combatant-editor__movement-state">
-          Between {routeSource?.name || combatant.route_source_landmark_id}
-          {' ↔ '}
-          {routeDestination?.name || combatant.route_destination_landmark_id}
-          {' · '}
-          {combatant.route_progress}/{combatant.route_cost}
-        </p>
-      )}
-      <NativeSelect
-        value={landmarkId}
-        disabled={busy || !combatant.is_current_turn || incapacitated}
-        onChange={(event) => setLandmarkId(event.target.value)}
-      >
-        {scene.landmarks.map((landmark) => (
-          <NativeSelectOption key={landmark.id} value={landmark.id}>
-            {landmark.name}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
-      <NativeSelect
-        value={relation}
-        disabled={busy || !combatant.is_current_turn || incapacitated}
-        onChange={(event) => setRelation(event.target.value as Relation)}
-      >
-        <NativeSelectOption value="at">At</NativeSelectOption>
-        <NativeSelectOption value="beside">Beside</NativeSelectOption>
-        <NativeSelectOption value="behind">Behind</NativeSelectOption>
-        <NativeSelectOption value="on">On</NativeSelectOption>
-        <NativeSelectOption value="inside">Inside</NativeSelectOption>
-      </NativeSelect>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={
-          busy
-          || !combatant.is_current_turn
-          || incapacitated
-          || combatant.movement_remaining <= 0
-          || (
-            !combatant.is_between_landmarks
-            && landmarkId === combatant.landmark_id
-            && relation === combatant.relation
-          )
-        }
-        onClick={() => void onMove(combatant, landmarkId, relation)}
-      >
-        Move toward
-      </Button>
-      <div className="combatant-editor__standard-action">
-          <div>
-            <span>Standard Action</span>
-            <Badge
-              variant="outline"
-              className={
-                combatant.standard_action_spent
-                  ? 'combat-action-badge--spent'
-                  : 'combat-action-badge--ready'
-              }
-            >
-              {combatant.standard_action_spent ? 'Spent' : 'Ready'}
-            </Badge>
-          </div>
-          <NativeSelect
-            aria-label="Attack target"
-            value={attackTargetId}
-            disabled={
-              busy
-              || !combatant.is_current_turn
-              || incapacitated
-              || combatant.standard_action_spent
-            }
-            onChange={(event) => setAttackTargetId(event.target.value)}
-          >
-            <NativeSelectOption value="">Choose target…</NativeSelectOption>
-            {attackTargets.map((target) => (
-              <NativeSelectOption
-                key={target.source_id}
-                value={target.source_id}
-              >
-                {target.name}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-          <Button
-            size="sm"
-            disabled={
-              busy
-              || !combatant.is_current_turn
-              || incapacitated
-              || combatant.standard_action_spent
-              || !attackTargetId
-            }
-            onClick={() => void onAttack(combatant, attackTargetId)}
-          >
-            <Swords /> Attack
-          </Button>
-        </div>
-      <div className="combatant-editor__initiative">
-        <span>
-          Initiative
-          <small>d20 {combatant.initiative_roll}</small>
-        </span>
-        <Input
-          type="number"
-          value={initiativeScore}
-          onChange={(event) => setInitiativeScore(Number(event.target.value))}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={
-            busy
-            || !Number.isInteger(initiativeScore)
-            || initiativeScore === combatant.initiative_score
-          }
-          onClick={() => void onSetInitiative(combatant, initiativeScore)}
-        >
-          Set
-        </Button>
-      </div>
-      <div className="combatant-editor__actions">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => onInspect(combatant)}
-        >
-          <Eye /> Inspect
-        </Button>
-        {combatant.kind === 'enemy' && (
-          <Button
-            className="combatant-editor__remove"
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void onRemoveEnemy(combatant.source_id)}
-          >
-            <Trash2 /> Remove
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function CombatWorkspace({
   scene,
   rooms,
@@ -798,10 +154,19 @@ export function CombatWorkspace({
   onEnd,
   onRefresh,
   onPositionLandmark,
+  onSetLandmarkCover,
+  onAutoConnectLandmark,
+  onDisconnectLandmarkRoutes,
+  onAutoConnectAll,
+  onDisconnectAllRoutes,
   onMoveCombatant,
+  onMoveTowardCombatant,
   onAddEnemy,
   onRemoveEnemy,
   onAttack,
+  onDefend,
+  onDash,
+  onUseItem,
   onNextTurn,
   onPreviousTurn,
   onSetInitiative,
@@ -816,12 +181,13 @@ export function CombatWorkspace({
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routeSource, setRouteSource] = useState('');
   const [routeDestination, setRouteDestination] = useState('');
-  const [routeDistance, setRouteDistance] = useState<Distance>('close');
-  const [routeObstacle, setRouteObstacle] = useState('');
-  const [routeBlocked, setRouteBlocked] = useState(false);
+  const [routeDistance, setRouteDistance] = useState<Distance>('near');
+  const [routeTerrain, setRouteTerrain] = useState<'normal' | 'difficult'>('normal');
+  const [routeBaseBlocked, setRouteBaseBlocked] = useState(false);
   const [enemyTemplateId, setEnemyTemplateId] = useState('');
   const [enemyLandmarkId, setEnemyLandmarkId] = useState('room:center');
   const [enemyQuantity, setEnemyQuantity] = useState(1);
+  const [enemyCombatRole, setEnemyCombatRole] = useState<'random' | 'melee' | 'ranged' | 'spellcaster'>('random');
   const [selectionOpen, setSelectionOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [addEnemyOpen, setAddEnemyOpen] = useState(false);
@@ -832,6 +198,7 @@ export function CombatWorkspace({
   const [inspectLoading, setInspectLoading] = useState(false);
   const [inspectError, setInspectError] = useState('');
   const [inspectData, setInspectData] = useState<CombatantInspectData | null>(null);
+  const [draggingLandmarkId, setDraggingLandmarkId] = useState<string | null>(null);
 
   useEffect(() => {
     if (scene) return;
@@ -893,6 +260,7 @@ export function CombatWorkspace({
     }
     const nextNodes = combatNodes(scene, selectedLandmarkId);
     const frame = window.requestAnimationFrame(() => {
+      if (draggingLandmarkId) return;
       setNodes(nextNodes);
       setEdges(combatEdges(scene, nextNodes, selectedRouteId));
     });
@@ -923,6 +291,7 @@ export function CombatWorkspace({
     }
     return () => window.cancelAnimationFrame(frame);
   }, [
+    draggingLandmarkId,
     scene,
     selectedCombatantKey,
     selectedLandmarkId,
@@ -947,8 +316,8 @@ export function CombatWorkspace({
     setRouteSource(route.source_landmark_id);
     setRouteDestination(route.destination_landmark_id);
     setRouteDistance(route.distance);
-    setRouteObstacle(route.obstacle || '');
-    setRouteBlocked(route.blocked);
+    setRouteTerrain(route.terrain);
+    setRouteBaseBlocked(route.base_blocked);
   }, [scene]);
 
   const selectLandmark = useCallback((landmarkId: string) => {
@@ -980,14 +349,14 @@ export function CombatWorkspace({
 
     setRouteSource(candidate.source);
     setRouteDestination(candidate.target);
-    setRouteDistance('close');
-    setRouteObstacle('');
-    setRouteBlocked(false);
+    setRouteDistance('near');
+    setRouteTerrain('normal');
+    setRouteBaseBlocked(false);
     void onConnectLandmarks(
       candidate.source,
       candidate.target,
-      'close',
-      '',
+      'near',
+      'normal',
       false,
     ).then((saved) => {
       if (saved) {
@@ -998,8 +367,8 @@ export function CombatWorkspace({
   }, [busy, onConnectLandmarks, scene, selectRoute]);
 
   const saveLandmarkPosition = useCallback(
-    (_event: unknown, node: Node<CombatLandmarkNodeData>) => {
-      void onPositionLandmark(
+    async (_event: unknown, node: Node<CombatLandmarkNodeData>) => {
+      await onPositionLandmark(
         node.id,
         clamp(node.position.x / COMBAT_LAYOUT_WIDTH),
         clamp(node.position.y / COMBAT_LAYOUT_HEIGHT),
@@ -1087,12 +456,12 @@ export function CombatWorkspace({
   const selectedRouteSource = selectedRoute
     ? scene.landmarks.find(
       (landmark) => landmark.id === selectedRoute.source_landmark_id,
-    )
+    ) ?? null
     : null;
   const selectedRouteDestination = selectedRoute
     ? scene.landmarks.find(
       (landmark) => landmark.id === selectedRoute.destination_landmark_id,
-    )
+    ) ?? null
     : null;
   const orderedCombatants = scene.combatants;
   const currentCombatant = orderedCombatants.find(
@@ -1114,19 +483,10 @@ export function CombatWorkspace({
   return (
     <section className="combat-workspace">
       <div className="combat-stage">
-        <div className="combat-stage__heading">
-          <div>
-            <p className="kicker">Active encounter</p>
-            <h2>{scene.room_name}</h2>
-            <span>Scene #{scene.id} · drag landmarks to arrange the shared scene</span>
-          </div>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => void onRefresh()}>
-            <RefreshCw /> Refresh
-          </Button>
-        </div>
         <div className="combat-initiative">
           <div className="combat-initiative__heading">
-            <div>
+            <div className="combat-initiative__context">
+              <strong className="combat-initiative__room">{scene.room_name}</strong>
               <span className="combat-initiative__round">
                 Round {scene.round_number}
               </span>
@@ -1137,6 +497,14 @@ export function CombatWorkspace({
               </strong>
             </div>
             <div className="combat-initiative__controls">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void onRefresh()}
+              >
+                <RefreshCw /> Refresh
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -1196,42 +564,29 @@ export function CombatWorkspace({
             )}
           </div>
         </div>
-        <div className="combat-board">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={combatNodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => selectLandmark(node.id)}
-            onNodeDragStop={saveLandmarkPosition}
-            onConnect={connectNodes}
-            onEdgeClick={(_, edge) => selectRoute(edge.source, edge.target)}
-            onPaneClick={() => {
-              setSelectedLandmarkId(null);
-              setSelectedRouteId(null);
-            }}
-            connectionMode={ConnectionMode.Loose}
-            nodesDraggable={!busy}
-            nodesConnectable={!busy}
-            fitView
-            minZoom={0.35}
-            maxZoom={1.8}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background color="#334155" gap={28} size={1} />
-            <MiniMap
-              pannable
-              zoomable
-              nodeColor="#d39a4a"
-              maskColor="rgba(8, 15, 26, 0.72)"
-            />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-          <div className="combat-board__hint">
-            Drag landmarks to arrange · Drag a handle to connect · Click a connection to edit
-          </div>
-        </div>
+        <CombatMap
+          nodes={nodes}
+          edges={edges}
+          busy={busy}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onNodeClick={selectLandmark}
+          onNodeDragStart={(nodeId) => setDraggingLandmarkId(nodeId)}
+          onNodeDragStop={async (node) => {
+            try {
+              await saveLandmarkPosition(undefined, node);
+            } finally {
+              setDraggingLandmarkId(null);
+            }
+          }}
+          onAutoConnectAll={onAutoConnectAll}
+          onConnect={connectNodes}
+          onEdgeClick={selectRoute}
+          onPaneClick={() => {
+            setSelectedLandmarkId(null);
+            setSelectedRouteId(null);
+          }}
+        />
       </div>
 
       <aside className="combat-control-panel">
@@ -1262,118 +617,30 @@ export function CombatWorkspace({
             )
           }
         >
-          {selectedLandmark ? (
-            <div className="combat-selection-section">
-              <div className="combat-selection-title">
-                <strong className="combat-selection-name">{selectedLandmark.name}</strong>
-                <Badge variant="outline">
-                  {selectedLandmark.synthetic
-                    ? 'Anchor'
-                    : selectedLandmark.source_connection_id
-                      ? 'Door'
-                      : selectedLandmark.source_feature_id
-                        ? selectedLandmark.feature_type || 'Room feature'
-                        : 'Custom'}
-                </Badge>
-              </div>
-              <p className="combat-selection-description">
-                {selectedLandmark.description || 'No description.'}
-              </p>
-              {selectedLandmark.source_connection_id && (
-                <p className="combat-selection-meta">Linked to the room exit.</p>
-              )}
-              {selectedLandmark.source_feature_id && (
-                <p className="combat-selection-meta">Snapshot of a room feature.</p>
-              )}
-              {selectedLandmark.feature_type === 'custom' && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void onDeleteLandmark(selectedLandmark.id).then(
-                    (removed) => {
-                      if (removed) setSelectedLandmarkId(null);
-                    },
-                  )}
-                >
-                  <Trash2 /> Remove landmark
-                </Button>
-              )}
-            </div>
-          ) : selectedRoute ? (
-            <div className="combat-selection-section">
-              <div className="combat-route-card">
-                <strong>
-                  {selectedRouteSource?.name || selectedRoute.source_landmark_id}
-                </strong>
-                <span>↔</span>
-                <strong>
-                  {selectedRouteDestination?.name || selectedRoute.destination_landmark_id}
-                </strong>
-              </div>
-              <p className="combat-selection-meta">
-                Movement cost: {selectedRoute.movement_cost}
-              </p>
-              <label htmlFor="combat-route-distance">Distance</label>
-              <NativeSelect
-                id="combat-route-distance"
-                value={routeDistance}
-                onChange={(event) => setRouteDistance(event.target.value as Distance)}
-              >
-                <NativeSelectOption value="close">Close</NativeSelectOption>
-                <NativeSelectOption value="far">Far</NativeSelectOption>
-                <NativeSelectOption value="distant">Distant</NativeSelectOption>
-              </NativeSelect>
-              <label htmlFor="combat-route-obstacle">Obstacle or risk</label>
-              <Input
-                id="combat-route-obstacle"
-                placeholder="Rubble, fire, open ground…"
-                value={routeObstacle}
-                onChange={(event) => setRouteObstacle(event.target.value)}
-              />
-              <label className="combat-checkbox">
-                <input
-                  type="checkbox"
-                  checked={routeBlocked}
-                  onChange={(event) => setRouteBlocked(event.target.checked)}
-                />
-                Connection is blocked
-              </label>
-              <div className="combat-connection-actions">
-                <Button
-                  size="sm"
-                  disabled={!canSaveRoute || busy}
-                  onClick={() => void onConnectLandmarks(
-                    routeSource,
-                    routeDestination,
-                    routeDistance,
-                    routeObstacle,
-                    routeBlocked,
-                  )}
-                >
-                  Save connection
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  disabled={busy}
-                  onClick={() => void onDeleteConnection(
-                    selectedRoute.source_landmark_id,
-                    selectedRoute.destination_landmark_id,
-                  ).then((removed) => {
-                    if (removed) setSelectedRouteId(null);
-                  })}
-                >
-                  <Trash2 /> Remove
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <p className="combat-selection-description">
-              Select a landmark or connection to inspect it. Drag between landmark
-              handles to create a new close connection.
-            </p>
-          )}
+          <SelectionPanel
+            selectedLandmark={selectedLandmark}
+            selectedRoute={selectedRoute}
+            selectedRouteSource={selectedRouteSource}
+            selectedRouteDestination={selectedRouteDestination}
+            busy={busy}
+            routeSource={routeSource}
+            routeDestination={routeDestination}
+            routeDistance={routeDistance}
+            routeTerrain={routeTerrain}
+            routeBaseBlocked={routeBaseBlocked}
+            canSaveRoute={Boolean(canSaveRoute)}
+            onSetRouteDistance={setRouteDistance}
+            onSetRouteTerrain={setRouteTerrain}
+            onSetRouteBaseBlocked={setRouteBaseBlocked}
+            onSetLandmarkCover={onSetLandmarkCover}
+            onAutoConnectLandmark={onAutoConnectLandmark}
+            onDisconnectLandmarkRoutes={onDisconnectLandmarkRoutes}
+            onDeleteLandmark={onDeleteLandmark}
+            onConnectLandmarks={onConnectLandmarks}
+            onDeleteConnection={onDeleteConnection}
+            onClearLandmarkSelection={() => setSelectedLandmarkId(null)}
+            onClearRouteSelection={() => setSelectedRouteId(null)}
+          />
         </CollapsibleCombatSection>
 
         <CollapsibleCombatSection
@@ -1382,42 +649,15 @@ export function CombatWorkspace({
           title={<><Route size={15} /> Connections</>}
           summary={String(scene.routes.length)}
         >
-          <div className="combat-route-list">
-            {scene.routes.map((route) => {
-              const source = scene.landmarks.find(
-                (item) => item.id === route.source_landmark_id,
-              );
-              const destination = scene.landmarks.find(
-                (item) => item.id === route.destination_landmark_id,
-              );
-              const id = routeKey(
-                route.source_landmark_id,
-                route.destination_landmark_id,
-              );
-              return (
-                <button
-                  type="button"
-                  key={id}
-                  className={id === selectedRouteId ? 'selected' : ''}
-                  onClick={() => selectRoute(
-                    route.source_landmark_id,
-                    route.destination_landmark_id,
-                  )}
-                >
-                  <strong>{source?.name || route.source_landmark_id}</strong>
-                  <span>↔</span>
-                  <strong>{destination?.name || route.destination_landmark_id}</strong>
-                  <Badge variant="outline">{route.distance}</Badge>
-                  <Badge variant="outline">move {route.movement_cost}</Badge>
-                  {route.obstacle && <small>{route.obstacle}</small>}
-                  {route.blocked && <CircleAlert size={14} />}
-                </button>
-              );
-            })}
-            {!scene.routes.length && (
-              <p className="muted-row">No landmark connections yet.</p>
-            )}
-          </div>
+          <ConnectionsPanel
+            scene={scene}
+            selectedRouteId={selectedRouteId}
+            busy={busy}
+            onSelectRoute={selectRoute}
+            onAutoConnectAll={onAutoConnectAll}
+            onDisconnectAllRoutes={onDisconnectAllRoutes}
+            onClearRouteSelection={() => setSelectedRouteId(null)}
+          />
         </CollapsibleCombatSection>
 
         <CollapsibleCombatSection
@@ -1430,7 +670,10 @@ export function CombatWorkspace({
               Enemy type
               <NativeSelect
                 value={enemyTemplateId}
-                onChange={(event) => setEnemyTemplateId(event.target.value)}
+                onChange={(event) => {
+                  setEnemyTemplateId(event.target.value);
+                  setEnemyCombatRole('random');
+                }}
               >
                 <NativeSelectOption value="">Choose enemy…</NativeSelectOption>
                 {enemyTemplates.map((template) => (
@@ -1440,6 +683,34 @@ export function CombatWorkspace({
                 ))}
               </NativeSelect>
             </label>
+            {enemyTemplateId && (() => {
+              const selectedTemplate = enemyTemplates.find(
+                (template) => template.id === enemyTemplateId,
+              );
+              const roles = selectedTemplate?.available_roles ?? [];
+              const effectiveRole = roles.length <= 1
+                ? (roles[0] ?? 'melee')
+                : enemyCombatRole;
+              return (
+                <label>
+                  Combat role
+                  <NativeSelect
+                    value={effectiveRole}
+                    onChange={(event) => setEnemyCombatRole(
+                      event.target.value as 'random' | 'melee' | 'ranged' | 'spellcaster',
+                    )}
+                  >
+                    {roles.length > 1 && (
+                      <NativeSelectOption value="random">Random</NativeSelectOption>
+                    )}
+                    {roles.includes('melee') && <NativeSelectOption value="melee">Melee</NativeSelectOption>}
+                    {roles.includes('ranged') && <NativeSelectOption value="ranged">Ranged</NativeSelectOption>}
+                    {roles.includes('spellcaster') && <NativeSelectOption value="spellcaster">Spellcaster</NativeSelectOption>}
+                    {roles.length === 0 && <NativeSelectOption value="melee">Melee</NativeSelectOption>}
+                  </NativeSelect>
+                </label>
+              );
+            })()}
             <label>
               Spawn at
               <NativeSelect
@@ -1479,6 +750,14 @@ export function CombatWorkspace({
                   enemyTemplateId,
                   enemyLandmarkId,
                   enemyQuantity,
+                  (() => {
+                    const roles = enemyTemplates.find(
+                      (template) => template.id === enemyTemplateId,
+                    )?.available_roles ?? [];
+                    return roles.length <= 1
+                      ? (roles[0] ?? 'melee')
+                      : enemyCombatRole;
+                  })(),
                 )) {
                   setEnemyQuantity(1);
                 }
@@ -1509,9 +788,13 @@ export function CombatWorkspace({
                 busy={busy}
                 selected={selectedCombatantKey === combatantKey(combatant)}
                 onMove={onMoveCombatant}
+                onMoveTowardCombatant={onMoveTowardCombatant}
                 onInspect={(selected) => void inspectCombatant(selected)}
                 onRemoveEnemy={onRemoveEnemy}
                 onAttack={onAttack}
+                onDefend={onDefend}
+                onDash={onDash}
+                onUseItem={onUseItem}
                 onSetInitiative={onSetInitiative}
               />
             ))}

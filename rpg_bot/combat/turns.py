@@ -77,6 +77,17 @@ class CombatTurnMixin:
                 first.kind,
                 first.source_id,
             )
+            self.repository.reset_dashed(
+                scene.id,
+                first.kind,
+                first.source_id,
+            )
+
+            self.repository.reset_defending(
+                scene.id,
+                first.kind,
+                first.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 scene.round_number,
@@ -135,6 +146,17 @@ class CombatTurnMixin:
                 target.source_id,
             )
             self.repository.reset_standard_action(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
+            self.repository.reset_dashed(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
+
+            self.repository.reset_defending(
                 scene.id,
                 target.kind,
                 target.source_id,
@@ -201,6 +223,17 @@ class CombatTurnMixin:
                 target.kind,
                 target.source_id,
             )
+            self.repository.reset_dashed(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
+
+            self.repository.reset_defending(
+                scene.id,
+                target.kind,
+                target.source_id,
+            )
             self.repository.set_turn(
                 scene.id,
                 previous_round,
@@ -249,6 +282,17 @@ class CombatTurnMixin:
                 source_id,
             )
             self.repository.reset_standard_action(
+                scene.id,
+                parsed_kind,
+                source_id,
+            )
+            self.repository.reset_dashed(
+                scene.id,
+                parsed_kind,
+                source_id,
+            )
+
+            self.repository.reset_defending(
                 scene.id,
                 parsed_kind,
                 source_id,

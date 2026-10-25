@@ -552,7 +552,7 @@ export function CharacterWorkspace({
                     || 'Unknown race'}
                 </span>
                 <small>
-                  {summary.hp}/{summary.max_hp} HP · {label(summary.status)}
+                  {summary.hp}/{summary.max_hp} HP · Hunger {summary.hunger}/100 · {label(summary.status)}
                 </small>
                 <small>
                   User {summary.discord_user_id} ·{' '}
@@ -625,6 +625,9 @@ export function CharacterWorkspace({
                   <Badge variant="outline">{label(character.status)}</Badge>
                   <Badge variant="outline">
                     {character.hp}/{character.max_hp} HP
+                  </Badge>
+                  <Badge variant="outline">
+                    {character.hunger}/100 Hunger
                   </Badge>
                   <Badge variant="outline">{label(character.stance)}</Badge>
                   {character.is_active && <Badge>Active character</Badge>}
