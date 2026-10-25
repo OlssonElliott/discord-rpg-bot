@@ -21,6 +21,7 @@ export type CharacterSummary = {
   lineage: string | null;
   hp: number;
   max_hp: number;
+  hunger: number;
   status: CharacterStatus;
 };
 
@@ -34,6 +35,7 @@ export type CharacterAdminData = {
   portrait_url: string | null;
   hp: number;
   max_hp: number;
+  hunger: number;
   status: CharacterStatus;
   failed_death_saves: number;
   death_save_dc: number | null;
@@ -82,15 +84,20 @@ export type CatalogItem = {
   slot_cost: number;
   stackable: boolean;
   content: string | null;
+  tags: string[];
   grip?: string;
   durability?: number;
+  range?: number;
   damage?: number;
+  damage_expression?: string;
   damage_type?: string;
   protection?: number;
   dodge_penalty?: number;
+  defense_bonus?: number;
   strength_requirement?: number | null;
   capacity?: number;
   can_equip?: boolean;
+  affected_stat?: string;
   affected_amount?: number;
 };
 
@@ -99,6 +106,7 @@ export type EnemyTemplateData = {
   name: string;
   description: string;
   race: string;
+  lineage: string;
   difficulty_level: number;
   strength: number;
   dexterity: number;
@@ -118,6 +126,26 @@ export type EnemyTemplateData = {
   main_hand_item_id: string | null;
   off_hand_item_id: string | null;
   armor_item_id: string | null;
+  melee_weapon_ids: string[];
+  ranged_weapon_ids: string[];
+  off_hand_item_ids: string[];
+  armor_item_ids: string[];
+  spell_names: string[];
+  spell_range: number;
+  melee_damage_filter: string | null;
+  ranged_damage_filter: string | null;
+  armor_reduction_filter: number | null;
+  dual_wield: boolean;
+  allowed_races: string[];
+  melee_loadouts: ('one_handed' | 'shield' | 'dual_wield' | 'two_handed' | 'natural')[];
+  shield_item_ids: string[];
+  natural_attacks: {
+    name: string;
+    damage: string;
+    damage_type: string;
+    range: number;
+  }[];
+  available_roles: ('melee' | 'ranged' | 'spellcaster')[];
 };
 
 export type PlacedEnemy = {
@@ -130,6 +158,25 @@ export type PlacedEnemy = {
   current_hp: number | null;
   max_hp: number | null;
   status: 'active' | 'dead' | 'fled';
+  combat_role: 'melee' | 'ranged' | 'spellcaster';
+  main_hand_item_id: string | null;
+  off_hand_item_id: string | null;
+  armor_item_id: string | null;
+  selected_spell: string | null;
+  race: string;
+  loadout_style: string | null;
+  selected_natural_attack: {
+    name: string;
+    damage: string;
+    damage_type: string;
+    range: number;
+  } | null;
+  inventory: {
+    id: string;
+    name: string;
+    description: string;
+    quantity: number;
+  }[];
 };
 
 export type RoomData = {
@@ -162,17 +209,32 @@ export type CombatLandmarkData = {
   source_connection_id: string | null;
   feature_type: string | null;
   synthetic: boolean;
+  cover: 'none' | 'half' | 'full';
   x: number | null;
   y: number | null;
 };
 
+export type CombatEffectData = {
+  id: string;
+  name: string;
+  effect_type: string;
+  blocks_movement: boolean;
+  movement_cost_modifier: number;
+  remaining_rounds: number | null;
+};
+
+export type CombatRouteEffectData = CombatEffectData;
+
 export type CombatRouteData = {
   source_landmark_id: string;
   destination_landmark_id: string;
-  distance: 'close' | 'far' | 'distant';
+  distance: 'adjacent' | 'near' | 'far' | 'distant';
   movement_cost: number;
-  obstacle: string | null;
+  terrain: 'normal' | 'difficult';
+  base_blocked: boolean;
   blocked: boolean;
+  automatic: boolean;
+  effects: CombatEffectData[];
 };
 
 export type CombatantData = {
@@ -180,7 +242,7 @@ export type CombatantData = {
   source_id: string;
   name: string;
   landmark_id: string;
-  relation: 'at' | 'beside' | 'behind' | 'on' | 'inside';
+  relation: 'at' | 'behind';
   initiative_roll: number;
   initiative_score: number;
   acted_this_round: boolean;
@@ -192,8 +254,20 @@ export type CombatantData = {
   route_cost: number;
   is_between_landmarks: boolean;
   standard_action_spent: boolean;
+  defending: boolean;
+  dashed: boolean;
+  attack_range: number;
+  usable_items: {
+    id: string;
+    template_id: string;
+    name: string;
+    quantity: number;
+    affected_stat: string;
+    affected_amount: number;
+  }[];
   hp: number | null;
   max_hp: number | null;
+  hunger: number | null;
   character_status: 'active' | 'downed' | 'stable' | 'recovering' | 'dead' | null;
   failed_death_saves: number | null;
   death_save_dc: number | null;
@@ -245,6 +319,7 @@ export type CombatantInspectData = {
   description: string;
   hp: number | null;
   max_hp: number | null;
+  hunger: number | null;
   status: string;
   failed_death_saves: number | null;
   death_save_dc: number | null;

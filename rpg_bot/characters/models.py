@@ -47,6 +47,7 @@ class Character:
     is_archived: bool = False
     portrait_key: str | None = None
     current_room_id: str | None = None
+    hunger: int = 0
 
 
 @dataclass(frozen=True, slots=True)

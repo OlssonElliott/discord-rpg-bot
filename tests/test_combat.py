@@ -5,15 +5,17 @@ from unittest.mock import patch
 
 from rpg_bot.combat import (
     CombatantKind,
+    CoverLevel,
     LandmarkDistance,
     LandmarkRelation,
+    RouteTerrain,
 )
 from rpg_bot.combat.service import CombatError, CombatService
 from rpg_bot.database import Database
 from rpg_bot.world.dungeon import ConnectionType
 from rpg_bot.inventory import EquipmentSlot
 from rpg_bot.characters.models import CharacterCombatStatus
-from rpg_bot.world import EntityKind
+from rpg_bot.world import EntityKind, InventoryHolder
 from rpg_bot.world.service import WorldService
 
 
@@ -73,12 +75,34 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(scene.room_id, self.hall.id)
         self.assertEqual(
             {landmark.id for landmark in scene.landmarks},
-            {"room:center", "feature:stone_pillar", "feature:oak_table"},
+            {
+                "room:center",
+                "room:corner:nw",
+                "room:corner:ne",
+                "room:corner:sw",
+                "room:corner:se",
+                "feature:stone_pillar",
+                "feature:oak_table",
+            },
         )
         center = scene.landmark("room:center")
         assert center is not None
         self.assertTrue(center.synthetic)
+        self.assertEqual(center.cover, CoverLevel.NONE)
         self.assertEqual((center.x, center.y), (0.5, 0.5))
+        expected_corners = {
+            "room:corner:nw": (0.12, 0.18),
+            "room:corner:ne": (0.80, 0.18),
+            "room:corner:sw": (0.12, 0.82),
+            "room:corner:se": (0.80, 0.82),
+        }
+        for landmark_id, expected_position in expected_corners.items():
+            corner = scene.landmark(landmark_id)
+            assert corner is not None
+            self.assertTrue(corner.synthetic)
+            self.assertEqual(corner.cover, CoverLevel.NONE)
+            self.assertEqual(corner.feature_type, "corner")
+            self.assertEqual((corner.x, corner.y), expected_position)
         self.assertEqual(
             {(combatant.kind, combatant.name) for combatant in scene.combatants},
             {
@@ -87,6 +111,410 @@ class CombatServiceTests(unittest.TestCase):
             },
         )
         self.assertNotIn("Sven", {item.name for item in scene.combatants})
+        pillar = scene.landmark("feature:stone_pillar")
+        table = scene.landmark("feature:oak_table")
+        assert pillar is not None
+        assert table is not None
+        self.assertEqual(pillar.cover, CoverLevel.HALF)
+        self.assertEqual(table.cover, CoverLevel.HALF)
+        self.assertEqual(len(scene.routes), 6)
+        for landmark in scene.landmarks:
+            if landmark.id == "room:center":
+                continue
+            self.assertTrue(
+                any(
+                    {
+                        route.source_landmark_id,
+                        route.destination_landmark_id,
+                    }
+                    == {"room:center", landmark.id}
+                    and route.distance is LandmarkDistance.NEAR
+                    for route in scene.routes
+                )
+            )
+
+    def test_distance_bands_cost_one_through_four(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        expected = {
+            LandmarkDistance.ADJACENT: 1,
+            LandmarkDistance.NEAR: 2,
+            LandmarkDistance.FAR: 3,
+            LandmarkDistance.DISTANT: 4,
+        }
+        for distance, cost in expected.items():
+            scene = self.service.connect_landmarks(
+                44,
+                "room:center",
+                "feature:stone_pillar",
+                distance,
+            )
+            route = next(
+                item
+                for item in scene.routes
+                if {
+                    item.source_landmark_id,
+                    item.destination_landmark_id,
+                } == {"room:center", "feature:stone_pillar"}
+            )
+            self.assertEqual(route.distance, distance)
+            self.assertEqual(route.movement_cost, cost)
+
+    def test_behind_requires_cover_and_removing_cover_resets_relation(self) -> None:
+        self.service.start(44, self.hall.id)
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "does not support a behind position",
+        ):
+            self.service.move_combatant(
+                44,
+                CombatantKind.CHARACTER,
+                str(self.olof.character_id),
+                "room:center",
+                LandmarkRelation.BEHIND,
+            )
+
+        self.service.move_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            "feature:stone_pillar",
+            LandmarkRelation.BEHIND,
+        )
+        scene = self.service.set_landmark_cover(
+            44,
+            "feature:stone_pillar",
+            CoverLevel.NONE,
+        )
+        pillar = scene.landmark("feature:stone_pillar")
+        assert pillar is not None
+        self.assertEqual(pillar.cover, CoverLevel.NONE)
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(olof.relation, LandmarkRelation.AT)
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "Synthetic room anchors",
+        ):
+            self.service.set_landmark_cover(
+                44,
+                "room:corner:nw",
+                CoverLevel.HALF,
+            )
+
+    def test_auto_connect_landmark_preserves_manual_routes(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "feature:stone_pillar",
+            "room:corner:nw",
+            LandmarkDistance.NEAR,
+        )
+
+        scene = self.service.auto_connect_landmark(
+            44,
+            "feature:stone_pillar",
+        )
+        pillar_routes = [
+            route
+            for route in scene.routes
+            if "feature:stone_pillar" in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+        ]
+
+        self.assertTrue(
+            any(
+                {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                == {"feature:stone_pillar", "room:corner:nw"}
+                and not route.automatic
+                for route in pillar_routes
+            )
+        )
+        self.assertTrue(any(route.automatic for route in pillar_routes))
+
+    def test_auto_connect_works_without_center_or_corner_landmarks(self) -> None:
+        self.service.start(44, self.hall.id)
+
+        character_id = str(self.olof.character_id)
+        self.service.move_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            character_id,
+            "feature:stone_pillar",
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            "bandit",
+            "feature:stone_pillar",
+        )
+
+        for landmark_id in (
+            "room:center",
+            "room:corner:nw",
+            "room:corner:ne",
+            "room:corner:sw",
+            "room:corner:se",
+        ):
+            self.service.remove_landmark(44, landmark_id)
+
+        scene = self.service.auto_connect_all(44)
+
+        self.assertIsNone(scene.landmark("room:center"))
+        self.assertFalse(
+            any(
+                landmark.feature_type == "corner"
+                for landmark in scene.landmarks
+            )
+        )
+        self.assertTrue(scene.routes)
+        remaining_ids = {landmark.id for landmark in scene.landmarks}
+        self.assertTrue(
+            all(
+                route.source_landmark_id in remaining_ids
+                and route.destination_landmark_id in remaining_ids
+                for route in scene.routes
+            )
+        )
+        self.assertTrue(
+            all(
+                route.distance is LandmarkDistance.NEAR
+                for route in scene.routes
+            )
+        )
+
+    def test_disconnect_landmark_routes_removes_manual_and_automatic_routes(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.auto_connect_landmark(44, "feature:stone_pillar")
+
+        scene = self.service.disconnect_landmark_routes(
+            44,
+            "feature:stone_pillar",
+        )
+
+        self.assertFalse(
+            any(
+                "feature:stone_pillar" in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
+
+    def test_auto_connect_all_adds_local_geometric_routes(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        initial_count = len(scene.routes)
+
+        scene = self.service.auto_connect_all(44)
+
+        self.assertGreater(len(scene.routes), initial_count)
+        automatic_routes = [
+            route for route in scene.routes if route.automatic
+        ]
+        self.assertTrue(automatic_routes)
+        self.assertTrue(
+            all(
+                route.distance is LandmarkDistance.NEAR
+                for route in automatic_routes
+            )
+        )
+
+    def test_auto_connect_all_skips_distant_shortcuts(self) -> None:
+        scene = self.service.start(44, self.hall.id)
+        scene = self.service.auto_connect_all(44)
+
+        automatic_routes = [
+            route for route in scene.routes if route.automatic
+        ]
+        self.assertTrue(automatic_routes)
+        self.assertTrue(
+            all(
+                route.distance is LandmarkDistance.NEAR
+                for route in automatic_routes
+            )
+        )
+    def test_auto_connect_all_uses_west_door_as_intermediate_landmark(self) -> None:
+        self.world.connect_rooms(
+            self.hall.id,
+            "west door",
+            self.other.id,
+            return_exit_name="east door",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        west_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.feature_type == "door"
+        )
+        scene = self.service.auto_connect_all(44)
+
+        pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                )
+            )
+            for route in scene.routes
+        }
+        self.assertNotIn(
+            frozenset(("room:corner:nw", "room:corner:sw")),
+            pairs,
+        )
+        self.assertTrue(
+            frozenset((west_door.id, "room:corner:nw")) in pairs
+            or frozenset((west_door.id, "room:corner:sw")) in pairs
+        )
+
+    def test_auto_connect_all_adds_local_diagonals_from_geometry(self) -> None:
+        south_room = self.world.create_room(
+            "south_room",
+            self.area.id,
+            "South Room",
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "west",
+            self.other.id,
+            return_exit_name="east",
+            connection_type=ConnectionType.DOOR,
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "south",
+            south_room.id,
+            return_exit_name="north",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        west_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.name == "Door: west"
+        )
+        south_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.name == "Door: south"
+        )
+
+        # Put the two room features on the north/south-east perimeter so this
+        # mirrors the common combat layout used by the dashboard.
+        self.service.set_landmark_position(
+            44,
+            "feature:stone_pillar",
+            0.5,
+            0.18,
+        )
+        self.service.set_landmark_position(
+            44,
+            "feature:oak_table",
+            0.80,
+            0.5,
+        )
+        # A manually drawn crossing route is visual topology, not a wall.
+        # It must not suppress the bounded diagonals around the room corners.
+        self.service.connect_landmarks(
+            44,
+            "room:corner:nw",
+            "room:corner:se",
+            LandmarkDistance.NEAR,
+        )
+
+        scene = self.service.auto_connect_all(44)
+        pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                )
+            )
+            for route in scene.routes
+        }
+
+        expected_diagonals = {
+            frozenset((west_door.id, "feature:stone_pillar")),
+            frozenset(("feature:stone_pillar", "feature:oak_table")),
+            frozenset(("feature:oak_table", south_door.id)),
+            frozenset((south_door.id, west_door.id)),
+        }
+        self.assertTrue(expected_diagonals.issubset(pairs))
+
+        # Intermediate landmarks still prevent long direct perimeter skips.
+        self.assertNotIn(
+            frozenset(("room:corner:nw", "room:corner:ne")),
+            pairs,
+        )
+        self.assertNotIn(
+            frozenset(("room:corner:sw", "room:corner:se")),
+            pairs,
+        )
+
+    def test_auto_connect_all_does_not_create_long_geometric_shortcuts(self) -> None:
+        south_room = self.world.create_room(
+            "south_room_long_diagonal",
+            self.area.id,
+            "South Room",
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "west",
+            self.other.id,
+            return_exit_name="east",
+            connection_type=ConnectionType.DOOR,
+        )
+        self.world.connect_rooms(
+            self.hall.id,
+            "south",
+            south_room.id,
+            return_exit_name="north",
+            connection_type=ConnectionType.DOOR,
+        )
+
+        scene = self.service.start(44, self.hall.id)
+        south_door = next(
+            landmark
+            for landmark in scene.landmarks
+            if landmark.name == "Door: south"
+        )
+
+        # Put one feature far across the room. Pure geometry should reject
+        # the resulting long shortcut.
+        self.service.set_landmark_position(
+            44,
+            "feature:stone_pillar",
+            0.80,
+            0.18,
+        )
+
+        scene = self.service.auto_connect_all(44)
+        pairs = {
+            frozenset(
+                (
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                )
+            )
+            for route in scene.routes
+        }
+
+        self.assertNotIn(
+            frozenset((south_door.id, "feature:stone_pillar")),
+            pairs,
+        )
 
     def test_room_doors_become_linked_combat_landmarks(self) -> None:
         connection = self.world.connect_rooms(
@@ -120,15 +548,23 @@ class CombatServiceTests(unittest.TestCase):
                 abs(feature.x - door.x) < 0.20
                 and abs(feature.y - door.y) < 0.14
             )
-        self.assertEqual(len(scene.routes), 1)
+        self.assertEqual(len(scene.routes), 7)
+        door_route = next(
+            route
+            for route in scene.routes
+            if door.id in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+        )
         self.assertEqual(
             {
-                scene.routes[0].source_landmark_id,
-                scene.routes[0].destination_landmark_id,
+                door_route.source_landmark_id,
+                door_route.destination_landmark_id,
             },
             {"room:center", door.id},
         )
-        self.assertEqual(scene.routes[0].distance, LandmarkDistance.CLOSE)
+        self.assertEqual(door_route.distance, LandmarkDistance.NEAR)
 
         self.service.end(44)
         reverse_scene = self.service.start(44, self.other.id)
@@ -140,7 +576,7 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(reverse_door.name, "Door: west gate")
         self.assertEqual(reverse_door.source_connection_id, connection.id)
         self.assertEqual((reverse_door.x, reverse_door.y), (0.08, 0.5))
-        self.assertEqual(len(reverse_scene.routes), 1)
+        self.assertEqual(len(reverse_scene.routes), 5)
 
     def test_cardinal_doors_start_on_matching_edges(self) -> None:
         exits = {
@@ -170,7 +606,7 @@ class CombatServiceTests(unittest.TestCase):
         }
 
         self.assertEqual(len(doors), 4)
-        self.assertEqual(len(scene.routes), 4)
+        self.assertEqual(len(scene.routes), 10)
         for exit_name, (_, expected_position) in exits.items():
             door = doors[exit_name]
             self.assertEqual((door.x, door.y), expected_position)
@@ -229,29 +665,66 @@ class CombatServiceTests(unittest.TestCase):
         self.assertIsNotNone(custom.x)
         self.assertIsNotNone(custom.y)
 
-        scene = self.service.connect_landmarks(
-            44,
-            "room:center",
-            custom.id,
-            LandmarkDistance.CLOSE,
-        )
-        self.assertEqual(len(scene.routes), 1)
+        custom_routes = [
+            route
+            for route in scene.routes
+            if custom.id in {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+        ]
+        self.assertTrue(custom_routes)
 
+        route = custom_routes[0]
         scene = self.service.disconnect_landmarks(
             44,
-            "room:center",
-            custom.id,
+            route.source_landmark_id,
+            route.destination_landmark_id,
         )
-        self.assertEqual(scene.routes, ())
+        self.assertFalse(
+            any(
+                {
+                    item.source_landmark_id,
+                    item.destination_landmark_id,
+                }
+                == {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for item in scene.routes
+            )
+        )
 
         scene = self.service.remove_landmark(44, custom.id)
         self.assertIsNone(scene.landmark(custom.id))
+        self.assertFalse(
+            any(
+                custom.id in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
 
-    def test_source_landmark_cannot_be_removed_from_combat_scene(self) -> None:
+    def test_source_landmark_can_be_removed_when_unoccupied(self) -> None:
         self.service.start(44, self.hall.id)
 
-        with self.assertRaises(CombatError):
-            self.service.remove_landmark(44, "feature:stone_pillar")
+        scene = self.service.remove_landmark(
+            44,
+            "feature:stone_pillar",
+        )
+
+        self.assertIsNone(scene.landmark("feature:stone_pillar"))
+        self.assertFalse(
+            any(
+                "feature:stone_pillar" in {
+                    route.source_landmark_id,
+                    route.destination_landmark_id,
+                }
+                for route in scene.routes
+            )
+        )
 
     def test_feature_snapshot_does_not_change_mid_combat(self) -> None:
         self.service.start(44, self.hall.id)
@@ -285,8 +758,8 @@ class CombatServiceTests(unittest.TestCase):
             44,
             "room:center",
             "feature:stone_pillar",
-            LandmarkDistance.CLOSE,
-            obstacle="Fallen rubble",
+            LandmarkDistance.NEAR,
+            terrain=RouteTerrain.DIFFICULT,
         )
         self.service.move_combatant(
             44,
@@ -304,9 +777,26 @@ class CombatServiceTests(unittest.TestCase):
         pillar = reopened.landmark("feature:stone_pillar")
         assert pillar is not None
         self.assertEqual((pillar.x, pillar.y), (0.25, 0.35))
-        self.assertEqual(len(reopened.routes), 1)
-        self.assertEqual(reopened.routes[0].distance, LandmarkDistance.CLOSE)
-        self.assertEqual(reopened.routes[0].obstacle, "Fallen rubble")
+        self.assertEqual(len(reopened.routes), 6)
+        pillar_route = next(
+            route
+            for route in reopened.routes
+            if {
+                route.source_landmark_id,
+                route.destination_landmark_id,
+            }
+            == {
+                "room:center",
+                "feature:stone_pillar",
+            }
+        )
+        self.assertEqual(
+            pillar_route.distance,
+            LandmarkDistance.NEAR,
+        )
+        self.assertEqual(pillar_route.terrain, RouteTerrain.DIFFICULT)
+        self.assertFalse(pillar_route.base_blocked)
+        self.assertEqual(pillar_route.movement_cost, 4)
         olof = next(
             item
             for item in reopened.combatants
@@ -440,14 +930,14 @@ class CombatServiceTests(unittest.TestCase):
             [entry.message for entry in scene.log_entries],
         )
 
-    def test_strength_sets_movement_budget(self) -> None:
+    def test_dexterity_sets_movement_budget(self) -> None:
         runner = self.database.create_character(
             9,
             "Bran",
             14,
             attributes={
-                "Strength": 14,
-                "Dexterity": 10,
+                "Strength": 10,
+                "Dexterity": 14,
                 "Arcana": 10,
                 "Vitality": 10,
                 "Insight": 10,
@@ -464,8 +954,89 @@ class CombatServiceTests(unittest.TestCase):
             if combatant.source_id == str(runner.character_id)
         )
 
-        self.assertEqual(bran.movement_budget, 5)
-        self.assertEqual(bran.movement_remaining, 5)
+        self.assertEqual(bran.movement_budget, 3)
+        self.assertEqual(bran.movement_remaining, 3)
+
+    def test_encumbrance_reduces_dexterity_movement(self) -> None:
+        runner = self.database.create_character(
+            9,
+            "Bran",
+            14,
+            attributes={
+                "Strength": 10,
+                "Dexterity": 14,
+                "Arcana": 10,
+                "Vitality": 10,
+                "Insight": 10,
+                "Personality": 10,
+            },
+        )
+        assert runner.character_id is not None
+        axe = self.world.catalog.get("great_axe")
+        self.database.add_inventory_item(
+            runner.character_id,
+            axe.template_id,
+            durability=axe.durability,
+        )
+        self.database.add_inventory_item(
+            runner.character_id,
+            axe.template_id,
+            durability=axe.durability,
+        )
+        self.world.place_character(runner.character_id, self.hall.id)
+
+        scene = self.service.start(44, self.hall.id)
+        bran = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(runner.character_id)
+        )
+
+        # 8 / 10 carry weight is encumbered, reducing Speed 3 to Speed 2.
+        self.assertEqual(bran.movement_budget, 2)
+
+    def test_dash_adds_current_speed_and_spends_standard_action(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.dash(44)
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+
+        self.assertEqual(olof.movement_budget, 2)
+        self.assertEqual(olof.movement_remaining, 4)
+        self.assertTrue(olof.dashed)
+        self.assertTrue(olof.standard_action_spent)
+        self.assertTrue(olof.heavy_exertion)
+
+        with self.assertRaisesRegex(CombatError, "already spent"):
+            self.service.dash(44)
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            "bandit",
+        )
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        olof = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(olof.movement_remaining, 2)
+        self.assertFalse(olof.dashed)
+        self.assertFalse(olof.standard_action_spent)
 
     def test_movement_can_end_between_landmarks_and_continue_next_turn(self) -> None:
         self.service.start(44, self.hall.id)
@@ -485,7 +1056,7 @@ class CombatServiceTests(unittest.TestCase):
             for combatant in scene.combatants
             if combatant.source_id == str(self.olof.character_id)
         )
-        self.assertEqual(olof.movement_budget, 3)
+        self.assertEqual(olof.movement_budget, 2)
 
         scene = self.service.move_combatant_toward(
             44,
@@ -510,7 +1081,7 @@ class CombatServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             (olof.route_progress, olof.route_cost),
-            (3, 5),
+            (2, 4),
         )
         self.assertEqual(olof.movement_remaining, 0)
 
@@ -552,7 +1123,186 @@ class CombatServiceTests(unittest.TestCase):
             olof.relation,
             LandmarkRelation.BEHIND,
         )
-        self.assertEqual(olof.movement_remaining, 1)
+        self.assertEqual(olof.movement_remaining, 0)
+
+    def test_move_toward_combatant_reaches_route_position_and_allows_melee(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+
+        current = self.service.current(44)
+        assert current is not None
+        self.service.repository.set_combatant_position(
+            current.id,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "room:center",
+            LandmarkRelation.AT,
+            movement_remaining=0,
+            route_source_landmark_id="room:center",
+            route_destination_landmark_id="feature:stone_pillar",
+            route_progress=2,
+            route_cost=4,
+        )
+        scene = self.service.current(44)
+        assert scene is not None
+        goblin_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(goblin_state.is_between_landmarks)
+        self.assertEqual(
+            (goblin_state.route_progress, goblin_state.route_cost),
+            (2, 4),
+        )
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        olof_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        goblin_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(olof_state.is_between_landmarks)
+        self.assertEqual(
+            {
+                olof_state.route_source_landmark_id,
+                olof_state.route_destination_landmark_id,
+            },
+            {
+                goblin_state.route_source_landmark_id,
+                goblin_state.route_destination_landmark_id,
+            },
+        )
+        self.assertEqual(
+            olof_state.route_progress,
+            goblin_state.route_progress,
+        )
+        self.assertEqual(olof_state.movement_remaining, 0)
+
+        with patch(
+            "rpg_bot.combat.service.random.randint",
+            side_effect=[15, 4],
+        ):
+            _, result = self.service.attack_enemy(44, goblin.id)
+
+        self.assertTrue(result.hit)
+
+    def test_move_toward_combatant_stops_short_when_movement_is_insufficient(self) -> None:
+        runner = self.database.create_character(
+            9,
+            "Runner",
+            14,
+            attributes={
+                "Strength": 10,
+                "Dexterity": 14,
+                "Arcana": 10,
+                "Vitality": 10,
+                "Insight": 10,
+                "Personality": 10,
+            },
+        )
+        assert runner.character_id is not None
+        self.world.place_character(runner.character_id, self.hall.id)
+
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+        )
+        scene = self.service.move_combatant_toward(
+            44,
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+            "feature:stone_pillar",
+        )
+        runner_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(runner.character_id)
+        )
+        self.assertEqual(
+            (runner_state.route_progress, runner_state.route_cost),
+            (3, 4),
+        )
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+        )
+        olof_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(olof_state.is_between_landmarks)
+        self.assertEqual(
+            (olof_state.route_progress, olof_state.route_cost),
+            (2, 4),
+        )
+        self.assertEqual(olof_state.movement_remaining, 0)
+
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        scene = self.service.move_combatant_toward_combatant(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            CombatantKind.CHARACTER,
+            str(runner.character_id),
+        )
+        olof_state = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(
+            (olof_state.route_progress, olof_state.route_cost),
+            (3, 4),
+        )
+        self.assertEqual(olof_state.movement_remaining, 1)
 
     def test_player_attack_uses_equipped_weapon_and_spends_standard_action(self) -> None:
         skeleton = self.world.place_enemy(
@@ -630,6 +1380,107 @@ class CombatServiceTests(unittest.TestCase):
             if combatant.source_id == str(self.olof.character_id)
         )
         self.assertTrue(reopened_attacker.standard_action_spent)
+
+    def test_shortbow_uses_graph_range_and_dexterity(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        bow = self.world.catalog.get("shortbow")
+        bow_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            bow.template_id,
+            durability=bow.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            bow_instance_id,
+            EquipmentSlot.MAIN_HAND,
+            clear_off_hand=True,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.FAR,
+            terrain=RouteTerrain.DIFFICULT,
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "feature:stone_pillar",
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with patch(
+            "rpg_bot.combat.service.random.randint",
+            side_effect=[15, 4],
+        ):
+            _, result = self.service.attack_enemy(44, goblin.id)
+
+        self.assertEqual(result.weapon_name, "Shortbow")
+        self.assertEqual(result.attack_attribute, "dexterity")
+        self.assertTrue(result.hit)
+        self.assertEqual(result.raw_damage, 4)
+
+    def test_shortbow_rejects_target_beyond_range_without_spending_action(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        bow = self.world.catalog.get("shortbow")
+        bow_instance_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            bow.template_id,
+            durability=bow.durability,
+        )
+        self.database.equip_inventory_item(
+            self.olof.character_id,
+            bow_instance_id,
+            EquipmentSlot.MAIN_HAND,
+            clear_off_hand=True,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.connect_landmarks(
+            44,
+            "room:center",
+            "feature:stone_pillar",
+            LandmarkDistance.DISTANT,
+        )
+        self.service.move_combatant(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+            "feature:stone_pillar",
+        )
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with self.assertRaisesRegex(
+            CombatError,
+            "out of range",
+        ):
+            self.service.attack_enemy(44, goblin.id)
+
+        scene = self.service.current(44)
+        assert scene is not None
+        attacker = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(attacker.standard_action_spent)
 
     def test_attack_requires_same_tactical_position_and_does_not_spend_on_rejection(self) -> None:
         goblin = self.world.place_enemy(
@@ -731,6 +1582,62 @@ class CombatServiceTests(unittest.TestCase):
             )
         )
 
+    def test_enemy_can_use_health_potion_from_inventory(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        template = self.world.get_enemy_template(goblin.template_id)
+        assert template is not None
+        self.world.update_enemy(
+            goblin.id,
+            name=goblin.name,
+            description=goblin.description,
+            current_hp=max(1, template.max_hp - 5),
+            status=goblin.status,
+        )
+        self.world.place_catalog_item(
+            InventoryHolder.entity(goblin.id),
+            "health_potion",
+            2,
+        )
+
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+
+        scene = self.service.use_item(44, "health_potion")
+
+        updated = self.world.get_enemy(goblin.id)
+        assert updated is not None
+        self.assertEqual(updated.current_hp, template.max_hp)
+        inventory = self.world.inventory(
+            InventoryHolder.entity(goblin.id)
+        )
+        potion = next(
+            stack
+            for stack in inventory
+            if stack.item.id == "health_potion"
+        )
+        self.assertEqual(potion.quantity, 1)
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == goblin.id
+        )
+        self.assertTrue(actor.standard_action_spent)
+        self.assertTrue(
+            any(
+                entry.event_type == "item_used"
+                and "Health Potion" in entry.message
+                and "recovered 5 HP" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
     def test_enemy_attack_automatically_uses_best_defense(self) -> None:
         defender = self.database.create_character(
             19,
@@ -805,6 +1712,220 @@ class CombatServiceTests(unittest.TestCase):
                 str(defender.character_id),
             )
 
+    def test_defend_spends_standard_action_and_grants_next_defense_advantage(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.defend(44)
+        defender = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(defender.standard_action_spent)
+        self.assertTrue(defender.defending)
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        with patch(
+            "rpg_bot.combat.service.random.randint",
+            side_effect=[4, 17],
+        ):
+            scene, result = self.service.attack_character(
+                44,
+                str(self.olof.character_id),
+            )
+
+        self.assertEqual(result.defense_roll, 17)
+        defender = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(defender.defending)
+        self.assertTrue(
+            any(
+                "Defend Advantage" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_defend_expires_when_the_defenders_next_turn_begins(self) -> None:
+        goblin = self.world.place_enemy(
+            self.hall.id,
+            "core_goblin_raider",
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.service.defend(44)
+
+        self.service.jump_turn(
+            44,
+            CombatantKind.ENEMY,
+            goblin.id,
+        )
+        scene = self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        defender = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(defender.defending)
+        self.assertFalse(defender.standard_action_spent)
+
+    def test_use_item_heals_consumes_stack_and_spends_standard_action(self) -> None:
+        potion_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            "health_potion",
+            quantity=2,
+            stackable=True,
+        )
+        self.database.set_hp(7, 5)
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.use_item(44, potion_id)
+
+        updated = self.database.get_character(7)
+        self.assertEqual(updated.hp, 15)
+        inventory = self.database.get_character_inventory(self.olof.character_id)
+        self.assertEqual(inventory.item(potion_id).quantity, 1)
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(actor.standard_action_spent)
+        self.assertTrue(
+            any(
+                entry.event_type == "item_used"
+                and "Health Potion" in entry.message
+                and "recovered 10 HP" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_use_food_reduces_hunger_in_combat(self) -> None:
+        bread_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            "stale_bread",
+            quantity=2,
+            stackable=True,
+        )
+        self.database.adjust_character_hunger(self.olof.character_id, 12)
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        scene = self.service.use_item(44, bread_id)
+
+        updated = self.database.get_character(7)
+        assert updated is not None
+        self.assertEqual(updated.hunger, 7)
+        self.assertEqual(updated.hp, 15)
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertTrue(actor.standard_action_spent)
+        self.assertTrue(actor.heavy_exertion)
+        self.assertTrue(
+            any(
+                entry.event_type == "item_used"
+                and "reduced Hunger by 5" in entry.message
+                for entry in scene.log_entries
+            )
+        )
+
+    def test_combat_end_adds_base_hunger_without_exertion(self) -> None:
+        self.service.start(44, self.hall.id)
+
+        self.service.end(44)
+
+        updated = self.database.get_character(7)
+        assert updated is not None
+        self.assertEqual(updated.hunger, 5)
+
+    def test_combat_end_adds_exertion_and_damage_hunger(self) -> None:
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+        self.service.defend(44)
+        scene = self.service.current(44)
+        assert scene is not None
+        self.service.repository.add_damage_taken(
+            scene.id,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+            8,
+        )
+
+        self.service.end(44)
+
+        updated = self.database.get_character(7)
+        assert updated is not None
+        # 8 / 15 HP is >50% and <=75%: 5 base + 2 exertion + 4 damage.
+        self.assertEqual(updated.hunger, 11)
+
+    def test_use_item_rejects_full_hp_without_consuming_item_or_action(self) -> None:
+        potion_id = self.database.add_inventory_item(
+            self.olof.character_id,
+            "health_potion",
+            quantity=1,
+            stackable=True,
+        )
+        self.service.start(44, self.hall.id)
+        self.service.jump_turn(
+            44,
+            CombatantKind.CHARACTER,
+            str(self.olof.character_id),
+        )
+
+        with self.assertRaisesRegex(CombatError, "already at full HP"):
+            self.service.use_item(44, potion_id)
+
+        inventory = self.database.get_character_inventory(self.olof.character_id)
+        self.assertEqual(inventory.item(potion_id).quantity, 1)
+        scene = self.service.current(44)
+        assert scene is not None
+        actor = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertFalse(actor.standard_action_spent)
+
     def test_failed_automatic_defense_applies_armor_and_character_damage(self) -> None:
         armor = self.world.catalog.get("leather_armor")
         armor_instance_id = self.database.add_inventory_item(
@@ -846,6 +1967,13 @@ class CombatServiceTests(unittest.TestCase):
         self.assertEqual(result.armor_reduction, 1)
         self.assertEqual(result.final_damage, 3)
         self.assertEqual(result.target_hp, 12)
+        tracked = next(
+            combatant
+            for combatant in scene.combatants
+            if combatant.source_id == str(self.olof.character_id)
+        )
+        self.assertEqual(tracked.damage_taken, 3)
+        self.assertTrue(tracked.heavy_exertion)
 
         updated_olof = next(
             character

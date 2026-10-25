@@ -3,6 +3,7 @@
 from typing import Any
 
 from ...combat import AttackResult, CombatScene, EnemyAttackResult
+from ...inventory import EquipmentSlot, ItemType
 from ...world import InventoryHolder
 from ...world.service import WorldService
 from .common import _catalog_item_summary
@@ -11,15 +12,156 @@ from .common import _catalog_item_summary
 JsonObject = dict[str, Any]
 
 
+def _combatant_usable_items_data(
+    world: WorldService,
+    kind: str,
+    source_id: str,
+) -> list[JsonObject]:
+    usable: list[JsonObject] = []
+
+    if kind == "character":
+        try:
+            character_id = int(source_id)
+        except ValueError:
+            return []
+        inventory = world.database.get_character_inventory(character_id)
+        candidates = (
+            (item.instance_id, item.template_id, item.quantity)
+            for item in inventory.items
+        )
+        supported_stats = {"hp", "hunger"}
+    elif kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is None:
+            return []
+        candidates = (
+            (stack.item.id, stack.item.id, stack.quantity)
+            for stack in world.inventory(InventoryHolder.entity(enemy.id))
+        )
+        # Enemies do not currently have Hunger, so only HP consumables are
+        # combat-usable for them. Other carried items remain loot/inventory.
+        supported_stats = {"hp"}
+    else:
+        return []
+
+    for item_id, template_id, quantity in candidates:
+        try:
+            template = world.catalog.get(template_id)
+        except ValueError:
+            continue
+        if (
+            template.item_type is not ItemType.CONSUMABLE
+            or template.affected_stat not in supported_stats
+            or template.affected_amount is None
+        ):
+            continue
+        usable.append(
+            {
+                "id": item_id,
+                "template_id": template.template_id,
+                "name": template.name,
+                "quantity": quantity,
+                "affected_stat": template.affected_stat,
+                "affected_amount": template.affected_amount,
+            }
+        )
+    return usable
+
+
+def _enemy_lineage_for_race(
+    race: str,
+    fallback: str,
+) -> str:
+    groups = {
+        "Commonfolk": {"Human", "Dwarf", "Halfling"},
+        "Fey": {"Elf", "Dryad", "Faun"},
+        "Primals": {"Gnoll", "Lizardman", "Minotaur"},
+        "Felblood": {"Orc", "Troll", "Goblin"},
+        "Wretched": {"Revenant", "Hagspawn", "Swarmling"},
+    }
+    for lineage, races in groups.items():
+        if race in races:
+            return lineage
+    return fallback
+
+
+def _combatant_attack_range(
+    world: WorldService,
+    kind: str,
+    source_id: str,
+) -> int:
+    if kind == "character":
+        try:
+            character_id = int(source_id)
+        except ValueError:
+            return 0
+        inventory = world.database.get_character_inventory(character_id)
+        for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+            instance_id = inventory.equipment.get(slot)
+            if instance_id is None:
+                continue
+            try:
+                instance = inventory.item(instance_id)
+                template = world.catalog.get(instance.template_id)
+            except ValueError:
+                continue
+            if template.item_type is ItemType.WEAPON:
+                return template.range
+        return 0
+
+    if kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is None:
+            return 0
+        template = world.get_enemy_template(enemy.template_id)
+        if template is None:
+            return 0
+        if enemy.combat_role.value == "spellcaster" and enemy.selected_spell:
+            return template.spell_range
+        if enemy.main_hand_item_id is not None:
+            try:
+                weapon = world.catalog.get(enemy.main_hand_item_id)
+                if weapon.item_type is ItemType.WEAPON:
+                    return weapon.range
+            except ValueError:
+                pass
+        if enemy.selected_natural_attack is not None:
+            return enemy.selected_natural_attack.range
+        return 0
+
+    return 0
+
+
 def _combatant_vitals_data(
     world: WorldService,
     kind: str,
     source_id: str,
 ) -> JsonObject:
+    if kind == "enemy":
+        enemy = world.get_enemy(source_id)
+        if enemy is None:
+            return {
+                "hp": None,
+                "max_hp": None,
+                "hunger": None,
+                "character_status": None,
+                "failed_death_saves": None,
+                "death_save_dc": None,
+            }
+        template = world.get_enemy_template(enemy.template_id)
+        return {
+            "hp": enemy.current_hp,
+            "max_hp": template.max_hp if template is not None else None,
+            "hunger": None,
+            "character_status": None,
+            "failed_death_saves": None,
+            "death_save_dc": None,
+        }
     if kind != "character":
         return {
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "character_status": None,
             "failed_death_saves": None,
             "death_save_dc": None,
@@ -30,6 +172,7 @@ def _combatant_vitals_data(
         return {
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "character_status": None,
             "failed_death_saves": None,
             "death_save_dc": None,
@@ -46,6 +189,7 @@ def _combatant_vitals_data(
         return {
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "character_status": None,
             "failed_death_saves": None,
             "death_save_dc": None,
@@ -59,6 +203,7 @@ def _combatant_vitals_data(
     return {
         "hp": character.hp,
         "max_hp": character.max_hp,
+        "hunger": character.hunger,
         "character_status": state.status.value,
         "failed_death_saves": state.failed_death_saves,
         "death_save_dc": death_save_dc,
@@ -90,6 +235,7 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "source_connection_id": landmark.source_connection_id,
                 "feature_type": landmark.feature_type,
                 "synthetic": landmark.synthetic,
+                "cover": landmark.cover.value,
                 "x": landmark.x,
                 "y": landmark.y,
             }
@@ -101,8 +247,21 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "destination_landmark_id": route.destination_landmark_id,
                 "distance": route.distance.value,
                 "movement_cost": route.movement_cost,
-                "obstacle": route.obstacle,
+                "terrain": route.terrain.value,
+                "base_blocked": route.base_blocked,
                 "blocked": route.blocked,
+                "automatic": route.automatic,
+                "effects": [
+                    {
+                        "id": effect.id,
+                        "name": effect.name,
+                        "effect_type": effect.effect_type,
+                        "blocks_movement": effect.blocks_movement,
+                        "movement_cost_modifier": effect.movement_cost_modifier,
+                        "remaining_rounds": effect.remaining_rounds,
+                    }
+                    for effect in route.effects
+                ],
             }
             for route in scene.routes
         ],
@@ -124,6 +283,18 @@ def _combat_scene_data(scene: CombatScene, world: WorldService) -> JsonObject:
                 "route_cost": combatant.route_cost,
                 "is_between_landmarks": combatant.is_between_landmarks,
                 "standard_action_spent": combatant.standard_action_spent,
+                "defending": combatant.defending,
+                "dashed": combatant.dashed,
+                "attack_range": _combatant_attack_range(
+                    world,
+                    combatant.kind.value,
+                    combatant.source_id,
+                ),
+                "usable_items": _combatant_usable_items_data(
+                    world,
+                    combatant.kind.value,
+                    combatant.source_id,
+                ),
                 **_combatant_vitals_data(
                     world,
                     combatant.kind.value,
@@ -309,6 +480,7 @@ def _combatant_inspect_data(
             "description": "",
             "hp": character.hp,
             "max_hp": character.max_hp,
+            "hunger": character.hunger,
             "status": combat_state.status.value,
             "failed_death_saves": combat_state.failed_death_saves,
             "death_save_dc": death_save_dc,
@@ -339,9 +511,9 @@ def _combatant_inspect_data(
             equipment_templates = {
                 item_id: slot
                 for slot, item_id in (
-                    ("main_hand", template.main_hand_item_id),
-                    ("off_hand", template.off_hand_item_id),
-                    ("armor", template.armor_item_id),
+                    ("main_hand", enemy.main_hand_item_id),
+                    ("off_hand", enemy.off_hand_item_id),
+                    ("armor", enemy.armor_item_id),
                 )
                 if item_id is not None
             }
@@ -366,9 +538,9 @@ def _combatant_inspect_data(
                     **_catalog_item_summary(world, item_id),
                 }
                 for slot, item_id in (
-                    ("main_hand", template.main_hand_item_id),
-                    ("off_hand", template.off_hand_item_id),
-                    ("armor", template.armor_item_id),
+                    ("main_hand", enemy.main_hand_item_id),
+                    ("off_hand", enemy.off_hand_item_id),
+                    ("armor", enemy.armor_item_id),
                 )
                 if item_id is not None
             ]
@@ -381,12 +553,16 @@ def _combatant_inspect_data(
                 ),
                 "hp": enemy.current_hp,
                 "max_hp": template.max_hp,
+                "hunger": None,
                 "status": enemy.status.value,
                 "failed_death_saves": None,
                 "death_save_dc": None,
                 "stance": None,
-                "race": template.race,
-                "lineage": None,
+                "race": enemy.race,
+                "lineage": _enemy_lineage_for_race(
+                    enemy.race,
+                    template.lineage,
+                ),
                 "age": None,
                 "gender": None,
                 "attributes": {
@@ -405,12 +581,56 @@ def _combatant_inspect_data(
                     "template_id": template.template_id,
                     "template_name": template.name,
                     "difficulty_level": template.difficulty_level,
-                    "armor": template.armor,
+                    "armor": (
+                        world.catalog.get(enemy.armor_item_id).protection
+                        if enemy.armor_item_id is not None
+                        else template.armor
+                    ),
                     "magical_resistance": template.magical_resistance,
-                    "attack_dc": template.attack_dc,
-                    "defense_dc": template.defense_dc,
-                    "damage": template.damage,
-                    "attack_profile": template.attack_profile,
+                    "attack_dc": max(
+                        1,
+                        10
+                        + (
+                            template.dexterity
+                            if enemy.combat_role.value == "ranged"
+                            else template.arcana
+                            if enemy.combat_role.value == "spellcaster"
+                            else template.strength
+                        ),
+                    ),
+                    "defense_dc": max(
+                        1,
+                        10
+                        + template.dexterity
+                        + (
+                            world.catalog.get(
+                                enemy.armor_item_id
+                            ).dodge_penalty
+                            if enemy.armor_item_id is not None
+                            else 0
+                        )
+                        + (
+                            world.catalog.get(
+                                enemy.off_hand_item_id
+                            ).defense_bonus
+                            if enemy.off_hand_item_id is not None
+                            else 0
+                        ),
+                    ),
+                    "damage": (
+                        enemy.selected_natural_attack.damage
+                        if enemy.selected_natural_attack is not None
+                        else template.damage
+                    ),
+                    "attack_profile": (
+                        enemy.selected_natural_attack.name
+                        if enemy.selected_natural_attack is not None
+                        else world.catalog.get(enemy.main_hand_item_id).name
+                        if enemy.main_hand_item_id is not None
+                        else enemy.selected_spell
+                        if enemy.selected_spell is not None
+                        else template.attack_profile
+                    ),
                     "special_ability": template.special_ability,
                     "typical_behaviour": template.typical_behaviour,
                 },
@@ -434,6 +654,7 @@ def _combatant_inspect_data(
             "description": legacy.description or "",
             "hp": None,
             "max_hp": None,
+            "hunger": None,
             "status": "active",
             "failed_death_saves": None,
             "death_save_dc": None,

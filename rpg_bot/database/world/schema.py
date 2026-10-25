@@ -58,6 +58,7 @@ class DatabaseWorldSchemaMixin:
                 name TEXT NOT NULL,
                 description TEXT,
                 race TEXT NOT NULL DEFAULT 'Unknown',
+                lineage TEXT NOT NULL DEFAULT 'Other',
                 difficulty_level INTEGER NOT NULL DEFAULT 1 CHECK (difficulty_level >= 0),
                 strength INTEGER NOT NULL DEFAULT 0 CHECK (strength >= 0),
                 dexterity INTEGER NOT NULL DEFAULT 0 CHECK (dexterity >= 0),
@@ -76,7 +77,21 @@ class DatabaseWorldSchemaMixin:
                 typical_behaviour TEXT NOT NULL DEFAULT 'Unknown',
                 main_hand_item_id TEXT,
                 off_hand_item_id TEXT,
-                armor_item_id TEXT
+                armor_item_id TEXT,
+                melee_weapon_ids TEXT NOT NULL DEFAULT '[]',
+                ranged_weapon_ids TEXT NOT NULL DEFAULT '[]',
+                off_hand_item_ids TEXT NOT NULL DEFAULT '[]',
+                armor_item_ids TEXT NOT NULL DEFAULT '[]',
+                spell_names TEXT NOT NULL DEFAULT '[]',
+                spell_range INTEGER NOT NULL DEFAULT 3 CHECK (spell_range > 0),
+                melee_damage_filter TEXT,
+                ranged_damage_filter TEXT,
+                natural_attacks TEXT NOT NULL DEFAULT '[]',
+                armor_reduction_filter INTEGER,
+                dual_wield INTEGER NOT NULL DEFAULT 0,
+                allowed_races TEXT NOT NULL DEFAULT '[]',
+                melee_loadouts TEXT NOT NULL DEFAULT '[]',
+                shield_item_ids TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS world_enemies (
                 entity_id TEXT PRIMARY KEY,
@@ -84,6 +99,15 @@ class DatabaseWorldSchemaMixin:
                 current_hp INTEGER NOT NULL CHECK (current_hp >= 0),
                 status TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'dead', 'fled')),
+                combat_role TEXT NOT NULL DEFAULT 'melee'
+                    CHECK (combat_role IN ('melee', 'ranged', 'spellcaster')),
+                main_hand_item_id TEXT,
+                off_hand_item_id TEXT,
+                armor_item_id TEXT,
+                selected_spell TEXT,
+                selected_natural_attack TEXT,
+                race TEXT NOT NULL DEFAULT 'Unknown',
+                loadout_style TEXT,
                 FOREIGN KEY (entity_id) REFERENCES world_entities(id) ON DELETE CASCADE,
                 FOREIGN KEY (template_id) REFERENCES enemy_templates(id)
             );
@@ -187,6 +211,137 @@ class DatabaseWorldSchemaMixin:
             CREATE INDEX IF NOT EXISTS characters_by_room ON characters(current_room_id);
             """
         )
+        enemy_template_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(enemy_templates)")
+        }
+        enemy_template_migrations = {
+            "lineage": (
+                "ALTER TABLE enemy_templates ADD COLUMN lineage "
+                "TEXT NOT NULL DEFAULT 'Other'"
+            ),
+            "melee_weapon_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN melee_weapon_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "ranged_weapon_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN ranged_weapon_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "off_hand_item_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN off_hand_item_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "armor_item_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN armor_item_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "spell_names": (
+                "ALTER TABLE enemy_templates ADD COLUMN spell_names "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "spell_range": (
+                "ALTER TABLE enemy_templates ADD COLUMN spell_range "
+                "INTEGER NOT NULL DEFAULT 3"
+            ),
+            "melee_damage_filter": (
+                "ALTER TABLE enemy_templates ADD COLUMN melee_damage_filter TEXT"
+            ),
+            "ranged_damage_filter": (
+                "ALTER TABLE enemy_templates ADD COLUMN ranged_damage_filter TEXT"
+            ),
+            "natural_attacks": (
+                "ALTER TABLE enemy_templates ADD COLUMN natural_attacks "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "armor_reduction_filter": (
+                "ALTER TABLE enemy_templates ADD COLUMN "
+                "armor_reduction_filter INTEGER"
+            ),
+            "dual_wield": (
+                "ALTER TABLE enemy_templates ADD COLUMN dual_wield "
+                "INTEGER NOT NULL DEFAULT 0"
+            ),
+            "allowed_races": (
+                "ALTER TABLE enemy_templates ADD COLUMN allowed_races "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "melee_loadouts": (
+                "ALTER TABLE enemy_templates ADD COLUMN melee_loadouts "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "shield_item_ids": (
+                "ALTER TABLE enemy_templates ADD COLUMN shield_item_ids "
+                "TEXT NOT NULL DEFAULT '[]'"
+            ),
+        }
+        for column, statement in enemy_template_migrations.items():
+            if column not in enemy_template_columns:
+                connection.execute(statement)
+
+        connection.execute(
+            """
+            UPDATE enemy_templates
+            SET lineage = CASE
+                WHEN race IN ('Human', 'Dwarf', 'Halfling') THEN 'Commonfolk'
+                WHEN race IN ('Elf', 'Dryad', 'Faun') THEN 'Fey'
+                WHEN race IN ('Gnoll', 'Lizardman', 'Minotaur') THEN 'Primals'
+                WHEN race IN ('Orc', 'Troll', 'Goblin') THEN 'Felblood'
+                WHEN race IN ('Revenant', 'Hagspawn', 'Swarmling') THEN 'Wretched'
+                ELSE lineage
+            END
+            WHERE lineage = 'Other'
+            """
+        )
+
+        world_enemy_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(world_enemies)")
+        }
+        world_enemy_migrations = {
+            "combat_role": (
+                "ALTER TABLE world_enemies ADD COLUMN combat_role "
+                "TEXT NOT NULL DEFAULT 'melee'"
+            ),
+            "main_hand_item_id": (
+                "ALTER TABLE world_enemies ADD COLUMN main_hand_item_id TEXT"
+            ),
+            "off_hand_item_id": (
+                "ALTER TABLE world_enemies ADD COLUMN off_hand_item_id TEXT"
+            ),
+            "armor_item_id": (
+                "ALTER TABLE world_enemies ADD COLUMN armor_item_id TEXT"
+            ),
+            "selected_spell": (
+                "ALTER TABLE world_enemies ADD COLUMN selected_spell TEXT"
+            ),
+            "selected_natural_attack": (
+                "ALTER TABLE world_enemies ADD COLUMN selected_natural_attack TEXT"
+            ),
+            "race": (
+                "ALTER TABLE world_enemies ADD COLUMN race "
+                "TEXT NOT NULL DEFAULT 'Unknown'"
+            ),
+            "loadout_style": (
+                "ALTER TABLE world_enemies ADD COLUMN loadout_style TEXT"
+            ),
+        }
+        for column, statement in world_enemy_migrations.items():
+            if column not in world_enemy_columns:
+                connection.execute(statement)
+
+        connection.execute(
+            """
+            UPDATE world_enemies
+            SET race = COALESCE((
+                SELECT enemy_templates.race
+                FROM enemy_templates
+                WHERE enemy_templates.id = world_enemies.template_id
+            ), race)
+            WHERE race = 'Unknown'
+            """
+        )
+
         enemy_seed_key = "basic_enemy_templates_v1"
         if connection.execute(
             "SELECT 1 FROM world_seed_state WHERE key = ?",
@@ -276,6 +431,27 @@ class DatabaseWorldSchemaMixin:
                 "INSERT INTO world_seed_state (key) VALUES (?)",
                 (enemy_seed_key,),
             )
+        connection.execute(
+            """
+            UPDATE enemy_templates
+            SET lineage = CASE
+                WHEN race IN ('Human', 'Dwarf', 'Halfling') THEN 'Commonfolk'
+                WHEN race IN ('Elf', 'Dryad', 'Faun') THEN 'Fey'
+                WHEN race IN ('Gnoll', 'Lizardman', 'Minotaur') THEN 'Primals'
+                WHEN race IN ('Orc', 'Troll', 'Goblin') THEN 'Felblood'
+                WHEN race IN ('Revenant', 'Hagspawn', 'Swarmling') THEN 'Wretched'
+                ELSE lineage
+            END
+            WHERE lineage = 'Other'
+            AND race IN (
+                'Human', 'Dwarf', 'Halfling',
+                'Elf', 'Dryad', 'Faun',
+                'Gnoll', 'Lizardman', 'Minotaur',
+                'Orc', 'Troll', 'Goblin',
+                'Revenant', 'Hagspawn', 'Swarmling'
+            )
+            """
+        )
         room_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(rooms)")
         }

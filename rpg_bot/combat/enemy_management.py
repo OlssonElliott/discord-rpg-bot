@@ -18,6 +18,7 @@ class CombatEnemyManagementMixin:
         *,
         landmark_id: str | None = None,
         quantity: int = 1,
+        combat_role: str | None = None,
     ) -> CombatScene:
         scene = self._require_current(guild_id)
         if (
@@ -43,6 +44,7 @@ class CombatEnemyManagementMixin:
             enemy = self.world.place_enemy(
                 scene.room_id,
                 template.template_id,
+                combat_role=combat_role,
             )
             initiative_roll, initiative_score = self._roll_initiative(
                 template.insight

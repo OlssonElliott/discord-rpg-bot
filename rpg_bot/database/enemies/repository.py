@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from uuid import uuid4
 
@@ -19,6 +20,14 @@ class DatabaseEnemiesMixin:
         instance_id: str | None = None,
         name: str | None = None,
         description: str | None = None,
+        combat_role: str = "melee",
+        main_hand_item_id: str | None = None,
+        off_hand_item_id: str | None = None,
+        armor_item_id: str | None = None,
+        selected_spell: str | None = None,
+        selected_natural_attack=None,
+        race: str = "Unknown",
+        loadout_style: str | None = None,
     ):
         template = self.get_enemy_template(template_id)
         if template is None:
@@ -56,13 +65,33 @@ class DatabaseEnemiesMixin:
                 connection.execute(
                     """
                     INSERT INTO world_enemies (
-                        entity_id, template_id, current_hp, status
-                    ) VALUES (?, ?, ?, 'active')
+                        entity_id, template_id, current_hp, status,
+                        combat_role, main_hand_item_id, off_hand_item_id,
+                        armor_item_id, selected_spell, selected_natural_attack,
+                        race, loadout_style
+                    ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         clean_id,
                         template.template_id,
                         template.max_hp,
+                        combat_role,
+                        main_hand_item_id,
+                        off_hand_item_id,
+                        armor_item_id,
+                        selected_spell,
+                        (
+                            json.dumps({
+                                "name": selected_natural_attack.name,
+                                "damage": selected_natural_attack.damage,
+                                "damage_type": selected_natural_attack.damage_type,
+                                "range": selected_natural_attack.range,
+                            })
+                            if selected_natural_attack is not None
+                            else None
+                        ),
+                        race,
+                        loadout_style,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -80,7 +109,11 @@ class DatabaseEnemiesMixin:
                 """
                 SELECT entity.id, entity.room_id, enemy.template_id,
                        entity.name, entity.description,
-                       enemy.current_hp, enemy.status
+                       enemy.current_hp, enemy.status, enemy.combat_role,
+                       enemy.main_hand_item_id, enemy.off_hand_item_id,
+                       enemy.armor_item_id, enemy.selected_spell,
+                       enemy.selected_natural_attack, enemy.race,
+                       enemy.loadout_style
                 FROM world_entities AS entity
                 JOIN world_enemies AS enemy
                   ON enemy.entity_id = entity.id
@@ -102,7 +135,11 @@ class DatabaseEnemiesMixin:
                 """
                 SELECT entity.id, entity.room_id, enemy.template_id,
                        entity.name, entity.description,
-                       enemy.current_hp, enemy.status
+                       enemy.current_hp, enemy.status, enemy.combat_role,
+                       enemy.main_hand_item_id, enemy.off_hand_item_id,
+                       enemy.armor_item_id, enemy.selected_spell,
+                       enemy.selected_natural_attack, enemy.race,
+                       enemy.loadout_style
                 FROM world_entities AS entity
                 JOIN world_enemies AS enemy
                   ON enemy.entity_id = entity.id
@@ -160,12 +197,32 @@ class DatabaseEnemiesMixin:
             connection.execute(
                 """
                 UPDATE world_enemies
-                SET current_hp = ?, status = ?
+                SET current_hp = ?, status = ?, combat_role = ?,
+                    main_hand_item_id = ?, off_hand_item_id = ?,
+                    armor_item_id = ?, selected_spell = ?,
+                    selected_natural_attack = ?, race = ?, loadout_style = ?
                 WHERE entity_id = ?
                 """,
                 (
                     enemy.current_hp,
                     enemy.status.value,
+                    enemy.combat_role.value,
+                    enemy.main_hand_item_id,
+                    enemy.off_hand_item_id,
+                    enemy.armor_item_id,
+                    enemy.selected_spell,
+                    (
+                        json.dumps({
+                            "name": enemy.selected_natural_attack.name,
+                            "damage": enemy.selected_natural_attack.damage,
+                            "damage_type": enemy.selected_natural_attack.damage_type,
+                            "range": enemy.selected_natural_attack.range,
+                        })
+                        if enemy.selected_natural_attack is not None
+                        else None
+                    ),
+                    enemy.race,
+                    enemy.loadout_style,
                     enemy.id,
                 ),
             )
@@ -176,7 +233,12 @@ class DatabaseEnemiesMixin:
 
     @staticmethod
     def _enemy_instance_from_row(row):
-        from ...world.enemies import EnemyInstance, EnemyStatus
+        from ...world.enemies import (
+            EnemyCombatRole,
+            EnemyInstance,
+            EnemyNaturalAttack,
+            EnemyStatus,
+        )
 
         return EnemyInstance(
             id=row["id"],
@@ -186,4 +248,16 @@ class DatabaseEnemiesMixin:
             current_hp=row["current_hp"],
             status=EnemyStatus(row["status"]),
             description=row["description"],
+            combat_role=EnemyCombatRole(row["combat_role"]),
+            main_hand_item_id=row["main_hand_item_id"],
+            off_hand_item_id=row["off_hand_item_id"],
+            armor_item_id=row["armor_item_id"],
+            selected_spell=row["selected_spell"],
+            selected_natural_attack=(
+                EnemyNaturalAttack(**json.loads(row["selected_natural_attack"]))
+                if row["selected_natural_attack"]
+                else None
+            ),
+            race=row["race"],
+            loadout_style=row["loadout_style"],
         )

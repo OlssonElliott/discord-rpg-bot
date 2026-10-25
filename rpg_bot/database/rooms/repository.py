@@ -297,7 +297,7 @@ class DatabaseRoomsMixin:
             SELECT id, discord_user_id, name, hp, max_hp, stance,
                    lineage, race, age, gender,
                    strength, dexterity, arcana, vitality, insight, personality,
-                   is_active, is_archived, portrait_key, current_room_id
+                   hunger, is_active, is_archived, portrait_key, current_room_id
             FROM characters
             WHERE current_room_id = ? AND is_archived = 0
             ORDER BY name COLLATE NOCASE, id

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Save, Trash2 } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, Save, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +18,36 @@ import { Textarea } from '@/components/ui/textarea';
 import type { CatalogItem, EnemyTemplateData } from '@/lib/api';
 import type { EnemyTemplateDraft } from '../types';
 
+const LINEAGE_RACES: Record<string, string[]> = {
+  Commonfolk: ['Human', 'Dwarf', 'Halfling'],
+  Fey: ['Elf', 'Dryad', 'Faun'],
+  Primals: ['Gnoll', 'Lizardman', 'Minotaur'],
+  Felblood: ['Orc', 'Troll', 'Goblin'],
+  Wretched: ['Revenant', 'Hagspawn', 'Swarmling'],
+  Other: ['Undead', 'Undead Beast', 'Beast', 'Construct', 'Aberration', 'Demon', 'Elemental', 'Unknown'],
+};
+
+const ATTRIBUTE_PRESETS = {
+  Balanced: { strength: 2, dexterity: 2, arcana: 1, vitality: 2, insight: 1, personality: 1 },
+  Melee: { strength: 4, dexterity: 2, arcana: 0, vitality: 3, insight: 1, personality: 1 },
+  Ranged: { strength: 1, dexterity: 4, arcana: 0, vitality: 2, insight: 2, personality: 1 },
+  Tank: { strength: 3, dexterity: 1, arcana: 0, vitality: 4, insight: 2, personality: 1 },
+} as const;
+
+const NATURAL_ATTACK_PRESETS = {
+  bite: { name: 'Bite', damage: '1d6', damage_type: 'pierce', range: 0 },
+  claws: { name: 'Claws', damage: '1d6', damage_type: 'slash', range: 0 },
+  gore: { name: 'Gore', damage: '1d8', damage_type: 'pierce', range: 0 },
+  slam: { name: 'Slam', damage: '1d6', damage_type: 'blunt', range: 0 },
+} as const;
+
+function lineageForRace(race: string): string {
+  return Object.entries(LINEAGE_RACES).find(([, races]) => (
+    races.includes(race)
+  ))?.[0] ?? 'Other';
+}
+
+
 export function EnemyPlacementDialog({
   open,
   templates,
@@ -27,11 +57,18 @@ export function EnemyPlacementDialog({
   open: boolean;
   templates: EnemyTemplateData[];
   onOpenChange: (open: boolean) => void;
-  onPlace: (templateId: string, quantity: number) => Promise<boolean>;
+  onPlace: (
+    templateId: string,
+    quantity: number,
+    combatRole: 'random' | 'melee' | 'ranged' | 'spellcaster',
+  ) => Promise<boolean>;
 }) {
   const [templateId, setTemplateId] = useState('');
   const [quantity, setQuantity] = useState(1);
+  const [combatRole, setCombatRole] = useState<'random' | 'melee' | 'ranged' | 'spellcaster'>('random');
   const [search, setSearch] = useState('');
+  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const availableRoles = selectedTemplate?.available_roles ?? [];
   const filtered = templates.filter((template) => {
     const query = search.trim().toLocaleLowerCase();
     return !query
@@ -65,7 +102,10 @@ export function EnemyPlacementDialog({
         <NativeSelect
           id="enemy-template"
           value={templateId}
-          onChange={(event) => setTemplateId(event.target.value)}
+          onChange={(event) => {
+            setTemplateId(event.target.value);
+            setCombatRole('random');
+          }}
         >
           <NativeSelectOption value="">
             Choose an enemy…
@@ -79,6 +119,37 @@ export function EnemyPlacementDialog({
             </NativeSelectOption>
           ))}
         </NativeSelect>
+
+        {selectedTemplate && (
+          <>
+            <label className="dialog-label" htmlFor="enemy-combat-role">
+              Combat role
+            </label>
+            <NativeSelect
+              id="enemy-combat-role"
+              value={availableRoles.length <= 1 ? (availableRoles[0] ?? 'melee') : combatRole}
+              onChange={(event) => setCombatRole(
+                event.target.value as 'random' | 'melee' | 'ranged' | 'spellcaster',
+              )}
+            >
+              {availableRoles.length > 1 && (
+                <NativeSelectOption value="random">Random</NativeSelectOption>
+              )}
+              {availableRoles.includes('melee') && (
+                <NativeSelectOption value="melee">Melee</NativeSelectOption>
+              )}
+              {availableRoles.includes('ranged') && (
+                <NativeSelectOption value="ranged">Ranged</NativeSelectOption>
+              )}
+              {availableRoles.includes('spellcaster') && (
+                <NativeSelectOption value="spellcaster">Spellcaster</NativeSelectOption>
+              )}
+              {availableRoles.length === 0 && (
+                <NativeSelectOption value="melee">Melee</NativeSelectOption>
+              )}
+            </NativeSelect>
+          </>
+        )}
 
         <label className="dialog-label" htmlFor="enemy-quantity">
           Quantity
@@ -101,9 +172,13 @@ export function EnemyPlacementDialog({
               || quantity > 20
             }
             onClick={async () => {
-              if (await onPlace(templateId, quantity)) {
+              const role = availableRoles.length <= 1
+                ? (availableRoles[0] ?? 'melee')
+                : combatRole;
+              if (await onPlace(templateId, quantity, role)) {
                 setTemplateId('');
                 setQuantity(1);
+                setCombatRole('random');
                 setSearch('');
               }
             }}
@@ -120,7 +195,8 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
   return {
     name: '',
     description: '',
-    race: 'Unknown',
+    race: 'Human',
+    lineage: 'Commonfolk',
     difficulty_level: 1,
     strength: 0,
     dexterity: 0,
@@ -140,7 +216,102 @@ function emptyEnemyTemplateDraft(): EnemyTemplateDraft {
     main_hand_item_id: null,
     off_hand_item_id: null,
     armor_item_id: null,
+    melee_weapon_ids: [],
+    ranged_weapon_ids: [],
+    off_hand_item_ids: [],
+    armor_item_ids: [],
+    spell_names: [],
+    spell_range: 3,
+    melee_damage_filter: null,
+    ranged_damage_filter: null,
+    natural_attacks: [],
+    armor_reduction_filter: null,
+    dual_wield: false,
+    allowed_races: ['Human'],
+    melee_loadouts: [],
+    shield_item_ids: [],
   };
+}
+
+function EnemyEditorSection({
+  title,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="enemy-editor-section">
+      <button
+        type="button"
+        className="enemy-editor-section__toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span>{title}</span>
+        {summary && <Badge variant="outline">{summary}</Badge>}
+        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+      </button>
+      {open && <div className="enemy-editor-section__body">{children}</div>}
+    </section>
+  );
+}
+
+function PoolChecklist({
+  items,
+  selected,
+  onChange,
+}: {
+  items: CatalogItem[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (!items.length) {
+    return (
+      <div className="enemy-pool-list enemy-pool-list--empty">
+        <p className="enemy-pool-empty">No compatible items in the Item Library.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="enemy-pool-list">
+      {items.map((item) => (
+        <label key={item.id} className="enemy-pool-option">
+          <input
+            type="checkbox"
+            checked={selected.includes(item.id)}
+            onChange={(event) => {
+              onChange(
+                event.target.checked
+                  ? [...selected, item.id]
+                  : selected.filter((id) => id !== item.id),
+              );
+            }}
+          />
+          <span>{item.name}</span>
+          {item.item_type === 'weapon' && (
+            <small>
+              {item.damage_expression ?? `1d${item.damage ?? 1}`}
+              {item.damage_type ? ` · ${item.damage_type}` : ''}
+              {` · Range ${item.range ?? 0}`}
+            </small>
+          )}
+          {item.item_type === 'armor' && (
+            <small>
+              {(item.defense_bonus ?? 0) > 0
+                ? `Defense +${item.defense_bonus}`
+                : `DR ${item.protection ?? 0} · Dodge ${(item.dodge_penalty ?? 0) >= 0 ? '+' : ''}${item.dodge_penalty ?? 0}`}
+            </small>
+          )}
+        </label>
+      ))}
+    </div>
+  );
 }
 
 export function EnemyLibraryDialog({
@@ -165,30 +336,128 @@ export function EnemyLibraryDialog({
   const [draft, setDraft] = useState<EnemyTemplateDraft>(
     () => emptyEnemyTemplateDraft(),
   );
-  const editingTemplate = templates.find(
-    (template) => template.id === editingId,
-  );
-  const weapons = catalogItems.filter(
-    (item) => item.item_type === 'weapon',
-  );
-  const armorItems = catalogItems.filter(
-    (item) => item.item_type === 'armor',
-  );
   const [search, setSearch] = useState('');
+  const [lineageFilter, setLineageFilter] = useState('all');
   const [raceFilter, setRaceFilter] = useState('all');
-  const races = Array.from(
-    new Set(templates.map((template) => template.race).filter(Boolean)),
-  ).sort((left, right) => left.localeCompare(right));
+  const [naturalAttackPreset, setNaturalAttackPreset] = useState<keyof typeof NATURAL_ATTACK_PRESETS>('bite');
+  const [equipmentTab, setEquipmentTab] = useState<'melee' | 'ranged' | 'armor'>('melee');
+  const [armorDrFilters, setArmorDrFilters] = useState<number[]>([]);
+  const [rangedEnabled, setRangedEnabled] = useState(false);
+  const editingTemplate = templates.find((template) => template.id === editingId);
+
+  const weapons = catalogItems.filter((item) => item.item_type === 'weapon');
+  const meleeWeapons = weapons.filter((item) => (item.range ?? 0) <= 0);
+  const rangedWeapons = weapons.filter((item) => (item.range ?? 0) > 0);
+  const armorItems = catalogItems.filter((item) => item.item_type === 'armor');
+  const bodyArmorItems = armorItems.filter((item) => (item.defense_bonus ?? 0) <= 0);
+  const shieldItems = armorItems.filter((item) => (item.defense_bonus ?? 0) > 0);
+  const secondWeapons = meleeWeapons.filter(
+    (item) => item.grip === 'one_handed',
+  );
+  const meleeDamageOptions = Array.from(new Set(
+    meleeWeapons.map((item) => item.damage_expression).filter(Boolean),
+  )).sort();
+  const rangedDamageOptions = Array.from(new Set(
+    rangedWeapons.map((item) => item.damage_expression).filter(Boolean),
+  )).sort();
+  const compatibleMeleeWeapons = meleeWeapons.filter(
+    (item) => !draft.melee_damage_filter
+      || item.damage_expression === draft.melee_damage_filter,
+  );
+  const compatibleRangedWeapons = rangedWeapons.filter(
+    (item) => !draft.ranged_damage_filter
+      || item.damage_expression === draft.ranged_damage_filter,
+  );
+  const armorReductionOptions = Array.from(new Set(
+    bodyArmorItems
+      .map((item) => item.protection)
+      .filter((value): value is number => value !== undefined),
+  )).sort((left, right) => left - right);
+  const compatibleArmorItems = bodyArmorItems.filter(
+    (item) => armorDrFilters.length === 0
+      || armorDrFilters.includes(item.protection ?? 0),
+  );
+  const selectedArmorItems = bodyArmorItems.filter(
+    (item) => draft.armor_item_ids.includes(item.id),
+  );
+  const selectedShieldItems = shieldItems.filter(
+    (item) => draft.shield_item_ids.includes(item.id),
+  );
+  const armorChoices = selectedArmorItems.length ? selectedArmorItems : [undefined];
+  const shieldChoices = draft.melee_loadouts.includes('shield')
+    ? (selectedShieldItems.length ? selectedShieldItems : [undefined])
+    : [undefined];
+  const defenseValues = Array.from(new Set(
+    armorChoices.flatMap((armor) => (
+      shieldChoices.map((shield) => Math.max(
+        1,
+        10
+          + draft.dexterity
+          + (armor?.dodge_penalty ?? 0)
+          + (shield?.defense_bonus ?? 0),
+      ))
+    )),
+  )).sort((left, right) => left - right);
+  const defenseSummary = defenseValues.length > 1
+    ? `${defenseValues[0]}–${defenseValues[defenseValues.length - 1]}`
+    : String(defenseValues[0] ?? (10 + draft.dexterity));
+  const meleeAttackDc = Math.max(1, 10 + draft.strength);
+  const rangedAttackDc = Math.max(1, 10 + draft.dexterity);
+  const meleeSelectionCount = new Set([
+    ...draft.melee_weapon_ids,
+    ...(draft.melee_loadouts.includes('dual_wield') ? draft.off_hand_item_ids : []),
+    ...(draft.melee_loadouts.includes('shield') ? draft.shield_item_ids : []),
+  ]).size + (draft.melee_loadouts.includes('natural') ? draft.natural_attacks.length : 0);
+  const rangedSelectionCount = draft.ranged_weapon_ids.length;
+  const armorSelectionCount = draft.armor_item_ids.length;
+
+  const knownRaces = new Set(Object.values(LINEAGE_RACES).flat());
+  const customRaces = Array.from(new Set([
+    ...draft.allowed_races,
+    ...templates.flatMap((template) => (
+      template.allowed_races.length
+        ? template.allowed_races
+        : [template.race]
+    )),
+  ])).filter((race) => race && !knownRaces.has(race));
+  const raceGroups: Record<string, string[]> = {
+    ...LINEAGE_RACES,
+    Other: Array.from(new Set([
+      ...LINEAGE_RACES.Other,
+      ...customRaces,
+    ])).sort((left, right) => left.localeCompare(right)),
+  };
+  const lineages = Object.keys(raceGroups);
+  const races = Array.from(new Set([
+    ...(lineageFilter === 'all'
+      ? Object.values(raceGroups).flat()
+      : (raceGroups[lineageFilter] ?? [])),
+    ...templates
+      .flatMap((template) => (
+        template.allowed_races.length
+          ? template.allowed_races
+          : [template.race]
+      ))
+      .filter((race) => (
+        lineageFilter === 'all'
+        || lineageForRace(race) === lineageFilter
+      )),
+  ].filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const normalizedSearch = search.trim().toLocaleLowerCase();
-  const filteredTemplates = templates.filter((template) => (
-    (raceFilter === 'all' || template.race === raceFilter)
-    && (
-      !normalizedSearch
+  const filteredTemplates = templates.filter((template) => {
+    const templateRaces = template.allowed_races.length
+      ? template.allowed_races
+      : [template.race];
+    const matchesLineage = lineageFilter === 'all'
+      || templateRaces.some((race) => lineageForRace(race) === lineageFilter);
+    const matchesRace = raceFilter === 'all'
+      || templateRaces.includes(raceFilter);
+    const matchesSearch = !normalizedSearch
       || template.name.toLocaleLowerCase().includes(normalizedSearch)
-      || template.race.toLocaleLowerCase().includes(normalizedSearch)
-      || template.typical_behaviour.toLocaleLowerCase().includes(normalizedSearch)
-    )
-  ));
+      || templateRaces.some((race) => race.toLocaleLowerCase().includes(normalizedSearch))
+      || template.typical_behaviour.toLocaleLowerCase().includes(normalizedSearch);
+    return matchesLineage && matchesRace && matchesSearch;
+  });
 
   function update<K extends keyof EnemyTemplateDraft>(
     key: K,
@@ -199,10 +468,70 @@ export function EnemyLibraryDialog({
 
   function editTemplate(template?: EnemyTemplateData) {
     setEditingId(template?.id);
-    setDraft(template ? {
+    if (!template) {
+      setDraft(emptyEnemyTemplateDraft());
+      setNaturalAttackPreset('bite');
+      setEquipmentTab('melee');
+      setArmorDrFilters([]);
+      setRangedEnabled(false);
+      return;
+    }
+
+    const legacyMain = template.main_hand_item_id
+      ? catalogItems.find((item) => item.id === template.main_hand_item_id)
+      : undefined;
+    const meleePool = [...template.melee_weapon_ids];
+    const rangedPool = [...template.ranged_weapon_ids];
+    if (legacyMain && !meleePool.includes(legacyMain.id) && !rangedPool.includes(legacyMain.id)) {
+      ((legacyMain.range ?? 0) > 0 ? rangedPool : meleePool).push(legacyMain.id);
+    }
+
+    setEquipmentTab('melee');
+    setRangedEnabled(rangedPool.length > 0);
+    setArmorDrFilters(
+      template.armor_reduction_filter === null
+        ? []
+        : [template.armor_reduction_filter],
+    );
+
+    const rawOffhandIds = Array.from(new Set([
+      ...template.off_hand_item_ids,
+      ...(template.off_hand_item_id ? [template.off_hand_item_id] : []),
+    ]));
+    const existingShieldIds = Array.from(new Set([
+      ...template.shield_item_ids,
+      ...rawOffhandIds.filter((id) => (
+        (catalogItems.find((item) => item.id === id)?.defense_bonus ?? 0) > 0
+      )),
+    ]));
+    const existingSecondWeaponIds = rawOffhandIds.filter((id) => (
+      (catalogItems.find((item) => item.id === id)?.defense_bonus ?? 0) <= 0
+    ));
+    const oneHandedPool = meleePool.filter((id) => (
+      catalogItems.find((item) => item.id === id)?.grip === 'one_handed'
+    ));
+    const twoHandedPool = meleePool.filter((id) => (
+      catalogItems.find((item) => item.id === id)?.grip === 'two_handed'
+    ));
+    const inferredLoadouts = [
+      oneHandedPool.length ? 'one_handed' : '',
+      existingShieldIds.length && oneHandedPool.length ? 'shield' : '',
+      existingSecondWeaponIds.length && oneHandedPool.length ? 'dual_wield' : '',
+      twoHandedPool.length ? 'two_handed' : '',
+      template.natural_attacks.length ? 'natural' : '',
+    ].filter(Boolean) as EnemyTemplateDraft['melee_loadouts'];
+    const selectedLoadouts = template.melee_loadouts.length
+      ? template.melee_loadouts
+      : inferredLoadouts;
+    const selectedRaces = template.allowed_races.length
+      ? template.allowed_races
+      : [template.race];
+
+    setDraft({
       name: template.name,
       description: template.description,
       race: template.race,
+      lineage: template.lineage,
       difficulty_level: template.difficulty_level,
       strength: template.strength,
       dexterity: template.dexterity,
@@ -219,10 +548,27 @@ export function EnemyLibraryDialog({
       attack_profile: template.attack_profile,
       special_ability: template.special_ability,
       typical_behaviour: template.typical_behaviour,
-      main_hand_item_id: template.main_hand_item_id,
-      off_hand_item_id: template.off_hand_item_id,
-      armor_item_id: template.armor_item_id,
-    } : emptyEnemyTemplateDraft());
+      main_hand_item_id: null,
+      off_hand_item_id: null,
+      armor_item_id: null,
+      melee_weapon_ids: meleePool,
+      ranged_weapon_ids: rangedPool,
+      off_hand_item_ids: existingSecondWeaponIds,
+      armor_item_ids: Array.from(new Set([
+        ...template.armor_item_ids,
+        ...(template.armor_item_id ? [template.armor_item_id] : []),
+      ])),
+      spell_names: template.spell_names,
+      spell_range: template.spell_range,
+      melee_damage_filter: template.melee_damage_filter,
+      ranged_damage_filter: template.ranged_damage_filter,
+      natural_attacks: template.natural_attacks,
+      armor_reduction_filter: null,
+      dual_wield: selectedLoadouts.includes('dual_wield'),
+      allowed_races: selectedRaces,
+      melee_loadouts: selectedLoadouts,
+      shield_item_ids: existingShieldIds,
+    });
   }
 
   const invalidNumber = [
@@ -235,17 +581,36 @@ export function EnemyLibraryDialog({
     draft.personality,
     draft.armor,
     draft.magical_resistance,
-  ].some(
-    (value) => !Number.isInteger(value) || value < 0,
-  );
-
+  ].some((value) => !Number.isInteger(value) || value < 0);
   const invalidPositive = [
     draft.max_hp,
     draft.attack_dc,
     draft.defense_dc,
-  ].some(
-    (value) => !Number.isInteger(value) || value < 1,
+    draft.spell_range,
+  ].some((value) => !Number.isInteger(value) || value < 1);
+
+  const attributePreset = (
+    Object.entries(ATTRIBUTE_PRESETS).find(([, values]) => (
+      draft.strength === values.strength
+      && draft.dexterity === values.dexterity
+      && draft.arcana === values.arcana
+      && draft.vitality === values.vitality
+      && draft.insight === values.insight
+      && draft.personality === values.personality
+    ))?.[0] ?? 'Custom'
   );
+
+  function applyAttributePreset(name: string) {
+    if (name === 'Custom') return;
+    const preset = ATTRIBUTE_PRESETS[name as keyof typeof ATTRIBUTE_PRESETS];
+    setDraft((current) => ({ ...current, ...preset }));
+  }
+
+  const roleSummary = [
+    draft.melee_loadouts.length ? 'Melee' : '',
+    rangedEnabled ? 'Ranged' : '',
+    draft.spell_names.length ? 'Spellcaster' : '',
+  ].filter(Boolean).join(' · ') || 'No roles';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -253,7 +618,7 @@ export function EnemyLibraryDialog({
         <DialogHeader>
           <DialogTitle>Enemy library</DialogTitle>
           <DialogDescription>
-            Define reusable enemy types here. Click an existing type to edit or delete it. Placed copies keep independent HP and world state.
+            Define reusable enemy types and the combat roles their placed instances may use.
           </DialogDescription>
         </DialogHeader>
 
@@ -261,15 +626,12 @@ export function EnemyLibraryDialog({
           <div className="catalog-count">
             {filteredTemplates.length} of {templates.length} enemy types
           </div>
-          <button
-            type="button"
-            onClick={() => editTemplate()}
-          >
+          <button type="button" onClick={() => editTemplate()}>
             New enemy
           </button>
         </div>
 
-        <div className="catalog-grid enemy-library-filters">
+        <div className="enemy-library-filter-grid">
           <label className="dialog-label" htmlFor="enemy-library-search">
             Search
             <Input
@@ -278,6 +640,24 @@ export function EnemyLibraryDialog({
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Name, race or behaviour…"
             />
+          </label>
+          <label className="dialog-label" htmlFor="enemy-library-lineage">
+            Lineage
+            <NativeSelect
+              id="enemy-library-lineage"
+              value={lineageFilter}
+              onChange={(event) => {
+                setLineageFilter(event.target.value);
+                setRaceFilter('all');
+              }}
+            >
+              <NativeSelectOption value="all">All lineages</NativeSelectOption>
+              {lineages.map((lineage) => (
+                <NativeSelectOption key={lineage} value={lineage}>
+                  {lineage}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
           </label>
           <label className="dialog-label" htmlFor="enemy-library-race">
             Race
@@ -288,284 +668,550 @@ export function EnemyLibraryDialog({
             >
               <NativeSelectOption value="all">All races</NativeSelectOption>
               {races.map((race) => (
-                <NativeSelectOption key={race} value={race}>
-                  {race}
-                </NativeSelectOption>
+                <NativeSelectOption key={race} value={race}>{race}</NativeSelectOption>
               ))}
             </NativeSelect>
           </label>
         </div>
 
-        <div
-          className="catalog-list"
-          aria-label="Existing enemy types"
-        >
+        <div className="catalog-list" aria-label="Existing enemy types">
           {filteredTemplates.map((template) => (
             <button
               type="button"
-              className={
-                editingId === template.id
-                  ? 'selected'
-                  : ''
-              }
+              className={editingId === template.id ? 'selected' : ''}
               key={template.id}
               onClick={() => editTemplate(template)}
             >
               <span>{template.name}</span>
               <Badge variant="outline">
-                {template.race} · {template.max_hp} HP
+                {(template.allowed_races.length || 1)} race{(template.allowed_races.length || 1) === 1 ? '' : 's'} · {template.max_hp} HP
               </Badge>
             </button>
           ))}
         </div>
 
-        <div className="catalog-grid">
-          <label className="dialog-label" htmlFor="enemy-template-name">
-            Name
-            <Input
-              id="enemy-template-name"
-              value={draft.name}
-              onChange={(event) => update('name', event.target.value)}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-race">
-            Race
-            <Input
-              id="enemy-template-race"
-              value={draft.race}
-              onChange={(event) => update('race', event.target.value)}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-difficulty">
-            Difficulty
-            <Input
-              id="enemy-template-difficulty"
-              type="number"
-              min={0}
-              value={draft.difficulty_level}
-              onChange={(event) => update('difficulty_level', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-hp">
-            Max HP
-            <Input
-              id="enemy-template-hp"
-              type="number"
-              min={1}
-              value={draft.max_hp}
-              onChange={(event) => update('max_hp', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-strength">
-            Strength
-            <Input
-              id="enemy-template-strength"
-              type="number"
-              min={0}
-              value={draft.strength}
-              onChange={(event) => update('strength', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-dexterity">
-            Dexterity
-            <Input
-              id="enemy-template-dexterity"
-              type="number"
-              min={0}
-              value={draft.dexterity}
-              onChange={(event) => update('dexterity', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-arcana">
-            Arcana
-            <Input
-              id="enemy-template-arcana"
-              type="number"
-              min={0}
-              value={draft.arcana}
-              onChange={(event) => update('arcana', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-vitality">
-            Vitality
-            <Input
-              id="enemy-template-vitality"
-              type="number"
-              min={0}
-              value={draft.vitality}
-              onChange={(event) => update('vitality', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-insight">
-            Insight
-            <Input
-              id="enemy-template-insight"
-              type="number"
-              min={0}
-              value={draft.insight}
-              onChange={(event) => update('insight', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-personality">
-            Personality
-            <Input
-              id="enemy-template-personality"
-              type="number"
-              min={0}
-              value={draft.personality}
-              onChange={(event) => update('personality', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-armor">
-            Armor
-            <Input
-              id="enemy-template-armor"
-              type="number"
-              min={0}
-              value={draft.armor}
-              onChange={(event) => update('armor', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-magic-resistance">
-            Magic resistance
-            <Input
-              id="enemy-template-magic-resistance"
-              type="number"
-              min={0}
-              value={draft.magical_resistance}
-              onChange={(event) => update('magical_resistance', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-attack-dc">
-            Attack DC
-            <Input
-              id="enemy-template-attack-dc"
-              type="number"
-              min={1}
-              value={draft.attack_dc}
-              onChange={(event) => update('attack_dc', Number(event.target.value))}
-            />
-          </label>
-          <label className="dialog-label" htmlFor="enemy-template-defense-dc">
-            Defense DC
-            <Input
-              id="enemy-template-defense-dc"
-              type="number"
-              min={1}
-              value={draft.defense_dc}
-              onChange={(event) => update('defense_dc', Number(event.target.value))}
-            />
-          </label>
-        </div>
+        <div className="enemy-editor-sections">
+          <EnemyEditorSection
+            title="Basics"
+            summary={`${draft.allowed_races.length || 1} race${(draft.allowed_races.length || 1) === 1 ? '' : 's'}`}
+            defaultOpen
+          >
+            <div className="catalog-grid">
+              <label className="dialog-label">Name
+                <Input value={draft.name} onChange={(event) => update('name', event.target.value)} />
+              </label>
+              <label className="dialog-label">Max HP
+                <Input type="number" min={1} value={draft.max_hp} onChange={(event) => update('max_hp', Number(event.target.value))} />
+              </label>
+              <label className="dialog-label">Difficulty
+                <Input value="Not calculated yet" disabled />
+              </label>
+              <label className="dialog-label">Magic resistance
+                <Input
+                  type="number"
+                  min={0}
+                  value={draft.magical_resistance}
+                  onChange={(event) => update('magical_resistance', Number(event.target.value))}
+                />
+              </label>
+            </div>
 
-        <label className="dialog-label" htmlFor="enemy-template-description">
-          Description
-        </label>
-        <Textarea
-          id="enemy-template-description"
-          value={draft.description}
-          onChange={(event) => update('description', event.target.value)}
-        />
+            <div className="enemy-race-pool">
+              <div className="enemy-race-pool__heading">
+                <div>
+                  <strong>Allowed races</strong>
+                  <p className="enemy-section-help">
+                    One race is chosen and saved when the enemy spawns.
+                  </p>
+                </div>
+                <Badge variant="outline">
+                  {draft.allowed_races.length || 1} selected
+                </Badge>
+              </div>
+              <div className="enemy-race-groups">
+                {Object.entries(raceGroups).map(([lineage, races]) => {
+                  const selectedCount = races.filter((race) => (
+                    draft.allowed_races.includes(race)
+                  )).length;
+                  const allSelected = selectedCount === races.length;
+                  return (
+                    <div key={lineage} className="enemy-race-group">
+                      <label className="enemy-race-group__title">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={(event) => {
+                            const withoutGroup = draft.allowed_races.filter(
+                              (race) => !races.includes(race),
+                            );
+                            const next = event.target.checked
+                              ? [...withoutGroup, ...races]
+                              : withoutGroup;
+                            const fallback = next[0] ?? 'Unknown';
+                            update('allowed_races', next);
+                            update('race', fallback);
+                            update('lineage', lineageForRace(fallback));
+                          }}
+                        />
+                        <span>{lineage}</span>
+                        <small>{selectedCount}/{races.length}</small>
+                      </label>
+                      <div className="enemy-race-options">
+                        {races.map((race) => (
+                          <label key={race}>
+                            <input
+                              type="checkbox"
+                              checked={draft.allowed_races.includes(race)}
+                              onChange={(event) => {
+                                const next = event.target.checked
+                                  ? [...draft.allowed_races, race]
+                                  : draft.allowed_races.filter((value) => value !== race);
+                                const fallback = next[0] ?? 'Unknown';
+                                update('allowed_races', next);
+                                update('race', fallback);
+                                update('lineage', lineageForRace(fallback));
+                              }}
+                            />
+                            <span>{race}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
-        <label className="dialog-label" htmlFor="enemy-template-damage">
-          Damage
-        </label>
-        <Input
-          id="enemy-template-damage"
-          value={draft.damage}
-          onChange={(event) => update('damage', event.target.value)}
-          placeholder="1d6"
-        />
+            <label className="dialog-label">Description
+              <Textarea value={draft.description} onChange={(event) => update('description', event.target.value)} />
+            </label>
+            <div className="enemy-combat-summary">
+              <div>
+                <span>Melee Attack DC</span>
+                <strong>{meleeAttackDc}</strong>
+                <small>10 + STR {draft.strength}</small>
+              </div>
+              <div>
+                <span>Ranged Attack DC</span>
+                <strong>{rangedAttackDc}</strong>
+                <small>10 + DEX {draft.dexterity}</small>
+              </div>
+              <div>
+                <span>Defense DC</span>
+                <strong>{defenseSummary}</strong>
+                <small>10 + DEX + armor + shield</small>
+              </div>
+            </div>
+          </EnemyEditorSection>
 
-        <label className="dialog-label" htmlFor="enemy-template-attack-profile">
-          Attack profile
-        </label>
-        <Input
-          id="enemy-template-attack-profile"
-          value={draft.attack_profile}
-          onChange={(event) => update('attack_profile', event.target.value)}
-        />
-
-        <label className="dialog-label" htmlFor="enemy-template-behaviour">
-          Typical behaviour
-        </label>
-        <Textarea
-          id="enemy-template-behaviour"
-          value={draft.typical_behaviour}
-          onChange={(event) => update('typical_behaviour', event.target.value)}
-        />
-
-        <label className="dialog-label" htmlFor="enemy-template-ability">
-          Special ability
-        </label>
-        <Textarea
-          id="enemy-template-ability"
-          value={draft.special_ability ?? ''}
-          onChange={(event) => update(
-            'special_ability',
-            event.target.value.trim()
-              ? event.target.value
-              : null,
-          )}
-        />
-
-        <div className="catalog-grid">
-          <label className="dialog-label" htmlFor="enemy-template-main-hand">
-            Main hand
-            <NativeSelect
-              id="enemy-template-main-hand"
-              value={draft.main_hand_item_id ?? ''}
-              onChange={(event) => update(
-                'main_hand_item_id',
-                event.target.value || null,
-              )}
-            >
-              <NativeSelectOption value="">None</NativeSelectOption>
-              {weapons.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
+          <EnemyEditorSection title="Attribute modifiers" summary="STR · DEX · ARC · VIT · INS · PER">
+            <div className="enemy-attribute-heading">
+              <p className="enemy-section-help">These values are modifiers, not 1–20 character attribute scores.</p>
+              <label className="dialog-label enemy-preset-control">
+                Preset
+                <NativeSelect
+                  value={attributePreset}
+                  onChange={(event) => applyAttributePreset(event.target.value)}
+                >
+                  {Object.keys(ATTRIBUTE_PRESETS).map((preset) => (
+                    <NativeSelectOption key={preset} value={preset}>
+                      {preset}
+                    </NativeSelectOption>
+                  ))}
+                  <NativeSelectOption value="Custom">Custom</NativeSelectOption>
+                </NativeSelect>
+              </label>
+            </div>
+            <div className="enemy-attribute-grid">
+              {([
+                ['strength', 'STR'],
+                ['dexterity', 'DEX'],
+                ['arcana', 'ARC'],
+                ['vitality', 'VIT'],
+                ['insight', 'INS'],
+                ['personality', 'PER'],
+              ] as const).map(([key, abbreviation]) => (
+                <label key={key}>
+                  <span>{abbreviation}</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={draft[key]}
+                    onChange={(event) => update(key, Number(event.target.value))}
+                  />
+                </label>
               ))}
-            </NativeSelect>
-          </label>
+            </div>
+          </EnemyEditorSection>
 
-          <label className="dialog-label" htmlFor="enemy-template-off-hand">
-            Off hand
-            <NativeSelect
-              id="enemy-template-off-hand"
-              value={draft.off_hand_item_id ?? ''}
-              onChange={(event) => update(
-                'off_hand_item_id',
-                event.target.value || null,
-              )}
-            >
-              <NativeSelectOption value="">None</NativeSelectOption>
-              {weapons.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
+          <EnemyEditorSection title="Loadout pools" summary={roleSummary}>
+            <div className="enemy-combat-config">
+              <div className="enemy-combat-config__heading">
+                <div>
+                  <h4>Combat configuration</h4>
+                  <p className="enemy-section-help">
+                    Choose which loadouts this enemy may spawn with.
+                  </p>
+                </div>
+              </div>
+              <div className="enemy-loadout-options">
+                {([
+                  ['one_handed', 'One-handed'],
+                  ['shield', 'One-handed + Shield'],
+                  ['dual_wield', 'Dual wield'],
+                  ['two_handed', 'Two-handed'],
+                  ['natural', 'Natural attack'],
+                ] as const).map(([id, label]) => (
+                  <label key={id}>
+                    <input
+                      type="checkbox"
+                      checked={draft.melee_loadouts.includes(id)}
+                      onChange={(event) => {
+                        const next = event.target.checked
+                          ? [...draft.melee_loadouts, id]
+                          : draft.melee_loadouts.filter((value) => value !== id);
+                        update('melee_loadouts', next);
+                        update('dual_wield', next.includes('dual_wield'));
+                        if (event.target.checked) setEquipmentTab('melee');
+                      }}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={rangedEnabled}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setRangedEnabled(enabled);
+                      if (enabled) {
+                        setEquipmentTab('ranged');
+                      } else {
+                        update('ranged_weapon_ids', []);
+                        update('ranged_damage_filter', null);
+                        if (equipmentTab === 'ranged') setEquipmentTab('melee');
+                      }
+                    }}
+                  />
+                  <span>Ranged</span>
+                </label>
+              </div>
+            </div>
 
-          <label className="dialog-label" htmlFor="enemy-template-armor-item">
-            Armor
-            <NativeSelect
-              id="enemy-template-armor-item"
-              value={draft.armor_item_id ?? ''}
-              onChange={(event) => update(
-                'armor_item_id',
-                event.target.value || null,
+            <div className="enemy-equipment-tabs" role="tablist" aria-label="Equipment pools">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={equipmentTab === 'melee'}
+                className={equipmentTab === 'melee' ? 'active' : ''}
+                onClick={() => setEquipmentTab('melee')}
+              >
+                Melee <span>{meleeSelectionCount}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={equipmentTab === 'ranged'}
+                className={equipmentTab === 'ranged' ? 'active' : ''}
+                disabled={!rangedEnabled}
+                onClick={() => setEquipmentTab('ranged')}
+              >
+                Ranged <span>{rangedSelectionCount}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={equipmentTab === 'armor'}
+                className={equipmentTab === 'armor' ? 'active' : ''}
+                onClick={() => setEquipmentTab('armor')}
+              >
+                Armor <span>{armorSelectionCount}</span>
+              </button>
+            </div>
+
+            <div className="enemy-equipment-panel">
+              {equipmentTab === 'melee' && (
+                <>
+                  <p className="enemy-section-help">
+                    Desired damage filters the Item Library. Combat damage comes from the actual weapon selected when this enemy spawns.
+                  </p>
+                  <div className="enemy-tab-grid">
+                    <div className="enemy-pool-card">
+                      <h4>Melee weapon pool</h4>
+                      <label className="dialog-label">
+                        Desired damage
+                        <NativeSelect
+                          value={draft.melee_damage_filter ?? ''}
+                          onChange={(event) => {
+                            const next = event.target.value || null;
+                            update('melee_damage_filter', next);
+                            update(
+                              'melee_weapon_ids',
+                              draft.melee_weapon_ids.filter((id) => {
+                                const item = meleeWeapons.find((candidate) => candidate.id === id);
+                                return !next || item?.damage_expression === next;
+                              }),
+                            );
+                          }}
+                        >
+                          <NativeSelectOption value="">Any damage</NativeSelectOption>
+                          {meleeDamageOptions.map((damage) => (
+                            <NativeSelectOption key={damage} value={damage}>{damage}</NativeSelectOption>
+                          ))}
+                        </NativeSelect>
+                      </label>
+                      <PoolChecklist
+                        items={compatibleMeleeWeapons}
+                        selected={draft.melee_weapon_ids}
+                        onChange={(value) => update('melee_weapon_ids', value)}
+                      />
+                    </div>
+
+                    {draft.melee_loadouts.includes('dual_wield') && (
+                      <div className="enemy-pool-card">
+                        <h4>Second weapon pool</h4>
+                        <p className="enemy-section-help">
+                          Used only when Dual wield is selected.
+                        </p>
+                        <PoolChecklist
+                          items={secondWeapons}
+                          selected={draft.off_hand_item_ids}
+                          onChange={(value) => update('off_hand_item_ids', value)}
+                        />
+                      </div>
+                    )}
+
+                    {draft.melee_loadouts.includes('shield') && (
+                      <div className="enemy-pool-card">
+                        <h4>Shield pool</h4>
+                        <p className="enemy-section-help">
+                          Used only when One-handed + Shield is selected.
+                        </p>
+                        <PoolChecklist
+                          items={shieldItems}
+                          selected={draft.shield_item_ids}
+                          onChange={(value) => update('shield_item_ids', value)}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {draft.melee_loadouts.includes('natural') && (
+                    <div className="enemy-natural-attacks">
+                      <div className="enemy-natural-attacks__heading">
+                        <div>
+                          <h4>Natural attacks</h4>
+                          <p className="enemy-section-help">
+                            Natural attacks belong to the creature and are not placed in inventory or loot.
+                          </p>
+                        </div>
+                        <div className="enemy-natural-preset">
+                          <NativeSelect
+                            value={naturalAttackPreset}
+                            onChange={(event) => setNaturalAttackPreset(
+                              event.target.value as keyof typeof NATURAL_ATTACK_PRESETS,
+                            )}
+                          >
+                            {Object.entries(NATURAL_ATTACK_PRESETS).map(([id, attack]) => (
+                              <NativeSelectOption key={id} value={id}>
+                                {attack.name} · {attack.damage}
+                              </NativeSelectOption>
+                            ))}
+                          </NativeSelect>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => update('natural_attacks', [
+                              ...draft.natural_attacks,
+                              { ...NATURAL_ATTACK_PRESETS[naturalAttackPreset] },
+                            ])}
+                          >
+                            Add
+                          </Button>
+                        </div>
+                      </div>
+                      {draft.natural_attacks.map((attack, index) => (
+                        <div className="enemy-natural-attack-row" key={`${index}-${attack.name}`}>
+                          <Input
+                            aria-label="Natural attack name"
+                            value={attack.name}
+                            placeholder="Bite"
+                            onChange={(event) => update(
+                              'natural_attacks',
+                              draft.natural_attacks.map((entry, entryIndex) => (
+                                entryIndex === index
+                                  ? { ...entry, name: event.target.value }
+                                  : entry
+                              )),
+                            )}
+                          />
+                          <Input
+                            aria-label="Natural attack damage"
+                            value={attack.damage}
+                            placeholder="1d6"
+                            onChange={(event) => update(
+                              'natural_attacks',
+                              draft.natural_attacks.map((entry, entryIndex) => (
+                                entryIndex === index
+                                  ? { ...entry, damage: event.target.value }
+                                  : entry
+                              )),
+                            )}
+                          />
+                          <NativeSelect
+                            aria-label="Natural attack damage type"
+                            value={attack.damage_type}
+                            onChange={(event) => update(
+                              'natural_attacks',
+                              draft.natural_attacks.map((entry, entryIndex) => (
+                                entryIndex === index
+                                  ? { ...entry, damage_type: event.target.value }
+                                  : entry
+                              )),
+                            )}
+                          >
+                            {['slash', 'pierce', 'blunt', 'fire', 'cold', 'lightning', 'poison', 'necrotic', 'psychic', 'radiant', 'arcane'].map((type) => (
+                              <NativeSelectOption key={type} value={type}>
+                                {type.charAt(0).toUpperCase() + type.slice(1)}
+                              </NativeSelectOption>
+                            ))}
+                          </NativeSelect>
+                          <label className="enemy-natural-range">
+                            <span>Range</span>
+                            <NativeSelect
+                              aria-label="Natural attack range"
+                              value={attack.range}
+                              onChange={(event) => update(
+                                'natural_attacks',
+                                draft.natural_attacks.map((entry, entryIndex) => (
+                                  entryIndex === index
+                                    ? { ...entry, range: Number(event.target.value) }
+                                    : entry
+                                )),
+                              )}
+                            >
+                              <NativeSelectOption value={0}>Melee · 0</NativeSelectOption>
+                              <NativeSelectOption value={1}>Adjacent · 1</NativeSelectOption>
+                              <NativeSelectOption value={2}>Near · 2</NativeSelectOption>
+                              <NativeSelectOption value={3}>Far · 3</NativeSelectOption>
+                              <NativeSelectOption value={4}>Distant · 4</NativeSelectOption>
+                            </NativeSelect>
+                          </label>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => update(
+                              'natural_attacks',
+                              draft.natural_attacks.filter((_, entryIndex) => entryIndex !== index),
+                            )}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
-            >
-              <NativeSelectOption value="">None</NativeSelectOption>
-              {armorItems.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
+
+              {equipmentTab === 'ranged' && (
+                <div className="enemy-tab-single">
+                  <p className="enemy-section-help">
+                    Select at least one ranged weapon. A ranged enemy spawns with one weapon from this pool.
+                  </p>
+                  <div className="enemy-pool-card">
+                    <h4>Ranged weapon pool</h4>
+                    <label className="dialog-label">
+                      Desired damage
+                      <NativeSelect
+                        value={draft.ranged_damage_filter ?? ''}
+                        onChange={(event) => {
+                          const next = event.target.value || null;
+                          update('ranged_damage_filter', next);
+                          update(
+                            'ranged_weapon_ids',
+                            draft.ranged_weapon_ids.filter((id) => {
+                              const item = rangedWeapons.find((candidate) => candidate.id === id);
+                              return !next || item?.damage_expression === next;
+                            }),
+                          );
+                        }}
+                      >
+                        <NativeSelectOption value="">Any damage</NativeSelectOption>
+                        {rangedDamageOptions.map((damage) => (
+                          <NativeSelectOption key={damage} value={damage}>{damage}</NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </label>
+                    <PoolChecklist
+                      items={compatibleRangedWeapons}
+                      selected={draft.ranged_weapon_ids}
+                      onChange={(value) => update('ranged_weapon_ids', value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {equipmentTab === 'armor' && (
+                <div className="enemy-tab-single">
+                  <p className="enemy-section-help">
+                    Armor is chosen independently when the enemy spawns. Select armor across several DR values to create variation.
+                  </p>
+                  <div className="enemy-pool-card">
+                    <div className="enemy-pool-card__heading">
+                      <h4>Armor pool</h4>
+                      <span>{draft.armor_item_ids.length} selected</span>
+                    </div>
+                    <div className="enemy-dr-filters" aria-label="Armor damage reduction filters">
+                      <button
+                        type="button"
+                        className={armorDrFilters.length === 0 ? 'active' : ''}
+                        aria-pressed={armorDrFilters.length === 0}
+                        onClick={() => setArmorDrFilters([])}
+                      >
+                        Any
+                      </button>
+                      {armorReductionOptions.map((reduction) => {
+                        const active = armorDrFilters.includes(reduction);
+                        return (
+                          <button
+                            type="button"
+                            key={reduction}
+                            className={active ? 'active' : ''}
+                            aria-pressed={active}
+                            onClick={() => setArmorDrFilters((current) => (
+                              current.includes(reduction)
+                                ? current.filter((value) => value !== reduction)
+                                : [...current, reduction].sort((left, right) => left - right)
+                            ))}
+                          >
+                            DR {reduction}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="enemy-section-help">
+                      These buttons only filter the list. They do not remove armor you already selected.
+                    </p>
+                    <PoolChecklist
+                      items={compatibleArmorItems}
+                      selected={draft.armor_item_ids}
+                      onChange={(value) => update('armor_item_ids', value)}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </EnemyEditorSection>
+
+          <EnemyEditorSection title="Behaviour">
+            <label className="dialog-label">Typical behaviour
+              <Textarea value={draft.typical_behaviour} onChange={(event) => update('typical_behaviour', event.target.value)} />
+            </label>
+          </EnemyEditorSection>
         </div>
 
         <DialogFooter className="enemy-library-footer">
@@ -573,35 +1219,36 @@ export function EnemyLibraryDialog({
             <Button
               variant="destructive"
               onClick={async () => {
-                if (await onDelete(editingTemplate)) {
-                  editTemplate();
-                }
+                if (await onDelete(editingTemplate)) editTemplate();
               }}
             >
               <Trash2 /> Delete
             </Button>
           )}
-
           <Button
             disabled={
               !draft.name.trim()
+              || draft.allowed_races.length === 0
               || !draft.race.trim()
               || !draft.damage.trim()
               || !draft.attack_profile.trim()
               || !draft.typical_behaviour.trim()
               || invalidNumber
               || invalidPositive
+              || (rangedEnabled && draft.ranged_weapon_ids.length === 0)
             }
             onClick={async () => {
-              if (await onSave(editingId, draft)) {
-                editTemplate();
-              }
+              const record: EnemyTemplateDraft = {
+                ...draft,
+                armor_reduction_filter: null,
+                ranged_weapon_ids: rangedEnabled ? draft.ranged_weapon_ids : [],
+                ranged_damage_filter: rangedEnabled ? draft.ranged_damage_filter : null,
+              };
+              if (await onSave(editingId, record)) editTemplate();
             }}
           >
             <Save />
-            {editingId
-              ? 'Save enemy type'
-              : 'Create enemy type'}
+            {editingId ? 'Save enemy type' : 'Create enemy type'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -3,13 +3,16 @@
 import random
 import re
 
-from .models import CombatScene
 from .attacks import CombatAttackMixin
+from .auto_connect import CombatAutoConnectMixin
 from .death_saves import CombatDeathSaveMixin
+from .defense import CombatDefenseMixin
 from .enemy_management import CombatEnemyManagementMixin
 from .errors import CombatError
+from .items import CombatItemMixin
 from .landmarks import CombatLandmarkMixin
 from .lifecycle import CombatLifecycleMixin
+from .models import CombatScene
 from .movement import CombatMovementMixin
 from .repository import CombatRepository
 from .rules import CombatRulesMixin
@@ -22,15 +25,19 @@ class CombatService(
     CombatRulesMixin,
     CombatLifecycleMixin,
     CombatDeathSaveMixin,
+    CombatDefenseMixin,
+    CombatItemMixin,
     CombatAttackMixin,
     CombatEnemyManagementMixin,
     CombatTurnMixin,
+    CombatAutoConnectMixin,
     CombatLandmarkMixin,
     CombatMovementMixin,
 ):
     """UI-independent combat scene orchestration."""
 
     CENTER_LANDMARK_ID = "room:center"
+
     def __init__(self, database: Database) -> None:
         self.database = database
         self.world = WorldService(database)
@@ -45,13 +52,19 @@ class CombatService(
     @staticmethod
     def _roll_d20(
         *,
+        advantage: bool = False,
         disadvantage: bool = False,
     ) -> tuple[tuple[int, ...], int]:
+        roll_twice = advantage != disadvantage
         rolls = tuple(
             random.randint(1, 20)
-            for _ in range(2 if disadvantage else 1)
+            for _ in range(2 if roll_twice else 1)
         )
-        return rolls, min(rolls) if disadvantage else rolls[0]
+        if advantage and not disadvantage:
+            return rolls, max(rolls)
+        if disadvantage and not advantage:
+            return rolls, min(rolls)
+        return rolls, rolls[0]
 
     @staticmethod
     def _roll_die(sides: int) -> int:

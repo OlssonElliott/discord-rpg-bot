@@ -81,6 +81,7 @@ class DatabaseCharacterSchemaMixin:
                 vitality INTEGER,
                 insight INTEGER,
                 personality INTEGER,
+                hunger INTEGER NOT NULL DEFAULT 0 CHECK (hunger BETWEEN 0 AND 100),
                 portrait_key TEXT,
                 current_room_id TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
@@ -131,13 +132,13 @@ class DatabaseCharacterSchemaMixin:
                     id, discord_user_id, name, hp, max_hp, stance,
                     lineage, race, age, gender,
                     strength, dexterity, arcana, vitality, insight, personality,
-                    portrait_key, current_room_id, is_active, is_archived
+                    hunger, portrait_key, current_room_id, is_active, is_archived
                 )
                 SELECT
                     id, discord_user_id, name, hp, max_hp, stance,
                     lineage, race, age, gender,
                     strength, dexterity, arcana, vitality, insight, personality,
-                    portrait_key, current_room_id, is_active, is_archived
+                    hunger, portrait_key, current_room_id, is_active, is_archived
                 FROM characters
                 """
             )
@@ -207,6 +208,10 @@ class DatabaseCharacterSchemaMixin:
                 "vitality": "ALTER TABLE characters ADD COLUMN vitality INTEGER",
                 "insight": "ALTER TABLE characters ADD COLUMN insight INTEGER",
                 "personality": "ALTER TABLE characters ADD COLUMN personality INTEGER",
+                "hunger": (
+                    "ALTER TABLE characters ADD COLUMN hunger INTEGER NOT NULL "
+                    "DEFAULT 0 CHECK (hunger BETWEEN 0 AND 100)"
+                ),
                 "portrait_key": "ALTER TABLE characters ADD COLUMN portrait_key TEXT",
                 "current_room_id": "ALTER TABLE characters ADD COLUMN current_room_id TEXT",
             }
@@ -233,13 +238,13 @@ class DatabaseCharacterSchemaMixin:
                         discord_user_id, name, hp, max_hp, stance,
                         lineage, race, age, gender,
                         strength, dexterity, arcana, vitality, insight, personality,
-                        portrait_key,
+                        hunger, portrait_key,
                         is_active, is_archived
                     )
                     SELECT discord_user_id, name, hp, max_hp, stance,
                            lineage, race, age, gender,
                            strength, dexterity, arcana, vitality, insight, personality,
-                           portrait_key,
+                           hunger, portrait_key,
                            1, 0
                     FROM characters_legacy
                     """

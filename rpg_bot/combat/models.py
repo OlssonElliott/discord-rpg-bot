@@ -10,9 +10,18 @@ class CombatStatus(str, Enum):
 
 
 class LandmarkDistance(str, Enum):
-    CLOSE = "close"
+    ADJACENT = "adjacent"
+    NEAR = "near"
+    # Compatibility alias for older callers. "Close" now maps to the new
+    # standard Near distance rather than being its own persisted value.
+    CLOSE = "near"
     FAR = "far"
     DISTANT = "distant"
+
+
+class RouteTerrain(str, Enum):
+    NORMAL = "normal"
+    DIFFICULT = "difficult"
 
 
 class CombatantKind(str, Enum):
@@ -22,10 +31,13 @@ class CombatantKind(str, Enum):
 
 class LandmarkRelation(str, Enum):
     AT = "at"
-    BESIDE = "beside"
     BEHIND = "behind"
-    ON = "on"
-    INSIDE = "inside"
+
+
+class CoverLevel(str, Enum):
+    NONE = "none"
+    HALF = "half"
+    FULL = "full"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +51,23 @@ class CombatLandmark:
     synthetic: bool = False
     x: float | None = None
     y: float | None = None
+    cover: CoverLevel = CoverLevel.NONE
+
+
+@dataclass(frozen=True, slots=True)
+class CombatEffect:
+    """Effect payload independent of where the effect is placed."""
+
+    id: str
+    name: str
+    effect_type: str
+    blocks_movement: bool = False
+    movement_cost_modifier: int = 0
+    remaining_rounds: int | None = None
+
+
+# Backwards-compatible name while route effects are the only persisted placement.
+CombatRouteEffect = CombatEffect
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,16 +75,42 @@ class CombatRoute:
     source_landmark_id: str
     destination_landmark_id: str
     distance: LandmarkDistance
-    obstacle: str | None = None
-    blocked: bool = False
+    terrain: RouteTerrain = RouteTerrain.NORMAL
+    base_blocked: bool = False
+    automatic: bool = False
+    effects: tuple[CombatEffect, ...] = ()
+
+    @property
+    def base_movement_cost(self) -> int:
+        return {
+            LandmarkDistance.ADJACENT: 1,
+            LandmarkDistance.NEAR: 2,
+            LandmarkDistance.FAR: 3,
+            LandmarkDistance.DISTANT: 4,
+        }[self.distance]
 
     @property
     def movement_cost(self) -> int:
-        return {
-            LandmarkDistance.CLOSE: 1,
-            LandmarkDistance.FAR: 3,
-            LandmarkDistance.DISTANT: 5,
-        }[self.distance]
+        cost = self.base_movement_cost
+        if self.terrain is RouteTerrain.DIFFICULT:
+            cost *= 2
+        cost += sum(
+            effect.movement_cost_modifier
+            for effect in self.effects
+        )
+        return max(1, cost)
+
+    @property
+    def blocked(self) -> bool:
+        return (
+            self.base_blocked
+            or any(effect.blocks_movement for effect in self.effects)
+        )
+
+    @property
+    def obstacle(self) -> None:
+        """Deprecated compatibility shim for pre-terrain dashboard callers."""
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +130,15 @@ class CombatantState:
     route_progress: int = 0
     route_cost: int = 0
     standard_action_spent: bool = False
+    defending: bool = False
+    dashed: bool = False
+    # Hunger integration: any Standard Action marks heavy exertion. Future
+    # spells, Dash, abilities, etc. should use the shared Standard Action
+    # state rather than inventing their own exertion tracking.
+    heavy_exertion: bool = False
+    # Accumulates actual HP damage taken during this combat. Future damage
+    # sources should record damage through the shared combat repository hook.
+    damage_taken: int = 0
 
     @property
     def is_between_landmarks(self) -> bool:

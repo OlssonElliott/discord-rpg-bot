@@ -201,14 +201,29 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(inventory.item(dagger_id).parent_container_id)
 
     def test_using_one_consumable_decrements_its_stack(self) -> None:
-        potion_id = self.service.grant(self.character, "stale_bread", 2)
+        potion_id = self.service.grant(self.character, "health_potion", 2)
         self.database.damage(7, 10)
 
         updated = self.service.use(self.database.get_character(7), potion_id)
         inventory = self.database.get_character_inventory(self.character.character_id)
 
-        self.assertEqual(updated.hp, 10)
+        self.assertEqual(updated.hp, 15)
         self.assertEqual(inventory.item(potion_id).quantity, 1)
+
+    def test_food_reduces_hunger_without_healing(self) -> None:
+        bread_id = self.service.grant(self.character, "stale_bread", 2)
+        self.database.damage(7, 5)
+        hungry = self.database.adjust_character_hunger(
+            self.character.character_id,
+            12,
+        )
+
+        updated = self.service.use(hungry, bread_id)
+        inventory = self.database.get_character_inventory(self.character.character_id)
+
+        self.assertEqual(updated.hp, 10)
+        self.assertEqual(updated.hunger, 7)
+        self.assertEqual(inventory.item(bread_id).quantity, 1)
 
     def test_read_returns_content_without_consuming_readable(self) -> None:
         note = ItemTemplate(

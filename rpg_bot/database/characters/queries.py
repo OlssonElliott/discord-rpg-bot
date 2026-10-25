@@ -18,7 +18,7 @@ class DatabaseCharacterQueriesMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE discord_user_id = ? AND is_active = 1 AND is_archived = 0
                 """,
@@ -40,7 +40,7 @@ class DatabaseCharacterQueriesMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE discord_user_id = ? AND id = ? {archived_clause}
                 """,
@@ -55,7 +55,7 @@ class DatabaseCharacterQueriesMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE discord_user_id = ? AND is_archived = 0
                 ORDER BY is_active DESC, id ASC
@@ -72,7 +72,7 @@ class DatabaseCharacterQueriesMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE is_archived = 0
                 ORDER BY name COLLATE NOCASE, id ASC
@@ -88,7 +88,7 @@ class DatabaseCharacterQueriesMixin:
                 SELECT id, discord_user_id, name, hp, max_hp, stance,
                        lineage, race, age, gender,
                        strength, dexterity, arcana, vitality, insight, personality,
-                       is_active, is_archived, portrait_key, current_room_id
+                       hunger, is_active, is_archived, portrait_key, current_room_id
                 FROM characters
                 WHERE id = ? AND is_archived = 0
                 """,
@@ -174,6 +174,7 @@ class DatabaseCharacterQueriesMixin:
             race=row["race"],
             age=row["age"],
             gender=row["gender"],
+            hunger=int(row["hunger"]),
             attributes={
                 attribute: row[column]
                 for attribute, column in attribute_columns.items()

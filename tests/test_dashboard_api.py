@@ -182,8 +182,28 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(scene["room_name"], "Guard Hall")
         self.assertEqual(
             {landmark["id"] for landmark in scene["landmarks"]},
-            {"room:center", "feature:pillar", "feature:table"},
+            {
+                "room:center",
+                "room:corner:nw",
+                "room:corner:ne",
+                "room:corner:sw",
+                "room:corner:se",
+                "feature:pillar",
+                "feature:table",
+            },
         )
+        center = next(
+            landmark
+            for landmark in scene["landmarks"]
+            if landmark["id"] == "room:center"
+        )
+        pillar = next(
+            landmark
+            for landmark in scene["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertEqual(center["cover"], "none")
+        self.assertEqual(pillar["cover"], "half")
         self.assertEqual(
             [(combatant["kind"], combatant["name"]) for combatant in scene["combatants"]],
             [("enemy", "Bandit")],
@@ -215,19 +235,66 @@ class DashboardAPITests(unittest.TestCase):
         )
         self.assertEqual((pillar["x"], pillar["y"]), (0.25, 0.35))
 
+        status, no_cover = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"cover": "none"},
+        )
+        self.assertEqual(status, 200)
+        pillar = next(
+            landmark
+            for landmark in no_cover["scene"]["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertEqual(pillar["cover"], "none")
+
+        invalid_move_status, _ = self.api.handle(
+            "PATCH",
+            "/api/combat/combatants/enemy/bandit",
+            {"landmark_id": "feature:pillar", "relation": "behind"},
+        )
+        self.assertEqual(invalid_move_status, 400)
+
+        status, with_cover = self.api.handle(
+            "PATCH",
+            "/api/combat/landmarks/feature:pillar",
+            {"cover": "full"},
+        )
+        self.assertEqual(status, 200)
+        pillar = next(
+            landmark
+            for landmark in with_cover["scene"]["landmarks"]
+            if landmark["id"] == "feature:pillar"
+        )
+        self.assertEqual(pillar["cover"], "full")
+
         status, routed = self.api.handle(
             "PUT",
             "/api/combat/routes",
             {
                 "source_landmark_id": "feature:pillar",
                 "destination_landmark_id": "feature:table",
-                "distance": "close",
-                "obstacle": "Fallen rubble",
-                "blocked": False,
+                "distance": "near",
+                "terrain": "difficult",
+                "base_blocked": False,
             },
         )
         self.assertEqual(status, 200)
-        self.assertEqual(routed["scene"]["routes"][0]["obstacle"], "Fallen rubble")
+        feature_route = next(
+            route
+            for route in routed["scene"]["routes"]
+            if {
+                route["source_landmark_id"],
+                route["destination_landmark_id"],
+            }
+            == {
+                "feature:pillar",
+                "feature:table",
+            }
+        )
+        self.assertEqual(feature_route["terrain"], "difficult")
+        self.assertFalse(feature_route["base_blocked"])
+        self.assertFalse(feature_route["blocked"])
 
         delete_route_status, disconnected = self.api.handle(
             "DELETE",
@@ -238,7 +305,26 @@ class DashboardAPITests(unittest.TestCase):
             },
         )
         self.assertEqual(delete_route_status, 200)
-        self.assertEqual(disconnected["scene"]["routes"], [])
+        self.assertEqual(len(disconnected["scene"]["routes"]), 6)
+        self.assertEqual(
+            {
+                frozenset(
+                    (
+                        route["source_landmark_id"],
+                        route["destination_landmark_id"],
+                    )
+                )
+                for route in disconnected["scene"]["routes"]
+            },
+            {
+                frozenset(("room:center", "room:corner:nw")),
+                frozenset(("room:center", "room:corner:ne")),
+                frozenset(("room:center", "room:corner:sw")),
+                frozenset(("room:center", "room:corner:se")),
+                frozenset(("room:center", "feature:pillar")),
+                frozenset(("room:center", "feature:table")),
+            },
+        )
 
         add_landmark_status, with_landmark = self.api.handle(
             "POST",
@@ -856,6 +942,431 @@ class DashboardAPITests(unittest.TestCase):
         self.assertEqual(
             deleted,
             {"deleted": "skeleton_warrior"},
+        )
+
+    def test_enemy_role_loadout_pool_is_persisted(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "role_test", "name": "Role Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/role_test/rooms",
+            {"id": "arena", "name": "Arena", "x": 0, "y": 0},
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "role_sword",
+                "name": "Role Sword",
+                "item_type": "weapon",
+                "damage": 4,
+                "range": 0,
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "role_bow",
+                "name": "Role Bow",
+                "item_type": "weapon",
+                "damage": 4,
+                "range": 3,
+            },
+        )
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "role_raider",
+                "name": "Role Raider",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Weapon attack",
+                "typical_behaviour": "Tests role loadouts.",
+                "melee_weapon_ids": ["role_sword"],
+                "ranged_weapon_ids": ["role_bow"],
+            },
+        )
+        self.assertEqual(template_status, 201)
+        self.assertEqual(
+            set(template["available_roles"]),
+            {"melee", "ranged"},
+        )
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/arena/enemies",
+            {
+                "template_id": "role_raider",
+                "combat_role": "ranged",
+            },
+        )
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(placed["combat_role"], "ranged")
+        self.assertEqual(placed["main_hand_item_id"], "role_bow")
+        self.assertEqual(
+            [item["id"] for item in placed["inventory"]],
+            ["role_bow"],
+        )
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(placed["id"])
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.combat_role.value, "ranged")
+        self.assertEqual(persisted.main_hand_item_id, "role_bow")
+
+    def test_enemy_damage_filter_rejects_incompatible_weapon(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "filter_dagger",
+                "name": "Filter Dagger",
+                "item_type": "weapon",
+                "damage": 4,
+                "range": 0,
+            },
+        )
+        status, payload = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "filter_enemy",
+                "name": "Filter Enemy",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "melee_damage_filter": "1d6",
+                "melee_weapon_ids": ["filter_dagger"],
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("does not match", payload["error"])
+
+    def test_enemy_can_persist_natural_attack_without_inventory_weapon(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "natural_test", "name": "Natural Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/natural_test/rooms",
+            {"id": "den", "name": "Den", "x": 0, "y": 0},
+        )
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "bone_hound_test",
+                "name": "Bone Hound Test",
+                "race": "Undead Beast",
+                "damage": "1d4",
+                "attack_profile": "Bite",
+                "typical_behaviour": "Rushes prey.",
+                "natural_attacks": [
+                    {
+                        "name": "Bite",
+                        "damage": "1d6",
+                        "damage_type": "pierce",
+                        "range": 0,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(template_status, 201)
+        self.assertIn("melee", template["available_roles"])
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/den/enemies",
+            {
+                "template_id": "bone_hound_test",
+                "combat_role": "melee",
+            },
+        )
+
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(placed["combat_role"], "melee")
+        self.assertIsNone(placed["main_hand_item_id"])
+        self.assertEqual(placed["inventory"], [])
+        self.assertEqual(
+            placed["selected_natural_attack"]["name"],
+            "Bite",
+        )
+        self.assertEqual(
+            placed["selected_natural_attack"]["damage"],
+            "1d6",
+        )
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(placed["id"])
+        self.assertIsNotNone(persisted)
+        self.assertIsNotNone(persisted.selected_natural_attack)
+        self.assertEqual(persisted.selected_natural_attack.name, "Bite")
+        self.assertEqual(persisted.selected_natural_attack.damage, "1d6")
+
+    def test_enemy_armor_filter_and_dual_wield_validation(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "dual_sword",
+                "name": "Dual Sword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "one_handed",
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "dual_bow",
+                "name": "Dual Bow",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 3,
+                "grip": "two_handed",
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "dr_two_armor",
+                "name": "DR Two Armor",
+                "item_type": "armor",
+                "protection": 2,
+                "dodge_penalty": -1,
+            },
+        )
+
+        bad_offhand_status, bad_offhand = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "bad_dual_enemy",
+                "name": "Bad Dual Enemy",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "dual_wield": True,
+                "melee_weapon_ids": ["dual_sword"],
+                "off_hand_item_ids": ["dual_bow"],
+            },
+        )
+        self.assertEqual(bad_offhand_status, 400)
+        self.assertIn("one-handed melee weapon", bad_offhand["error"])
+
+        bad_armor_status, bad_armor = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "bad_armor_enemy",
+                "name": "Bad Armor Enemy",
+                "race": "Human",
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "armor_reduction_filter": 3,
+                "armor_item_ids": ["dr_two_armor"],
+            },
+        )
+        self.assertEqual(bad_armor_status, 400)
+        self.assertIn("damage reduction 3", bad_armor["error"])
+
+    def test_enemy_inspect_uses_derived_combat_dcs_and_spawned_armor(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "derived_test", "name": "Derived Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/derived_test/rooms",
+            {"id": "arena_dc", "name": "Arena", "x": 0, "y": 0},
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "derived_sword",
+                "name": "Derived Sword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "one_handed",
+            },
+        )
+        self.api.handle(
+            "POST",
+            "/api/items",
+            {
+                "id": "derived_armor",
+                "name": "Derived Armor",
+                "item_type": "armor",
+                "protection": 3,
+                "dodge_penalty": -2,
+            },
+        )
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "derived_enemy",
+                "name": "Derived Enemy",
+                "race": "Human",
+                "strength": 4,
+                "dexterity": 3,
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Test.",
+                "melee_weapon_ids": ["derived_sword"],
+                "armor_reduction_filter": 3,
+                "armor_item_ids": ["derived_armor"],
+            },
+        )
+        self.assertEqual(template_status, 201)
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/arena_dc/enemies",
+            {
+                "template_id": template["id"],
+                "combat_role": "melee",
+            },
+        )
+        self.assertEqual(placed_status, 201)
+        self.assertEqual(placed["armor_item_id"], "derived_armor")
+
+        combat_status, _ = self.api.handle(
+            "POST",
+            "/api/combat",
+            {"room_id": "arena_dc"},
+        )
+        self.assertEqual(combat_status, 201)
+
+        inspect_status, inspected = self.api.handle(
+            "GET",
+            f"/api/combat/combatants/enemy/{placed['id']}/inspect",
+        )
+        self.assertEqual(inspect_status, 200)
+        self.assertEqual(inspected["enemy"]["attack_dc"], 14)
+        self.assertEqual(inspected["enemy"]["defense_dc"], 11)
+        self.assertEqual(inspected["enemy"]["armor"], 3)
+
+    def test_enemy_spawn_pools_choose_persistent_race_and_legal_loadout(self) -> None:
+        self.api.handle(
+            "POST",
+            "/api/areas",
+            {"id": "spawn_pool_test", "name": "Spawn Pool Test"},
+        )
+        self.api.handle(
+            "POST",
+            "/api/areas/spawn_pool_test/rooms",
+            {"id": "yard_pool", "name": "Yard", "x": 0, "y": 0},
+        )
+        for item in (
+            {
+                "id": "pool_sword",
+                "name": "Pool Sword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "one_handed",
+            },
+            {
+                "id": "pool_greatsword",
+                "name": "Pool Greatsword",
+                "item_type": "weapon",
+                "damage": 6,
+                "range": 0,
+                "grip": "two_handed",
+            },
+            {
+                "id": "pool_shield",
+                "name": "Pool Shield",
+                "item_type": "armor",
+                "protection": 1,
+                "defense_bonus": 1,
+            },
+        ):
+            status, _ = self.api.handle("POST", "/api/items", item)
+            self.assertEqual(status, 201)
+
+        template_status, template = self.api.handle(
+            "POST",
+            "/api/enemy-templates",
+            {
+                "id": "mixed_bandit",
+                "name": "Mixed Bandit",
+                "race": "Human",
+                "lineage": "Commonfolk",
+                "allowed_races": ["Human", "Orc"],
+                "damage": "1d4",
+                "attack_profile": "Attack",
+                "typical_behaviour": "Varied loadout.",
+                "melee_weapon_ids": [
+                    "pool_sword",
+                    "pool_greatsword",
+                ],
+                "shield_item_ids": ["pool_shield"],
+                "melee_loadouts": ["shield", "two_handed"],
+            },
+        )
+        self.assertEqual(template_status, 201)
+        self.assertEqual(
+            template["allowed_races"],
+            ["Human", "Orc"],
+        )
+        self.assertEqual(
+            set(template["melee_loadouts"]),
+            {"shield", "two_handed"},
+        )
+
+        placed_status, placed = self.api.handle(
+            "POST",
+            "/api/rooms/yard_pool/enemies",
+            {
+                "template_id": "mixed_bandit",
+                "combat_role": "melee",
+            },
+        )
+        self.assertEqual(placed_status, 201)
+        self.assertIn(placed["race"], {"Human", "Orc"})
+        self.assertIn(
+            placed["loadout_style"],
+            {"shield", "two_handed"},
+        )
+        if placed["loadout_style"] == "shield":
+            self.assertEqual(placed["main_hand_item_id"], "pool_sword")
+            self.assertEqual(placed["off_hand_item_id"], "pool_shield")
+        else:
+            self.assertEqual(
+                placed["main_hand_item_id"],
+                "pool_greatsword",
+            )
+            self.assertIsNone(placed["off_hand_item_id"])
+
+        reopened = Database(self.database.path)
+        reopened.initialize()
+        persisted = reopened.get_enemy_instance(placed["id"])
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.race, placed["race"])
+        self.assertEqual(
+            persisted.loadout_style,
+            placed["loadout_style"],
         )
 
     def test_basic_enemy_templates_are_seeded_once_and_can_be_changed_or_deleted(self) -> None:

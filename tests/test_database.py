@@ -110,6 +110,21 @@ class DatabaseTests(unittest.TestCase):
         ):
             self.database.heal(123, 50)
 
+    def test_hunger_persists_and_is_clamped(self) -> None:
+        character = self.database.create_character(123, "Olof", 22)
+        assert character.character_id is not None
+
+        hungry = self.database.adjust_character_hunger(character.character_id, 120)
+        fed = self.database.adjust_character_hunger(character.character_id, -35)
+
+        self.assertEqual(hungry.hunger, 100)
+        self.assertEqual(fed.hunger, 65)
+        reopened = Database(self.database_path)
+        reopened.initialize()
+        persisted = reopened.get_character(123)
+        assert persisted is not None
+        self.assertEqual(persisted.hunger, 65)
+
     def test_stance_and_manual_hp_can_be_updated(self) -> None:
         self.database.create_character(123, "Olof", 22)
         self.assertEqual(self.database.set_hp(123, 7).hp, 7)

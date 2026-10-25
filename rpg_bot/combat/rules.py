@@ -20,22 +20,38 @@ class CombatRulesMixin:
         template = self.world.get_enemy_template(enemy.template_id)
         return template.insight if template is not None else 0
 
+    def _character_load_state(self, character_id: int) -> str:
+        inventory = self.database.get_character_inventory(character_id)
+        capacity = max(1, inventory.carry_capacity())
+        weight = inventory.current_weight(self.world.catalog)
+        if weight > capacity:
+            return "over_encumbered"
+        if weight * 4 > capacity * 3:
+            return "encumbered"
+        return "normal"
+
     def _character_movement_budget(self, character_id: int) -> int:
-        strength = self.database.get_character_attribute(
+        dexterity = self.database.get_character_attribute(
             character_id,
-            "strength",
+            "dexterity",
         )
-        return max(1, 3 + (strength - 10) // 2)
+        dexterity_modifier = (dexterity - 10) // 2
+        movement = max(1, 2 + dexterity_modifier // 2)
+
+        load_state = self._character_load_state(character_id)
+        if load_state == "over_encumbered":
+            return 1
+        if load_state == "encumbered":
+            movement -= 1
+        return max(1, movement)
 
     def _enemy_movement_budget(self, enemy_id: str) -> int:
         enemy = self.world.get_enemy(enemy_id)
         if enemy is None:
-            return 3
+            return 2
         template = self.world.get_enemy_template(enemy.template_id)
-        return max(
-            1,
-            3 + (template.strength if template is not None else 0),
-        )
+        dexterity_modifier = template.dexterity if template is not None else 0
+        return max(1, 2 + dexterity_modifier // 2)
 
     def _character_by_source_id(self, source_id: str):
         try:
@@ -91,6 +107,8 @@ class CombatRulesMixin:
     ) -> str:
         if weapon is None:
             return "strength"
+        if weapon.range > 0:
+            return "dexterity"
         tags = {tag.casefold() for tag in weapon.tags}
         if tags & {"magic", "spell", "focus", "staff"}:
             return "arcana"
@@ -127,11 +145,29 @@ class CombatRulesMixin:
         )
         return max(0, protection), template.dodge_penalty
 
+    def _equipped_shield_bonus(
+        self,
+        character_id: int,
+    ) -> int:
+        inventory = self.database.get_character_inventory(character_id)
+        shield_id = inventory.equipment.get(EquipmentSlot.OFF_HAND)
+        if shield_id is None:
+            return 0
+        try:
+            instance = inventory.item(shield_id)
+            template = self.world.catalog.get(instance.template_id)
+        except ValueError:
+            return 0
+        if template.item_type is not ItemType.ARMOR:
+            return 0
+        return max(0, template.defense_bonus)
+
     def _automatic_defense(
         self,
         character_id: int,
     ) -> tuple[str, str, int]:
         _, dodge_penalty = self._equipped_armor_stats(character_id)
+        shield_bonus = self._equipped_shield_bonus(character_id)
         strength = self.database.get_character_attribute(
             character_id,
             "strength",
@@ -145,12 +181,12 @@ class CombatRulesMixin:
             "arcana",
         )
         options = (
-            ("guard", "strength", (strength - 10) // 2),
+            ("guard", "strength", (strength - 10) // 2 + shield_bonus),
             (
                 "dodge",
                 "dexterity",
-                (dexterity - 10) // 2 + dodge_penalty,
+                (dexterity - 10) // 2 + dodge_penalty + shield_bonus,
             ),
-            ("arcane_defense", "arcana", (arcana - 10) // 2),
+            ("arcane_defense", "arcana", (arcana - 10) // 2 + shield_bonus),
         )
         return max(options, key=lambda option: option[2])
