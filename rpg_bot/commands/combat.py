@@ -136,19 +136,6 @@ class CombatCommands(commands.Cog):
         self._last_scenes: dict[int, CombatScene] = {}
         self.sync_dashboard_combat.start()
 
-    async def cog_load(self) -> None:
-        # Restore button dispatch before the sync loop publishes after restart.
-        for guild in self.bot.guilds:
-            saved = self.message_store.get(guild.id)
-            if saved is None:
-                continue
-            scene = self.service.current(guild.id)
-            if scene is not None and scene.id == saved.scene_id:
-                self.bot.add_view(
-                    CombatOpenView(self, scene.id),
-                    message_id=saved.message_id,
-                )
-
     def cog_unload(self) -> None:
         self.sync_dashboard_combat.cancel()
 
@@ -256,6 +243,11 @@ class CombatCommands(commands.Cog):
     @sync_dashboard_combat.before_loop
     async def before_sync_dashboard_combat(self) -> None:
         await self.bot.wait_until_ready()
+        for guild in self.bot.guilds:
+            saved = self.message_store.get(guild.id)
+            scene = self.service.current(guild.id)
+            if saved is not None and scene is not None and saved.scene_id == scene.id:
+                self.bot.add_view(CombatOpenView(self, scene.id), message_id=saved.message_id)
 
     async def room_autocomplete(
         self,
