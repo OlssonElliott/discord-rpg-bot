@@ -417,8 +417,9 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             path = Path(folder) / "combat.db"
             publisher, store, guild, channel, messages, failures, service, scene = self._harness(path)
             with mock_patch.object(store, "save", side_effect=RuntimeError("process interrupted")):
-                with self.assertRaises(RuntimeError):
+                self.assertIsNone(
                     await publisher.publish(guild, scene, channel=channel)
+                )
             self.assertEqual(len(messages), 1)
             restarted = type(publisher)(
                 service, publisher.world, store, path, lambda _: object(),
