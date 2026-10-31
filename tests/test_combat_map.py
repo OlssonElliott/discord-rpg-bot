@@ -73,6 +73,57 @@ class CombatMapTests(unittest.TestCase):
         self.assertEqual(len(set(positions.values())), 4)
         self.assertGreaterEqual(height, 820)
 
+    def test_preserves_freeform_relative_landmark_geometry(self) -> None:
+        """Dashboard positions must not be rearranged to fit a tile grid."""
+        positions, _ = location_layout(self.scene)
+        pillar = positions["pillar"]
+        statue = positions["statue"]
+        center = positions["center"]
+        door = positions["door"]
+
+        # Dashboard: pillar is left/below center, statue right/above it.
+        self.assertLess(pillar[0], center[0])
+        self.assertGreater(pillar[1], center[1])
+        self.assertGreater(statue[0], center[0])
+        self.assertLess(statue[1], center[1])
+        self.assertLess(door[0], pillar[0])
+
+        # A single scale is applied to both axes (within rounding).
+        dx_source = (0.5 - (-0.7)) * 1000
+        dy_source = (0.4 - (-0.2)) * 700
+        dx_pixels = statue[0] - pillar[0]
+        dy_pixels = pillar[1] - statue[1]
+        self.assertAlmostEqual(
+            dx_pixels / dx_source, dy_pixels / dy_source, delta=0.005,
+        )
+
+    def test_renderer_uses_saved_coordinates_not_scene_iteration_order(self) -> None:
+        positions, _ = location_layout(self.scene)
+        reversed_scene = replace(
+            self.scene, landmarks=tuple(reversed(self.scene.landmarks)),
+        )
+        reversed_positions, _ = location_layout(reversed_scene)
+        self.assertEqual(positions, reversed_positions)
+
+    def test_negative_and_out_of_room_coordinates_are_preserved(self) -> None:
+        stretched = replace(
+            self.scene,
+            landmarks=(
+                CombatLandmark("left", "Left", x=-1.0, y=0.1),
+                CombatLandmark("mid", "Middle", x=0.0, y=0.4),
+                CombatLandmark("right", "Right", x=2.0, y=0.7),
+            ),
+        )
+        positions, height = location_layout(stretched)
+        self.assertLess(positions["left"][0], positions["mid"][0])
+        self.assertLess(positions["mid"][0], positions["right"][0])
+        self.assertGreaterEqual(height, 820)
+        for x, y in positions.values():
+            self.assertGreaterEqual(x - 95, 0)
+            self.assertLessEqual(x + 95, 1280)
+            self.assertGreaterEqual(y - 47, 0)
+            self.assertLessEqual(y + 47, height)
+
     def test_moving_character_changes_visual_map(self) -> None:
         before = render_combat_map(self.scene, "Long Hall").getvalue()
         after_scene = replace(
