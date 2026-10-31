@@ -268,77 +268,113 @@ class CombatMoveAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_publishing_and_updating_reuses_one_message(self) -> None:
-        from rpg_bot.map_renderer.combat import render_combat_map
+    async def test_publishing_turn_transition_keeps_history_and_moves_map_to_bottom(self) -> None:
+        import sqlite3
+        from types import MethodType
+        from rpg_bot.discord_support.combat_events import CombatEventArchiveStore
 
-        actor = CombatantState(
-            CombatantKind.CHARACTER, "11", "Sture", "pillar",
-        )
-        scene = CombatScene(
-            id=22, guild_id=44, room_id="hall", status=CombatStatus.ACTIVE,
-            landmarks=(CombatLandmark("pillar", "Stone Pillar"),),
-            combatants=(actor,),
-            current_turn_kind=CombatantKind.CHARACTER,
-            current_turn_source_id="11",
-        )
-        message = SimpleNamespace(
-            id=555,
-            edit=AsyncMock(),
-        )
-        channel = SimpleNamespace(
-            id=444, send=AsyncMock(return_value=message),
-        )
-        message.channel = channel
-        message.edit.return_value = message
-        guild = SimpleNamespace(id=44)
-        store = SimpleNamespace(
-            get=Mock(return_value=None),
-            save=Mock(),
-        )
-        fake_cog = SimpleNamespace(
-            _scene_messages={},
-            _last_scenes={},
-            message_store=store,
-            world=SimpleNamespace(
-                get_room=lambda _: SimpleNamespace(name="Long Hall")
-            ),
-        )
-        with patch(
-            "rpg_bot.commands.combat.CombatOpenView",
-            return_value=object(),
-        ):
-            await CombatCommands._publish_scene(
-                fake_cog, guild, scene, channel=channel,
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "combat.db"
+            with sqlite3.connect(path) as db:
+                db.executescript(
+                    """
+                    CREATE TABLE combat_log_entries (
+                        id INTEGER PRIMARY KEY, scene_id INTEGER,
+                        round_number INTEGER, event_type TEXT,
+                        actor_kind TEXT, actor_source_id TEXT,
+                        actor_name TEXT, message TEXT, created_at TEXT
+                    );
+                    INSERT INTO combat_log_entries VALUES
+                        (1,22,1,'turn_started','character','11','Sture','start','t1'),
+                        (2,22,1,'combatant_moved','character','11','Sture',
+                         'Sture moved to Stone Pillar','t2');
+                    """
+                )
+            actor = CombatantState(
+                CombatantKind.CHARACTER, "11", "Sture", "pillar",
             )
-            channel.send.assert_awaited_once()
-            first = channel.send.await_args.kwargs
-            first_name = first["file"].filename
-            self.assertRegex(first_name, r"^combat-map-[0-9a-f]{12}\.png$")
-            self.assertEqual(
-                first["embed"].image.url,
-                f"attachment://{first_name}",
+            scene = CombatScene(
+                id=22, guild_id=44, room_id="hall", status=CombatStatus.ACTIVE,
+                landmarks=(CombatLandmark("pillar", "Stone Pillar"),),
+                combatants=(actor,),
+                current_turn_kind=CombatantKind.CHARACTER,
+                current_turn_source_id="11",
             )
-            store.save.assert_called_once_with(44, 22, 444, 555)
 
-            changed = __import__("dataclasses").replace(
-                scene,
-                combatants=(
-                    __import__("dataclasses").replace(
-                        actor, movement_remaining=1,
+            sent = []
+            channel = SimpleNamespace(id=444)
+            async def send(**kwargs):
+                msg = SimpleNamespace(
+                    id=555 + len(sent),
+                    channel=channel,
+                    edit=AsyncMock(),
+                )
+                msg.edit.return_value = msg
+                sent.append((msg, kwargs))
+                return msg
+            channel.send = AsyncMock(side_effect=send)
+            channel.fetch_message = AsyncMock(
+                side_effect=lambda mid: next(msg for msg, _ in sent if msg.id == mid)
+            )
+            guild = SimpleNamespace(
+                id=44,
+                get_channel=lambda channel_id: channel if channel_id == 444 else None,
+            )
+            cog = CombatCommands.__new__(CombatCommands)
+            cog._scene_messages = {}
+            cog._last_scenes = {}
+            cog._publish_locks = {}
+            cog.message_store = CombatMessageStore(path)
+            cog.archive_store = CombatEventArchiveStore(path)
+            cog.world = SimpleNamespace(
+                get_room=lambda _: SimpleNamespace(name="Long Hall"),
+            )
+
+            with patch(
+                "rpg_bot.commands.combat.CombatOpenView",
+                return_value=object(),
+            ):
+                await CombatCommands._publish_scene(
+                    cog, guild, scene, channel=channel,
+                )
+                self.assertEqual(len(sent), 1)
+                self.assertTrue(sent[0][1]["silent"])
+                self.assertEqual(sent[0][1]["file"].filename[:11], "combat-map-")
+                self.assertEqual(cog.message_store.get(44).turn_marker_id, 1)
+
+                with sqlite3.connect(path) as db:
+                    db.execute(
+                        "INSERT INTO combat_log_entries VALUES "
+                        "(3,22,1,'turn_started','enemy','bandit','Bandit',"
+                        "'Bandit turn began','t3')"
+                    )
+                next_scene = __import__("dataclasses").replace(
+                    scene,
+                    combatants=(
+                        CombatantState(CombatantKind.ENEMY, "bandit", "Bandit", "pillar"),
                     ),
-                ),
-            )
-            await CombatCommands._publish_scene(
-                fake_cog, guild, changed, channel=channel,
-            )
-            channel.send.assert_awaited_once()  # No duplicate combat posts.
-            message.edit.assert_awaited_once()
-            updated = message.edit.await_args.kwargs
-            self.assertEqual(len(updated["attachments"]), 1)
-            updated_name = updated["attachments"][0].filename
-            self.assertRegex(updated_name, r"^combat-map-[0-9a-f]{12}\.png$")
-            self.assertEqual(updated["embed"].image.url, f"attachment://{updated_name}")
-            self.assertEqual(fake_cog._scene_messages[44], message)
+                    current_turn_kind=CombatantKind.ENEMY,
+                    current_turn_source_id="bandit",
+                )
+                await CombatCommands._publish_scene(
+                    cog, guild, next_scene, channel=channel,
+                )
+                self.assertEqual(len(sent), 2)
+                sent[0][0].edit.assert_awaited_once()
+                summary = sent[0][0].edit.await_args.kwargs
+                self.assertEqual(summary["attachments"], [])
+                self.assertIsNone(summary["view"])
+                self.assertIn("Sture", summary["embed"].title)
+                self.assertIn("Sture moved", summary["embed"].description)
+                self.assertTrue(sent[1][1]["silent"])
+                self.assertEqual(cog.message_store.get(44).turn_marker_id, 3)
+
+                # State updates within the same turn edit the current map.
+                await CombatCommands._publish_scene(
+                    cog, guild, next_scene, channel=channel,
+                )
+                self.assertEqual(len(sent), 2)
+                sent[1][0].edit.assert_awaited_once()
 
     def test_embed_only_contains_player_facing_status(self) -> None:
         scene = CombatScene(
@@ -350,10 +386,9 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         embed = combat_scene_embed(scene, "Long Hall")
-        self.assertEqual([field.name for field in embed.fields], ["Turn order"])
+        self.assertEqual([field.name for field in embed.fields], ["Turn order", "Current turn · Sture"])
         self.assertEqual(embed.image.url, "attachment://combat-map.png")
         self.assertNotIn("Landmarks", str(embed.to_dict()))
-
 
 
 if __name__ == "__main__":
