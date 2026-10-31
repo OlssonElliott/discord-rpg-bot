@@ -4,6 +4,10 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from rpg_bot.commands.combat import CombatCommands, combat_scene_embed
 
 from rpg_bot.combat.models import (
     CombatLogEntry, CombatScene, CombatStatus, CombatantKind, CombatantState,
@@ -186,6 +190,119 @@ class CombatEventArchiveStoreTests(unittest.TestCase):
                     ),
                 )
         self.assertGreater(len(store.entries_from(22, 0)), 100)
+
+
+class CombatEventPublisherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_turn_published_once_and_checkpointed(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            db_path = Path(folder) / "archive.db"
+            with sqlite3.connect(db_path) as db:
+                db.executescript(
+                    """
+                    CREATE TABLE combat_log_entries (
+                        id INTEGER PRIMARY KEY, scene_id INTEGER,
+                        round_number INTEGER, event_type TEXT,
+                        actor_kind TEXT, actor_source_id TEXT,
+                        actor_name TEXT, message TEXT, created_at TEXT
+                    );
+                    INSERT INTO combat_log_entries VALUES
+                        (1,22,1,'turn_started','enemy','bandit','Bandit',
+                         'Bandit turn began','t1'),
+                        (2,22,1,'combatant_moved','enemy','bandit','Bandit',
+                         'Bandit moved to Stone Pillar','t2'),
+                        (3,22,1,'turn_started','character','11','Sture',
+                         'Sture turn began','t3');
+                    """
+                )
+            store = CombatEventArchiveStore(db_path)
+            guild = SimpleNamespace(id=44)
+            channel = SimpleNamespace(send=AsyncMock())
+            fake_cog = SimpleNamespace(
+                archive_store=store,
+                _archive_locks={},
+            )
+            with patch(
+                "rpg_bot.commands.combat.ensure_combat_log_channel",
+                new=AsyncMock(return_value=channel),
+            ):
+                await CombatCommands._archive_completed_turns(fake_cog, guild, 22)
+                await CombatCommands._archive_completed_turns(fake_cog, guild, 22)
+
+            channel.send.assert_awaited_once()
+            embed = channel.send.await_args.kwargs["embed"]
+            self.assertIn("Bandit", embed.title)
+            self.assertIn("Bandit moved", embed.description)
+            self.assertEqual(store.progress(44, 22), 3)
+
+    async def test_failed_archive_is_retried_from_saved_events(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            db_path = Path(folder) / "archive.db"
+            with sqlite3.connect(db_path) as db:
+                db.executescript(
+                    """
+                    CREATE TABLE combat_log_entries (
+                        id INTEGER PRIMARY KEY, scene_id INTEGER,
+                        round_number INTEGER, event_type TEXT,
+                        actor_kind TEXT, actor_source_id TEXT,
+                        actor_name TEXT, message TEXT, created_at TEXT
+                    );
+                    INSERT INTO combat_log_entries VALUES
+                        (1,22,1,'turn_started','enemy','bandit','Bandit','start','t'),
+                        (2,22,1,'combatant_moved','enemy','bandit','Bandit','move','t'),
+                        (3,22,1,'combat_ended',NULL,NULL,NULL,'end','t');
+                    """
+                )
+            store = CombatEventArchiveStore(db_path)
+            fake_cog = SimpleNamespace(archive_store=store, _archive_locks={})
+            guild = SimpleNamespace(id=44)
+            # No channel: keep the turn for a later retry.
+            with patch(
+                "rpg_bot.commands.combat.ensure_combat_log_channel",
+                new=AsyncMock(return_value=None),
+            ):
+                await CombatCommands._archive_completed_turns(fake_cog, guild, 22)
+            self.assertEqual(store.progress(44, 22), 0)
+
+            channel = SimpleNamespace(send=AsyncMock())
+            with patch(
+                "rpg_bot.commands.combat.ensure_combat_log_channel",
+                new=AsyncMock(return_value=channel),
+            ):
+                await CombatCommands._archive_completed_turns(fake_cog, guild, 22)
+            channel.send.assert_awaited_once()
+            self.assertEqual(store.progress(44, 22), 3)
+
+    def test_live_combat_card_shows_events_and_clears_next_turn(self) -> None:
+        actions = (
+            event(1, "turn_started", "Bandit began"),
+            event(2, "enemy_attack_resolved", "Bandit attacked Sture"),
+        )
+        actor = CombatantState(CombatantKind.ENEMY, "bandit-1", "Bandit", "center")
+        scene = CombatScene(
+            id=22, guild_id=44, room_id="hall", status=CombatStatus.ACTIVE,
+            combatants=(actor,),
+            current_turn_kind=CombatantKind.ENEMY,
+            current_turn_source_id="bandit-1",
+            log_entries=actions,
+        )
+        embed = combat_scene_embed(scene, "Long Hall")
+        self.assertEqual(
+            [field.name for field in embed.fields],
+            ["Turn order", "Current turn · Bandit"],
+        )
+        self.assertIn("Bandit attacked Sture", embed.fields[1].value)
+
+        from dataclasses import replace
+        cleared = replace(
+            scene,
+            log_entries=actions + (
+                event(3, "turn_started", "Bandit began again"),
+            ),
+        )
+        self.assertIn(
+            "Waiting for an action",
+            combat_scene_embed(cleared, "Long Hall").fields[1].value,
+        )
 
 
 if __name__ == "__main__":
