@@ -54,6 +54,7 @@ class RPGBot(commands.Bot):
     async def on_ready(self) -> None:
         if self.user is not None:
             from ..commands.combat import ensure_combat_channel
+            from ..discord_support.combat_events import ensure_combat_log_channel
             from ..discord_support.game_events import ensure_game_channel
 
             LOGGER.info("Logged in as %s (ID: %s)", self.user, self.user.id)
@@ -80,6 +81,7 @@ class RPGBot(commands.Bot):
                     )
                 await ensure_game_channel(guild)
                 await ensure_combat_channel(guild)
+                await ensure_combat_log_channel(guild)
                 character_cog = self.get_cog("CharacterCommands")
                 if character_cog is not None and hasattr(
                     character_cog, "ensure_required_player_channels"
