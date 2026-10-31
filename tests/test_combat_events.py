@@ -10,7 +10,7 @@ from rpg_bot.combat.models import (
     CombatLogEntry, CombatScene, CombatStatus, CombatantKind, CombatantState,
 )
 from rpg_bot.discord_support.combat_events import (
-    CombatEventArchiveStore,
+    CombatEventReader,
     archive_embeds,
     closed_turns,
     current_turn_events,
@@ -115,78 +115,33 @@ class CombatEventPresentationTests(unittest.TestCase):
         self.assertEqual(turns[1].lines, ("Sture moved to the Door",))
 
 
-class CombatEventArchiveStoreTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.path = Path(self.temp.name) / "rpg.db"
-        with sqlite3.connect(self.path) as db:
-            db.executescript(
-                """
-                CREATE TABLE combat_scenes (
-                    id INTEGER PRIMARY KEY,
-                    status TEXT NOT NULL
-                );
-                CREATE TABLE combat_log_entries (
-                    id INTEGER PRIMARY KEY,
-                    scene_id INTEGER NOT NULL,
-                    round_number INTEGER NOT NULL,
-                    event_type TEXT NOT NULL,
-                    actor_kind TEXT,
-                    actor_source_id TEXT,
-                    actor_name TEXT,
-                    message TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                INSERT INTO combat_scenes VALUES (22, 'ended');
-                INSERT INTO combat_log_entries VALUES
-                    (1,22,1,'turn_started','enemy','bandit-1','Bandit',
-                     'Bandit turn began','2026-10-31T10:00:00Z'),
-                    (2,22,1,'combatant_moved','enemy','bandit-1','Bandit',
-                     'Bandit moved','2026-10-31T10:01:00Z'),
-                    (3,22,1,'turn_started','character','11','Sture',
-                     'Sture turn began','2026-10-31T10:02:00Z'),
-                    (4,22,1,'combatant_dashed','character','11','Sture',
-                     'Sture dashed','2026-10-31T10:03:00Z'),
-                    (5,22,1,'combat_ended',NULL,NULL,NULL,
-                     'Combat ended','2026-10-31T10:04:00Z');
-                """
-            )
-
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-
-    def test_checkpoint_survives_restart_and_advances_monotonically(self) -> None:
-        first = CombatEventArchiveStore(self.path)
-        first.ensure_scene(44, 22)
-        self.assertEqual(first.pending_scenes(44), [22])
-        turns = closed_turns(first.entries_from(22, 0), 22)
-        self.assertEqual(len(turns), 2)
-        first.mark_sent(44, 22, turns[0].resume_at_id)
-        second = CombatEventArchiveStore(self.path)
-        self.assertEqual(second.progress(44, 22), 3)
-        self.assertEqual(
-            [t.actor_name for t in closed_turns(second.entries_from(22, 3), 22)],
-            ["Sture"],
-        )
-        second.mark_sent(44, 22, 5)
-        second.mark_sent(44, 22, 3)
-        self.assertEqual(second.progress(44, 22), 5)
-        self.assertEqual(second.pending_scenes(44), [])
-
-    def test_read_is_not_capped_to_scene_last_100_events(self) -> None:
-        store = CombatEventArchiveStore(self.path)
-        with sqlite3.connect(self.path) as db:
-            for offset in range(105):
+class CombatEventReaderTests(unittest.TestCase):
+    def test_read_full_event_history_without_scene_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "combat.db"
+            with sqlite3.connect(path) as db:
                 db.execute(
-                    "INSERT INTO combat_log_entries VALUES "
-                    "(?,?,?,?,?,?,?,?,?)",
-                    (
-                        10 + offset, 22, 1, "combatant_moved", "enemy",
-                        "bandit-1", "Bandit", f"Bandit moved {offset}",
-                        "2026-10-31T10:05:00Z",
-                    ),
+                    """
+                    CREATE TABLE combat_log_entries (
+                        id INTEGER PRIMARY KEY, scene_id INTEGER NOT NULL,
+                        round_number INTEGER NOT NULL, event_type TEXT NOT NULL,
+                        actor_kind TEXT, actor_source_id TEXT, actor_name TEXT,
+                        message TEXT NOT NULL, created_at TEXT NOT NULL
+                    )
+                    """
                 )
-        self.assertGreater(len(store.entries_from(22, 0)), 100)
+                db.executemany(
+                    "INSERT INTO combat_log_entries VALUES (?,?,?,?,?,?,?,?,?)",
+                    [
+                        (index, 22, 1, "combatant_moved", "enemy", "bandit",
+                         "Bandit", f"Bandit moved {index}", "2026-10-31T10:00:00Z")
+                        for index in range(1, 121)
+                    ],
+                )
+            reader = CombatEventReader(path)
+            self.assertEqual(len(reader.entries_from(22, 0)), 120)
+            newer = reader.entries_from(22, 117)
+            self.assertEqual([event.id for event in newer], [117, 118, 119, 120])
 
 
 class CombatOneChannelPresentationTests(unittest.TestCase):
