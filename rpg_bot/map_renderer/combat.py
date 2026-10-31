@@ -215,9 +215,16 @@ def render_combat_map(
     )
     draw.line((54, 115, MAP_WIDTH - 54, 115), fill="#544933", width=2)
     if move_costs is not None:
+        # Keep the movement budget in the header, above the map's node area.
+        # The topmost landmark and its cost badge can begin around y=140.
+        budget_text = (
+            f"Movement remaining: "
+            f"{movement_remaining if movement_remaining is not None else '?'}"
+        )
+        budget_width = draw.textlength(budget_text, font=meta_font)
         draw.text(
-            (56, 126),
-            f"Movement remaining: {movement_remaining if movement_remaining is not None else '?'}",
+            (MAP_WIDTH - 55 - budget_width, 79),
+            budget_text,
             font=meta_font,
             fill=PLAYER,
         )
