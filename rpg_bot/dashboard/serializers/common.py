@@ -145,6 +145,7 @@ def _enemy_template_data(template: EnemyTemplate) -> JsonObject:
         "personality": template.personality,
         "max_hp": template.max_hp,
         "armor": template.armor,
+        "armor_mode": template.armor_mode,
         "magical_resistance": template.magical_resistance,
         "attack_dc": template.attack_dc,
         "defense_dc": template.defense_dc,

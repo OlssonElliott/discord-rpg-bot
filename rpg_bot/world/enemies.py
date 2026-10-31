@@ -59,6 +59,7 @@ class EnemyTemplate:
     personality: int = 0
     max_hp: int = 7
     armor: int = 0
+    armor_mode: str = "unset"
     magical_resistance: int = 0
     attack_dc: int = 12
     defense_dc: int = 12
@@ -132,6 +133,12 @@ class EnemyTemplate:
             raise ValueError(
                 "Enemy armor reduction filter must be a non-negative integer."
             )
+        if self.armor_mode not in {"unset", "equipment", "natural", "unarmored"}:
+            raise ValueError("Enemy armor mode is invalid.")
+        if self.armor_mode == "natural" and not 1 <= self.armor <= 5:
+            raise ValueError("Natural armor must provide DR 1–5.")
+        if self.armor_mode in {"equipment", "unarmored"} and self.armor != 0:
+            raise ValueError("Only natural armor may provide innate DR.")
         if not isinstance(self.dual_wield, bool):
             raise ValueError("Enemy dual wield setting must be boolean.")
 

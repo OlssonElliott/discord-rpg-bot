@@ -148,6 +148,10 @@ def enemy_template_from_body(
             "armor",
             default=current.armor if current is not None else 0,
         ),
+        armor_mode=text_value(
+            "armor_mode",
+            current.armor_mode if current is not None else "unset",
+        ),
         magical_resistance=parse_integer(
             body,
             "magical_resistance",

@@ -116,6 +116,7 @@ export type EnemyTemplateData = {
   personality: number;
   max_hp: number;
   armor: number;
+  armor_mode: 'unset' | 'equipment' | 'natural' | 'unarmored';
   magical_resistance: number;
   attack_dc: number;
   defense_dc: number;
@@ -137,7 +138,7 @@ export type EnemyTemplateData = {
   armor_reduction_filter: number | null;
   dual_wield: boolean;
   allowed_races: string[];
-  melee_loadouts: ('one_handed' | 'shield' | 'dual_wield' | 'two_handed' | 'natural')[];
+  melee_loadouts: ('one_handed' | 'shield' | 'dual_wield' | 'two_handed' | 'natural' | 'unarmed')[];
   shield_item_ids: string[];
   natural_attacks: {
     name: string;
