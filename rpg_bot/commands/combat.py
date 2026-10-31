@@ -1,6 +1,5 @@
 """Discord adapter for the shared landmark-based combat scene."""
 
-import asyncio
 import logging
 
 import discord
