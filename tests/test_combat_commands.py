@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
-from rpg_bot.commands.combat import ensure_combat_channel
+from rpg_bot.commands.combat import CombatCommands, combat_scene_embed, ensure_combat_channel
 from rpg_bot.commands.combat_views import (
     CombatActionView,
     move_destinations,
@@ -184,6 +184,90 @@ class CombatMoveAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             view._check(outsider)
         with self.assertRaises(CombatError):
             CombatMoveView(cog, scene_id=999, character_id="11", destinations=[])._check(authorized)
+
+
+
+class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publishing_and_updating_reuses_one_message(self) -> None:
+        from rpg_bot.map_renderer.combat import render_combat_map
+
+        actor = CombatantState(
+            CombatantKind.CHARACTER, "11", "Sture", "pillar",
+        )
+        scene = CombatScene(
+            id=22, guild_id=44, room_id="hall", status=CombatStatus.ACTIVE,
+            landmarks=(CombatLandmark("pillar", "Stone Pillar"),),
+            combatants=(actor,),
+            current_turn_kind=CombatantKind.CHARACTER,
+            current_turn_source_id="11",
+        )
+        message = SimpleNamespace(
+            id=555,
+            edit=AsyncMock(),
+        )
+        channel = SimpleNamespace(
+            id=444, send=AsyncMock(return_value=message),
+        )
+        message.channel = channel
+        guild = SimpleNamespace(id=44)
+        store = SimpleNamespace(
+            get=Mock(return_value=None),
+            save=Mock(),
+        )
+        fake_cog = SimpleNamespace(
+            _scene_messages={},
+            _last_scenes={},
+            message_store=store,
+            world=SimpleNamespace(
+                get_room=lambda _: SimpleNamespace(name="Long Hall")
+            ),
+        )
+        with patch(
+            "rpg_bot.commands.combat.CombatOpenView",
+            return_value=object(),
+        ):
+            await CombatCommands._publish_scene(
+                fake_cog, guild, scene, channel=channel,
+            )
+            channel.send.assert_awaited_once()
+            first = channel.send.await_args.kwargs
+            self.assertEqual(first["file"].filename, "combat-map.png")
+            self.assertEqual(
+                first["embed"].image.url,
+                "attachment://combat-map.png",
+            )
+            store.save.assert_called_once_with(44, 22, 444, 555)
+
+            changed = __import__("dataclasses").replace(
+                scene,
+                combatants=(
+                    __import__("dataclasses").replace(
+                        actor, movement_remaining=1,
+                    ),
+                ),
+            )
+            await CombatCommands._publish_scene(
+                fake_cog, guild, changed, channel=channel,
+            )
+            channel.send.assert_awaited_once()  # No duplicate combat posts.
+            message.edit.assert_awaited_once()
+            updated = message.edit.await_args.kwargs
+            self.assertEqual(len(updated["attachments"]), 1)
+            self.assertEqual(updated["attachments"][0].filename, "combat-map.png")
+
+    def test_embed_only_contains_player_facing_status(self) -> None:
+        scene = CombatScene(
+            id=22, guild_id=44, room_id="hall", status=CombatStatus.ACTIVE,
+            landmarks=(CombatLandmark("pillar", "Stone Pillar", x=0.1, y=0.2),),
+            routes=(),
+            combatants=(
+                CombatantState(CombatantKind.CHARACTER, "11", "Sture", "pillar"),
+            ),
+        )
+        embed = combat_scene_embed(scene, "Long Hall")
+        self.assertEqual([field.name for field in embed.fields], ["Turn order"])
+        self.assertEqual(embed.image.url, "attachment://combat-map.png")
+        self.assertNotIn("Landmarks", str(embed.to_dict()))
 
 
 
