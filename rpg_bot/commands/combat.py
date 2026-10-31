@@ -18,7 +18,7 @@ from ..discord_support.combat_events import (
     archive_embeds,
     closed_turns,
     current_turn_events,
-    ensure_combat_log_channel,
+    TURN_MARKERS,
 )
 from ..map_renderer.combat import render_combat_map
 from .combat_views import CombatActionView
@@ -120,51 +120,41 @@ class CombatCommands(commands.Cog):
         self._scene_messages: dict[int, discord.Message] = {}
         self.message_store = CombatMessageStore(self.database.path)
         self.archive_store = CombatEventArchiveStore(self.database.path)
-        self._archive_locks: dict[int, asyncio.Lock] = {}
+        self._publish_locks: dict[int, asyncio.Lock] = {}
         self._last_scenes: dict[int, CombatScene] = {}
         self.sync_dashboard_combat.start()
 
     def cog_unload(self) -> None:
         self.sync_dashboard_combat.cancel()
 
-    async def _archive_completed_turns(self, guild: discord.Guild, scene_id: int) -> None:
-        """Publish completed turns from SQLite and checkpoint after success.
+    def _turn_markers(self, scene_id: int):
+        """Read all persisted turn boundaries, not the scene's last 100 events."""
+        events = self.archive_store.entries_from(scene_id, 0)
+        return events, [
+            entry for entry in events if entry.event_type in TURN_MARKERS
+        ]
 
-        The archive uses the full log, not the scene's capped 100-entry
-        presentation history. Nothing is removed from the database.
-        """
-        lock = self._archive_locks.setdefault(guild.id, asyncio.Lock())
-        async with lock:
-            self.archive_store.ensure_scene(guild.id, scene_id)
-            cursor = self.archive_store.progress(guild.id, scene_id)
-            entries = await asyncio.to_thread(
-                self.archive_store.entries_from, scene_id, cursor,
-            )
-            turns = closed_turns(entries, scene_id)
-            if not turns:
-                return
-            channel = await ensure_combat_log_channel(guild)
-            if channel is None:
-                LOGGER.warning(
-                    "Combat archive not delivered: #combat-log unavailable in guild %s",
-                    guild.id,
-                )
-                return
-            for turn in turns:
-                try:
-                    # Usually a single embed; very long turns are split safely.
-                    for embed in archive_embeds(turn):
-                        await channel.send(embed=embed)
-                except discord.HTTPException:
-                    LOGGER.exception(
-                        "Unable to archive round %s, turn %s in guild %s",
-                        turn.round_number, turn.actor_name, guild.id,
-                    )
-                    return
-                await asyncio.to_thread(
-                    self.archive_store.mark_sent,
-                    guild.id, scene_id, turn.resume_at_id,
-                )
+    async def _resolve_message(self, guild, saved):
+        if saved is None:
+            return None
+        message = self._scene_messages.get(guild.id)
+        if message is not None and message.id == saved.message_id:
+            return message
+        channel = guild.get_channel(saved.channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(saved.channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return None
+        try:
+            return await channel.fetch_message(saved.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
+    @staticmethod
+    def _turn_summary_embed(turn):
+        """Compact immutable history entry instead of a stale full-sized map."""
+        return archive_embeds(turn)[0]
 
     async def _publish_scene(
         self,
@@ -173,124 +163,158 @@ class CombatCommands(commands.Cog):
         *,
         channel: discord.TextChannel | None = None,
     ) -> discord.TextChannel | None:
-        channel = channel or await ensure_combat_channel(guild)
-        if channel is None:
-            return None
-        await self._archive_completed_turns(guild, scene.id)
-        room = self.world.get_room(scene.room_id)
-        room_name = room.name if room is not None else scene.room_id
-        try:
-            image = await asyncio.to_thread(render_combat_map, scene, room_name)
-        except Exception:
-            LOGGER.exception(
-                "Combat map rendering failed for guild %s, scene %s",
-                guild.id, scene.id,
-            )
-            return None
-        # Use a content-specific attachment name. Reusing the same filename
-        # when editing an attachment-backed embed can leave a stale image in
-        # the Discord client's cache.
-        image_filename = (
-            f"combat-map-{sha256(image.getvalue()).hexdigest()[:12]}.png"
-        )
-        embed = combat_scene_embed(scene, room_name, image_filename)
+        """Keep the active map last; turn changes convert old cards into history."""
+        lock = self._publish_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            channel = channel or await ensure_combat_channel(guild)
+            if channel is None:
+                return None
+            events, markers = await asyncio.to_thread(self._turn_markers, scene.id)
+            current_marker_id = markers[-1].id if markers else 0
 
-        message = self._scene_messages.get(guild.id)
-        saved = self.message_store.get(guild.id)
-        if saved is not None and saved.scene_id != scene.id:
-            # Never edit a previous encounter's card with the new scene.
-            message = None
-            self._scene_messages.pop(guild.id, None)
-        if message is None and saved is not None and saved.scene_id == scene.id:
-            try:
-                saved_channel = guild.get_channel(saved.channel_id)
-                if saved_channel is not None:
-                    message = await saved_channel.fetch_message(saved.message_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                message = None
-        if message is not None:
-            try:
-                # Replace the attachment in place: Discord keeps one card
-                # while movement and dashboard changes regenerate the image.
-                image.seek(0)
-                edited = await message.edit(
-                    embed=embed,
-                    view=CombatOpenView(self, scene.id),
-                    attachments=[discord.File(image, filename=image_filename)],
-                )
-                self._scene_messages[guild.id] = edited
-                self.message_store.save(
-                    guild.id, scene.id, edited.channel.id, edited.id,
-                )
-                self._last_scenes[guild.id] = scene
-                return channel
-            except discord.NotFound:
+            saved = self.message_store.get(guild.id)
+            if saved is not None and saved.scene_id != scene.id:
+                saved = None
                 self._scene_messages.pop(guild.id, None)
-            except discord.HTTPException:
+
+            message = await self._resolve_message(guild, saved)
+            if saved is not None and saved.turn_marker_id == 0:
+                # Migrate the old single-card implementation in place without
+                # posting a duplicate or replaying historical combat turns.
+                self.message_store.save(
+                    guild.id, scene.id, saved.channel_id, saved.message_id,
+                    current_marker_id,
+                )
+                saved = self.message_store.get(guild.id)
+
+            if (
+                saved is not None
+                and saved.turn_marker_id != current_marker_id
+            ):
+                # Replay every closed turn since the last Discord card.
+                # At most the first summary replaces an existing map; the
+                # rest are posted silently in the same chronological channel.
+                completed = closed_turns(
+                    [entry for entry in events if entry.id >= saved.turn_marker_id],
+                    scene.id,
+                )
+                for index, turn in enumerate(completed):
+                    embed = self._turn_summary_embed(turn)
+                    try:
+                        if index == 0 and message is not None:
+                            await message.edit(
+                                embed=embed, view=None, attachments=[],
+                            )
+                        else:
+                            await channel.send(
+                                embed=embed,
+                                silent=True,
+                                allowed_mentions=discord.AllowedMentions.none(),
+                            )
+                    except discord.HTTPException:
+                        LOGGER.exception(
+                            "Could not publish completed turn in guild %s",
+                            guild.id,
+                        )
+                        return None
+
+                # The next map must be a new message at the bottom. Its
+                # current turn marker is checkpointed only after send.
+                message = None
+                self._scene_messages.pop(guild.id, None)
+
+            room = self.world.get_room(scene.room_id)
+            room_name = room.name if room is not None else scene.room_id
+            try:
+                image = await asyncio.to_thread(
+                    render_combat_map, scene, room_name,
+                )
+                filename = (
+                    f"combat-map-{sha256(image.getvalue()).hexdigest()[:12]}.png"
+                )
+                embed = combat_scene_embed(scene, room_name, filename)
+            except Exception:
                 LOGGER.exception(
-                    "Combat map upload/edit failed in guild %s, scene %s",
+                    "Could not render combat map for guild %s scene %s",
                     guild.id, scene.id,
                 )
                 return None
-        try:
-            image.seek(0)
-            self._scene_messages[guild.id] = await channel.send(
-                embed=embed,
-                view=CombatOpenView(self, scene.id),
-                file=discord.File(image, filename=image_filename),
-            )
-            sent = self._scene_messages[guild.id]
-            self.message_store.save(guild.id, scene.id, channel.id, sent.id)
-            self._last_scenes[guild.id] = scene
-        except discord.HTTPException:
-            LOGGER.exception(
-                "Combat map upload/send failed in guild %s, scene %s",
-                guild.id, scene.id,
-            )
-            return None
-        return channel
+
+            try:
+                image.seek(0)
+                if message is not None:
+                    edited = await message.edit(
+                        embed=embed,
+                        view=CombatOpenView(self, scene.id),
+                        attachments=[discord.File(image, filename=filename)],
+                    )
+                    result = edited
+                else:
+                    result = await channel.send(
+                        embed=embed,
+                        view=CombatOpenView(self, scene.id),
+                        file=discord.File(image, filename=filename),
+                        silent=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                self._scene_messages[guild.id] = result
+                self.message_store.save(
+                    guild.id,
+                    scene.id,
+                    result.channel.id,
+                    result.id,
+                    current_marker_id,
+                )
+                self._last_scenes[guild.id] = scene
+                return channel
+            except discord.HTTPException:
+                LOGGER.exception(
+                    "Could not publish combat map for guild %s scene %s",
+                    guild.id, scene.id,
+                )
+                return None
 
     async def _publish_ended(
         self,
         guild: discord.Guild,
         previous: CombatScene,
     ) -> None:
-        await self._archive_completed_turns(guild, previous.id)
-        room = self.world.get_room(previous.room_id)
-        room_name = room.name if room is not None else previous.room_id
-        embed = discord.Embed(
-            title=f"Combat ended · {room_name}",
-            colour=discord.Colour.from_rgb(91, 78, 59),
-        )
-        message = self._scene_messages.pop(guild.id, None)
-        saved = self.message_store.get(guild.id)
-        if message is None and saved is not None:
-            try:
-                old_channel = guild.get_channel(saved.channel_id)
-                if old_channel is not None:
-                    message = await old_channel.fetch_message(saved.message_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                message = None
-        self.message_store.clear(guild.id)
-        if message is not None:
-            try:
-                await message.edit(embed=embed, view=None, attachments=[])
-            except discord.HTTPException:
-                LOGGER.exception(
-                    "Could not close combat scene message in guild %s",
-                    guild.id,
+        """Finalize the last active combat card without deleting the history."""
+        lock = self._publish_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            saved = self.message_store.get(guild.id)
+            if saved is not None and saved.scene_id == previous.id:
+                events = await asyncio.to_thread(
+                    self.archive_store.entries_from, previous.id, 0,
                 )
-        else:
-            channel = await ensure_combat_channel(guild)
-            if channel is not None:
-                try:
-                    await channel.send(embed=embed)
-                except discord.HTTPException:
-                    LOGGER.exception(
-                        "Could not publish ended combat in guild %s",
-                        guild.id,
-                    )
-        self._last_scenes.pop(guild.id, None)
+                last_marker = saved.turn_marker_id
+                if last_marker == 0:
+                    markers = [
+                        e for e in events if e.event_type in TURN_MARKERS
+                    ]
+                    last_marker = markers[-1].id if markers else 0
+                closed = closed_turns(
+                    [e for e in events if e.id >= last_marker],
+                    previous.id,
+                )
+                msg = await self._resolve_message(guild, saved)
+                if msg is not None:
+                    try:
+                        if closed:
+                            embed = self._turn_summary_embed(closed[-1])
+                        else:
+                            embed = discord.Embed(
+                                title="Combat ended",
+                                colour=discord.Colour.from_rgb(91, 78, 59),
+                            )
+                        await msg.edit(embed=embed, view=None, attachments=[])
+                    except discord.HTTPException:
+                        LOGGER.exception(
+                            "Could not finalize combat scene %s", previous.id,
+                        )
+            self.message_store.clear(guild.id)
+            self._scene_messages.pop(guild.id, None)
+            self._last_scenes.pop(guild.id, None)
 
     @tasks.loop(seconds=2.0)
     async def sync_dashboard_combat(self) -> None:
@@ -298,11 +322,6 @@ class CombatCommands(commands.Cog):
             try:
                 scene = self.service.current(guild.id)
                 previous = self._last_scenes.get(guild.id)
-                # Recover undelivered completed turns even when the bot was
-                # stopped while the encounter ended in the Dashboard.
-                for archived_scene_id in self.archive_store.pending_scenes(guild.id):
-                    if scene is None or archived_scene_id != scene.id:
-                        await self._archive_completed_turns(guild, archived_scene_id)
                 if scene is None:
                     if previous is not None:
                         await self._publish_ended(guild, previous)
