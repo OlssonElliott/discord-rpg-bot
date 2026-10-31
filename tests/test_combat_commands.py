@@ -270,7 +270,6 @@ class CombatMoveAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
     async def test_publishing_turn_transition_keeps_history_and_moves_map_to_bottom(self) -> None:
         import sqlite3
-        from types import MethodType
         from rpg_bot.discord_support.combat_events import CombatEventArchiveStore
 
         with tempfile.TemporaryDirectory() as directory:
@@ -384,6 +383,8 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             combatants=(
                 CombatantState(CombatantKind.CHARACTER, "11", "Sture", "pillar"),
             ),
+            current_turn_kind=CombatantKind.CHARACTER,
+            current_turn_source_id="11",
         )
         embed = combat_scene_embed(scene, "Long Hall")
         self.assertEqual([field.name for field in embed.fields], ["Turn order", "Current turn · Sture"])
