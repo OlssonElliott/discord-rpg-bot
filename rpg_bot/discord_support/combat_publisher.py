@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from hashlib import sha256
+from io import BytesIO
 import logging
 
 import discord
@@ -252,7 +253,7 @@ class CombatPublisher:
                 embed = combat_scene_embed(
                     scene, room_name, filename, turn_marker_id=current_marker,
                 )
-                file = discord.File(__import__("io").BytesIO(image_bytes), filename=filename)
+                file = discord.File(BytesIO(image_bytes), filename=filename)
                 if previous is not None:
                     result = await previous.edit(
                         embed=embed, view=self.view_factory(scene.id),
