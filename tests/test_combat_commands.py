@@ -209,6 +209,7 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             id=444, send=AsyncMock(return_value=message),
         )
         message.channel = channel
+        message.edit.return_value = message
         guild = SimpleNamespace(id=44)
         store = SimpleNamespace(
             get=Mock(return_value=None),
@@ -231,10 +232,11 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             )
             channel.send.assert_awaited_once()
             first = channel.send.await_args.kwargs
-            self.assertEqual(first["file"].filename, "combat-map.png")
+            first_name = first["file"].filename
+            self.assertRegex(first_name, r"^combat-map-[0-9a-f]{12}\.png$")
             self.assertEqual(
                 first["embed"].image.url,
-                "attachment://combat-map.png",
+                f"attachment://{first_name}",
             )
             store.save.assert_called_once_with(44, 22, 444, 555)
 
@@ -253,7 +255,10 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             message.edit.assert_awaited_once()
             updated = message.edit.await_args.kwargs
             self.assertEqual(len(updated["attachments"]), 1)
-            self.assertEqual(updated["attachments"][0].filename, "combat-map.png")
+            updated_name = updated["attachments"][0].filename
+            self.assertRegex(updated_name, r"^combat-map-[0-9a-f]{12}\.png$")
+            self.assertEqual(updated["embed"].image.url, f"attachment://{updated_name}")
+            self.assertEqual(fake_cog._scene_messages[44], message)
 
     def test_embed_only_contains_player_facing_status(self) -> None:
         scene = CombatScene(
