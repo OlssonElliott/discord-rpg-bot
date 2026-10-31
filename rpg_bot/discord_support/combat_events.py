@@ -1,14 +1,9 @@
-"""Combat event presentation and durable Discord archive delivery.
-
-CombatRepository is the source of truth. This module never invents combat
-actions and never attributes an NPC action to the Discord user controlling it.
-"""
+"""Read authoritative combat events and format in-world turn summaries."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import logging
 import sqlite3
 
 import discord
@@ -16,8 +11,6 @@ import discord
 from ..combat.models import CombatLogEntry, CombatantKind, CombatScene
 
 
-LOGGER = logging.getLogger(__name__)
-COMBAT_LOG_CHANNEL_NAME = "combat-log"
 TURN_MARKERS = frozenset({"turn_started", "turn_changed", "turn_rewound"})
 # Only resolved world events appear to players; DM/editor commands and
 # bookkeeping remain in the database for administrative inspection.
@@ -56,6 +49,7 @@ def current_turn_events(scene: CombatScene) -> list[str]:
 @dataclass(frozen=True)
 class ArchivedTurn:
     scene_id: int
+    start_marker_id: int
     round_number: int
     actor_name: str
     actor_kind: CombatantKind | None
@@ -76,6 +70,7 @@ def closed_turns(entries: list[CombatLogEntry], scene_id: int) -> list[ArchivedT
             if started is not None:
                 result.append(ArchivedTurn(
                     scene_id=scene_id,
+                    start_marker_id=started.id,
                     round_number=started.round_number,
                     actor_name=started.actor_name or "Unknown combatant",
                     actor_kind=started.actor_kind,
@@ -114,90 +109,26 @@ def archive_embeds(turn: ArchivedTurn) -> list[discord.Embed]:
             description=part,
             colour=discord.Colour.from_rgb(93, 120, 145),
         )
-        embed.set_footer(text=f"Combat scene #{turn.scene_id}")
+        embed.set_footer(
+            text=(
+                f"Combat scene #{turn.scene_id} · "
+                f"Turn #{turn.start_marker_id} · summary {number}/{len(parts)}"
+            )
+        )
         result.append(embed)
     return result
 
 
-class CombatEventArchiveStore:
-    """Durable per-scene Discord delivery checkpoint in the combat database."""
+class CombatEventReader:
+    """Read the full combat event log without the scene's 100-entry limit."""
 
     def __init__(self, database_path: str | Path) -> None:
         self.path = Path(database_path)
-        with self._connect() as db:
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS combat_discord_archive_progress (
-                    guild_id INTEGER NOT NULL,
-                    scene_id INTEGER NOT NULL,
-                    resume_at_id INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (guild_id, scene_id)
-                )
-            """)
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=5)
         db.row_factory = sqlite3.Row
         return db
-
-    def ensure_scene(self, guild_id: int, scene_id: int) -> None:
-        with self._connect() as db:
-            db.execute(
-                "INSERT OR IGNORE INTO combat_discord_archive_progress "
-                "(guild_id, scene_id, resume_at_id) VALUES (?, ?, 0)",
-                (guild_id, scene_id),
-            )
-
-    def progress(self, guild_id: int, scene_id: int) -> int:
-        with self._connect() as db:
-            row = db.execute(
-                "SELECT resume_at_id FROM combat_discord_archive_progress "
-                "WHERE guild_id = ? AND scene_id = ?",
-                (guild_id, scene_id),
-            ).fetchone()
-        return int(row["resume_at_id"]) if row else 0
-
-    def mark_sent(self, guild_id: int, scene_id: int, resume_at_id: int) -> None:
-        with self._connect() as db:
-            db.execute(
-                """
-                INSERT INTO combat_discord_archive_progress
-                    (guild_id, scene_id, resume_at_id)
-                VALUES (?, ?, ?)
-                ON CONFLICT (guild_id, scene_id) DO UPDATE SET
-                    resume_at_id = MAX(resume_at_id, excluded.resume_at_id)
-                """,
-                (guild_id, scene_id, resume_at_id),
-            )
-
-    def pending_scenes(self, guild_id: int) -> list[int]:
-        """Recover scenes ended while the bot was offline.
-
-        Only report scenes that have at least one complete turn after the
-        durable checkpoint, so archived encounters aren't rechecked forever.
-        """
-        with self._connect() as db:
-            rows = db.execute(
-                """
-                SELECT progress.scene_id
-                FROM combat_discord_archive_progress AS progress
-                JOIN combat_scenes AS scene ON scene.id = progress.scene_id
-                WHERE progress.guild_id = ?
-                  AND scene.status = 'ended'
-                  AND (
-                    SELECT COUNT(*)
-                    FROM combat_log_entries AS event
-                    WHERE event.scene_id = progress.scene_id
-                      AND event.id >= progress.resume_at_id
-                      AND event.event_type IN (
-                          'turn_started', 'turn_changed',
-                          'turn_rewound', 'combat_ended'
-                      )
-                  ) >= 2
-                ORDER BY progress.scene_id
-                """,
-                (guild_id,),
-            ).fetchall()
-        return [int(row["scene_id"]) for row in rows]
 
     def entries_from(self, scene_id: int, resume_at_id: int) -> list[CombatLogEntry]:
         # Do not use CombatScene.log_entries here; the dashboard only loads
@@ -228,33 +159,3 @@ class CombatEventArchiveStore:
             for row in rows
         ]
 
-
-async def ensure_combat_log_channel(guild):
-    for channel in getattr(guild, "text_channels", ()):
-        if getattr(channel, "name", "").casefold() == COMBAT_LOG_CHANNEL_NAME:
-            return channel
-
-    bot_member = getattr(guild, "me", None)
-    if (
-        bot_member is None
-        or not getattr(bot_member.guild_permissions, "manage_channels", False)
-    ):
-        LOGGER.warning(
-            "Unable to create #%s in guild %s: Manage Channels missing",
-            COMBAT_LOG_CHANNEL_NAME,
-            getattr(guild, "id", "unknown"),
-        )
-        return None
-    try:
-        return await guild.create_text_channel(
-            COMBAT_LOG_CHANNEL_NAME,
-            topic="Permanent record of completed in-world combat turns.",
-            reason="Permanent combat turn archive",
-        )
-    except discord.HTTPException:
-        LOGGER.exception(
-            "Unable to create #%s in guild %s",
-            COMBAT_LOG_CHANNEL_NAME,
-            getattr(guild, "id", "unknown"),
-        )
-        return None
