@@ -15,6 +15,7 @@ class CombatMessage:
     scene_id: int
     channel_id: int
     message_id: int
+    turn_marker_id: int = 0
 
 
 class CombatMessageStore:
@@ -27,10 +28,21 @@ class CombatMessageStore:
                     guild_id INTEGER PRIMARY KEY,
                     scene_id INTEGER NOT NULL,
                     channel_id INTEGER NOT NULL,
-                    message_id INTEGER NOT NULL
+                    message_id INTEGER NOT NULL,
+                    turn_marker_id INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            fields = {
+                row["name"] for row in db.execute(
+                    "PRAGMA table_info(combat_discord_messages)"
+                )
+            }
+            if "turn_marker_id" not in fields:
+                db.execute(
+                    "ALTER TABLE combat_discord_messages ADD COLUMN "
+                    "turn_marker_id INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5)
@@ -40,25 +52,33 @@ class CombatMessageStore:
     def get(self, guild_id: int) -> CombatMessage | None:
         with self._connect() as db:
             row = db.execute(
-                "SELECT guild_id, scene_id, channel_id, message_id "
+                "SELECT guild_id, scene_id, channel_id, message_id, turn_marker_id "
                 "FROM combat_discord_messages WHERE guild_id = ?",
                 (guild_id,),
             ).fetchone()
         return CombatMessage(**dict(row)) if row is not None else None
 
-    def save(self, guild_id: int, scene_id: int, channel_id: int, message_id: int) -> None:
+    def save(
+        self,
+        guild_id: int,
+        scene_id: int,
+        channel_id: int,
+        message_id: int,
+        turn_marker_id: int = 0,
+    ) -> None:
         with self._connect() as db:
             db.execute(
                 """
                 INSERT INTO combat_discord_messages
-                    (guild_id, scene_id, channel_id, message_id)
-                VALUES (?, ?, ?, ?)
+                    (guild_id, scene_id, channel_id, message_id, turn_marker_id)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(guild_id) DO UPDATE SET
                     scene_id = excluded.scene_id,
                     channel_id = excluded.channel_id,
-                    message_id = excluded.message_id
+                    message_id = excluded.message_id,
+                    turn_marker_id = excluded.turn_marker_id
                 """,
-                (guild_id, scene_id, channel_id, message_id),
+                (guild_id, scene_id, channel_id, message_id, turn_marker_id),
             )
 
     def clear(self, guild_id: int) -> None:
