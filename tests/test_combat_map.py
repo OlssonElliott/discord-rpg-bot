@@ -124,6 +124,23 @@ class CombatMapTests(unittest.TestCase):
             self.assertGreaterEqual(y - 47, 0)
             self.assertLessEqual(y + 47, height)
 
+    def test_private_move_preview_highlights_reachable_and_partial_moves(self) -> None:
+        normal = render_combat_map(self.scene, "Long Hall").getvalue()
+        preview = render_combat_map(
+            self.scene,
+            "Long Hall",
+            move_costs={"center": 2, "door": 5},
+            movement_remaining=3,
+        ).getvalue()
+        self.assertNotEqual(normal, preview)
+        with Image.open(BytesIO(preview)) as image:
+            self.assertEqual(image.size[0], 1280)
+
+    def test_empty_move_preview_does_not_change_public_map(self) -> None:
+        first = render_combat_map(self.scene, "Long Hall").getvalue()
+        second = render_combat_map(self.scene, "Long Hall").getvalue()
+        self.assertEqual(first, second)
+
     def test_moving_character_changes_visual_map(self) -> None:
         before = render_combat_map(self.scene, "Long Hall").getvalue()
         after_scene = replace(
