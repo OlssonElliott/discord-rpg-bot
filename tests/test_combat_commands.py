@@ -127,6 +127,86 @@ class CombatMoveDestinationsTests(unittest.TestCase):
         stationary = replace(self.actor, movement_remaining=0)
         self.assertEqual(move_destinations(self.scene, stationary), [])
 
+    def test_do_not_offer_distant_locations_after_movement_runs_out(self):
+        from dataclasses import replace
+
+        # center -> pillar costs 2, pillar -> door costs 3.
+        # At 2 MP the player reaches pillar, but cannot begin moving
+        # toward door, so door must not be listed as PARTIAL.
+        limited = replace(self.actor, movement_remaining=2)
+        costs = {
+            destination.landmark_id: destination.cost
+            for destination in move_destinations(self.scene, limited)
+        }
+        self.assertEqual(costs, {"pillar": 2})
+
+        # At 3 MP, the player can spend 1 MP on the pillar -> door
+        # connection; door is therefore a legitimate PARTIAL option.
+        with_progress = replace(self.actor, movement_remaining=3)
+        costs = {
+            destination.landmark_id: destination.cost
+            for destination in move_destinations(self.scene, with_progress)
+        }
+        self.assertEqual(costs, {"pillar": 2, "door": 5})
+
+    def test_multi_route_preview_never_lists_locations_beyond_partial_leg(self):
+        from dataclasses import replace
+
+        scene = replace(
+            self.scene,
+            landmarks=(
+                CombatLandmark("center", "Room Center"),
+                CombatLandmark("pillar", "Stone Pillar"),
+                CombatLandmark("door", "North Door"),
+                CombatLandmark("far_end", "Far End"),
+            ),
+            routes=(
+                CombatRoute("center", "pillar", LandmarkDistance.NEAR),
+                CombatRoute("pillar", "door", LandmarkDistance.NEAR),
+                CombatRoute("door", "far_end", LandmarkDistance.NEAR),
+            ),
+        )
+        limited = replace(self.actor, movement_remaining=3)
+        costs = {
+            destination.landmark_id: destination.cost
+            for destination in move_destinations(scene, limited)
+        }
+        self.assertEqual(costs, {"pillar": 2, "door": 4})
+        self.assertNotIn("far_end", costs)
+
+    def test_partial_movement_from_route_only_lists_nearest_approachable_nodes(self):
+        from dataclasses import replace
+
+        scene = replace(
+            self.scene,
+            landmarks=(
+                CombatLandmark("center", "Room Center"),
+                CombatLandmark("pillar", "Stone Pillar"),
+                CombatLandmark("door", "North Door"),
+                CombatLandmark("far_end", "Far End"),
+            ),
+            routes=(
+                CombatRoute("center", "pillar", LandmarkDistance.NEAR),
+                CombatRoute("pillar", "door", LandmarkDistance.NEAR),
+                CombatRoute("door", "far_end", LandmarkDistance.NEAR),
+            ),
+        )
+        mid_route = replace(
+            self.actor,
+            route_source_landmark_id="center",
+            route_destination_landmark_id="pillar",
+            route_progress=1,
+            route_cost=2,
+            movement_remaining=2,
+        )
+        costs = {
+            destination.landmark_id: destination.cost
+            for destination in move_destinations(scene, mid_route)
+        }
+        self.assertEqual(costs["pillar"], 1)
+        self.assertEqual(costs["door"], 3)
+        self.assertNotIn("far_end", costs)
+
     def test_partial_route_options_use_remaining_distance(self):
         from dataclasses import replace
 
