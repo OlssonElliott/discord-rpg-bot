@@ -325,6 +325,17 @@ class CombatCommands(commands.Cog):
                 if scene is None:
                     if previous is not None:
                         await self._publish_ended(guild, previous)
+                    else:
+                        # The encounter may have ended in Dashboard while
+                        # Discord was offline. Finalize the last map from the
+                        # persisted scene and leave the history intact.
+                        saved = self.message_store.get(guild.id)
+                        if saved is not None:
+                            finished = self.service.repository.get_scene(
+                                saved.scene_id,
+                            )
+                            if finished is not None and finished.status.value == "ended":
+                                await self._publish_ended(guild, finished)
                     continue
                 if previous != scene or guild.id not in self._scene_messages:
                     await self._publish_scene(guild, scene)
