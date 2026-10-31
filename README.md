@@ -97,6 +97,27 @@ anything taken with `/take` appears in the same interactive `/inventory`. Node
 positions are editor-only metadata; arrows are persisted directional gameplay exits.
 The API binds to localhost and is intended for the DM's local machine.
 
+### Discord combat channels
+
+The bot shares one authoritative SQLite combat state with the DM Dashboard.
+
+- **#combat:** one continuously updated combat card with the location map,
+  initiative, Actions button and the current combatant's resolved actions.
+  The current-turn event list clears automatically when the next turn begins.
+  Player choices are ephemeral, but results appear in the public combat card.
+- **#combat-log:** permanent, readable summaries of each *completed* turn.
+  The bot creates this channel automatically if it has Manage Channels
+  permission. Entries are attributed to the in-world character, NPC or enemy
+  performing the action, never to the DM operating that character.
+- **#game:** continues to be used for non-combat in-world events. Combat turn
+  archives do not require players to switch channels during a fight.
+
+Both displays are derived from `CombatRepository` events. The full event history
+stays in SQLite even when the live `#combat` panel advances to a new turn.
+Archive delivery checkpoints are persisted to retry undelivered turns after
+restarts. In the rare case of a crash between posting an archive message and
+saving its checkpoint, an archive entry may be posted twice.
+
 ### Player-specific dungeon views
 
 Areas are also the persisted dungeon boundary and receive a default floor; more
