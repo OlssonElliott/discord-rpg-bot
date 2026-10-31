@@ -35,11 +35,13 @@ def move_destinations(
     scene: CombatScene,
     actor: CombatantState,
 ) -> list[MoveDestination]:
-    """Preview destinations using the same route costs as CombatService.
+    """Offer reachable locations and only the next partly traversable ones.
 
-    Destinations beyond the remaining movement are still offered if the
-    character can make partial progress toward them this turn.
+    A long route may contain several landmarks. If movement runs out while
+    crossing one connection, only that connection's endpoint is a meaningful
+    partial destination; landmarks farther along the same path are not offered.
     """
+
     destinations: list[MoveDestination] = []
     for landmark in scene.landmarks:
         try:
@@ -47,14 +49,32 @@ def move_destinations(
         except ValueError:
             continue  # No valid unblocked route to this location.
 
-        cost = sum(route.movement_cost - already_moved
-                   for _, _, route, already_moved in legs)
+        cost = sum(
+            route.movement_cost - already_moved
+            for _, _, route, already_moved in legs
+        )
+        if not actor.is_between_landmarks and actor.landmark_id == landmark.id:
+            continue
+        if cost > actor.movement_remaining:
+            # Only offer PARTIAL when the player can actually enter the final
+            # connection toward this location. Reaching a preceding node with
+            # 0 MP remaining does not count as moving toward a farther node.
+            spent_before_final_leg = 0
+            for _, _, route, already_moved in legs[:-1]:
+                spent_before_final_leg += route.movement_cost - already_moved
+            if actor.movement_remaining <= spent_before_final_leg:
+                continue
         if cost > 0 and actor.movement_remaining <= 0:
             continue
 
-        if not actor.is_between_landmarks and actor.landmark_id == landmark.id:
-            continue
-        destinations.append(MoveDestination(landmark.id, landmark.name, LandmarkRelation.AT, cost))
+        destinations.append(
+            MoveDestination(
+                landmark.id,
+                landmark.name,
+                LandmarkRelation.AT,
+                cost,
+            )
+        )
     return sorted(
         destinations,
         key=lambda destination: (
