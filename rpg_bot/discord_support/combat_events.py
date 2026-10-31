@@ -169,6 +169,36 @@ class CombatEventArchiveStore:
                 (guild_id, scene_id, resume_at_id),
             )
 
+    def pending_scenes(self, guild_id: int) -> list[int]:
+        """Recover scenes ended while the bot was offline.
+
+        Only report scenes that have at least one complete turn after the
+        durable checkpoint, so archived encounters aren't rechecked forever.
+        """
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT progress.scene_id
+                FROM combat_discord_archive_progress AS progress
+                JOIN combat_scenes AS scene ON scene.id = progress.scene_id
+                WHERE progress.guild_id = ?
+                  AND scene.status = 'ended'
+                  AND (
+                    SELECT COUNT(*)
+                    FROM combat_log_entries AS event
+                    WHERE event.scene_id = progress.scene_id
+                      AND event.id >= progress.resume_at_id
+                      AND event.event_type IN (
+                          'turn_started', 'turn_changed',
+                          'turn_rewound', 'combat_ended'
+                      )
+                  ) >= 2
+                ORDER BY progress.scene_id
+                """,
+                (guild_id,),
+            ).fetchall()
+        return [int(row["scene_id"]) for row in rows]
+
     def entries_from(self, scene_id: int, resume_at_id: int) -> list[CombatLogEntry]:
         # Do not use CombatScene.log_entries here; the dashboard only loads
         # the 100 most recent events, which would silently lose archive data.
