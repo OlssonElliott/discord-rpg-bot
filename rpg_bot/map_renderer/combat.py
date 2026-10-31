@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from io import BytesIO
+from typing import Mapping
 from math import ceil, isfinite
 
 from PIL import Image, ImageDraw
@@ -29,6 +30,8 @@ TEXT = "#ede9de"
 MUTED = "#a3b0c0"
 PLAYER = "#69bfae"
 ENEMY = "#e58f81"
+ARRIVE = "#6bd2ac"
+PARTIAL = "#e0a35a"
 
 
 # The dashboard saves each node's *top-left* at x*1000, y*700.
@@ -167,8 +170,19 @@ def _draw_route(draw, start: tuple[int, int], end: tuple[int, int], *, blocked: 
         draw.line((*start, *end), fill=colour, width=4)
 
 
-def render_combat_map(scene: CombatScene, room_name: str) -> BytesIO:
-    """Return a Discord-ready PNG of locations, connections and combatants."""
+def render_combat_map(
+    scene: CombatScene,
+    room_name: str,
+    *,
+    move_costs: Mapping[str, int] | None = None,
+    movement_remaining: int | None = None,
+) -> BytesIO:
+    """Return the shared combat map, optionally highlighting one player's moves.
+
+    move_costs is a projection of CombatService movement paths. It only changes
+    the image; it never grants movement, changes a route, or edits combat state.
+    None means the normal public map, whereas {} means an empty move preview.
+    """
     locations, height = location_layout(scene)
     image = Image.new("RGB", (MAP_WIDTH, height), BG)
     draw = ImageDraw.Draw(image)
@@ -187,7 +201,12 @@ def render_combat_map(scene: CombatScene, room_name: str) -> BytesIO:
         outline="#75603e",
         width=3,
     )
-    draw.text((54, 34), "COMBAT LOCATIONS", font=headline, fill=GOLD)
+    draw.text(
+        (54, 34),
+        "CHOOSE A LOCATION" if move_costs is not None else "COMBAT LOCATIONS",
+        font=headline,
+        fill=GOLD,
+    )
     draw.text(
         (56, 79),
         _fit_text(draw, room_name, meta_font, MAP_WIDTH - 115),
@@ -195,6 +214,13 @@ def render_combat_map(scene: CombatScene, room_name: str) -> BytesIO:
         fill=MUTED,
     )
     draw.line((54, 115, MAP_WIDTH - 54, 115), fill="#544933", width=2)
+    if move_costs is not None:
+        draw.text(
+            (56, 126),
+            f"Movement remaining: {movement_remaining if movement_remaining is not None else '?'}",
+            font=meta_font,
+            fill=PLAYER,
+        )
 
     for route in scene.routes:
         start = locations.get(route.source_landmark_id)
@@ -230,11 +256,39 @@ def render_combat_map(scene: CombatScene, room_name: str) -> BytesIO:
             entry.kind is current.kind and entry.source_id == current.source_id
             for entry in at_location
         )
+        move_cost = move_costs.get(landmark.id) if move_costs is not None else None
+        can_arrive = (
+            move_cost is not None
+            and movement_remaining is not None
+            and move_cost <= movement_remaining
+        )
+        move_colour = ARRIVE if can_arrive else PARTIAL
+        node_colour = (
+            move_colour if move_cost is not None
+            else GOLD if active_here else PANEL_EDGE
+        )
         draw.rounded_rectangle(
             (x1, y1, x2, y2), radius=12,
-            fill=PANEL, outline=GOLD if active_here else PANEL_EDGE,
-            width=4 if active_here else 2,
+            fill=PANEL, outline=node_colour,
+            width=4 if move_cost is not None or active_here else 2,
         )
+        if move_cost is not None:
+            # Keep the movement label *outside* the location card, so a
+            # combatant's name or cover annotation never gets overwritten.
+            badge_label = f"{move_cost} MP" + ("" if can_arrive else " · PARTIAL")
+            badge_width = round(draw.textlength(badge_label, font=label_font)) + 22
+            badge_top = max(141, y1 - 29)
+            draw.rounded_rectangle(
+                (x1 + 2, badge_top, x1 + badge_width, badge_top + 24),
+                radius=6,
+                fill="#17352f" if can_arrive else "#45301c",
+                outline=move_colour,
+                width=1,
+            )
+            draw.text(
+                (x1 + 12, badge_top + 3), badge_label,
+                font=label_font, fill=move_colour,
+            )
         # Use a smaller heading for long names instead of truncating them
         # into ambiguous labels such as "Northeast ...".
         node_title_font = title_font
@@ -299,9 +353,14 @@ def render_combat_map(scene: CombatScene, room_name: str) -> BytesIO:
 
     footer_y = height - 62
     draw.line((54, footer_y - 13, MAP_WIDTH - 54, footer_y - 13), fill="#544933", width=2)
-    draw.text((56, footer_y), "P  Player", font=meta_font, fill=PLAYER)
-    draw.text((210, footer_y), "E  Enemy", font=meta_font, fill=ENEMY)
-    draw.text((365, footer_y), "Dashed route = blocked", font=meta_font, fill=MUTED)
+    if move_costs is not None:
+        draw.text((56, footer_y), "Green: arrive", font=meta_font, fill=ARRIVE)
+        draw.text((280, footer_y), "Amber: move partway", font=meta_font, fill=PARTIAL)
+        draw.text((590, footer_y), "Select a destination below the map", font=meta_font, fill=MUTED)
+    else:
+        draw.text((56, footer_y), "P  Player", font=meta_font, fill=PLAYER)
+        draw.text((210, footer_y), "E  Enemy", font=meta_font, fill=ENEMY)
+        draw.text((365, footer_y), "Dashed route = blocked", font=meta_font, fill=MUTED)
     draw.text((MAP_WIDTH - 240, footer_y), f"Round {scene.round_number}", font=meta_font, fill=GOLD)
 
     output = BytesIO()
