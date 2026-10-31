@@ -70,6 +70,32 @@ class CombatMessageStoreTests(unittest.TestCase):
 
 
 
+class CombatMessageMigrationTests(unittest.TestCase):
+    def test_old_active_message_pointer_is_upgraded_without_data_loss(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old.db"
+            with sqlite3.connect(path) as db:
+                db.execute(
+                    "CREATE TABLE combat_discord_messages ("
+                    "guild_id INTEGER PRIMARY KEY, scene_id INTEGER NOT NULL,"
+                    "channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL)"
+                )
+                db.execute(
+                    "INSERT INTO combat_discord_messages VALUES (44,22,444,555)"
+                )
+            store = CombatMessageStore(path)
+            saved = store.get(44)
+            self.assertEqual(saved.message_id, 555)
+            self.assertEqual(saved.turn_marker_id, 0)
+            store.save_turn_page(22, 1, 1, 444, 555)
+            self.assertEqual(store.get_turn_page(22, 1, 1), (444, 555))
+            reopened = CombatMessageStore(path)
+            self.assertEqual(reopened.get(44).message_id, 555)
+            self.assertEqual(reopened.get_turn_page(22, 1, 1), (444, 555))
+
+
 class CombatMoveDestinationsTests(unittest.TestCase):
     def setUp(self):
         self.actor = CombatantState(
@@ -427,6 +453,28 @@ class CombatDiscordMapPublishingTests(unittest.IsolatedAsyncioTestCase):
             await restarted.publish(guild, scene, channel=channel)
             self.assertEqual(len(messages), 1)
             self.assertEqual(store.get(44).turn_marker_id, 1)
+
+    async def test_ending_combat_keeps_last_turn_as_history(self):
+        import sqlite3
+        from dataclasses import replace
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "combat.db"
+            publisher, store, guild, channel, messages, failures, service, scene = self._harness(path)
+            await publisher.publish(guild, scene, channel=channel)
+            with sqlite3.connect(path) as db:
+                db.execute(
+                    "INSERT INTO combat_log_entries VALUES "
+                    "(3,22,1,'combat_ended',NULL,NULL,NULL,'Combat ended','t3')"
+                )
+            await publisher.end(guild, replace(scene, status=CombatStatus.ENDED))
+            self.assertIsNone(store.get(44))
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0][0].embeds[0].title, "Round 1 · Sture")
+            self.assertIn("Sture moved", messages[0][0].embeds[0].description)
+            # No second message and no repeat on ending the same encounter.
+            await publisher.end(guild, replace(scene, status=CombatStatus.ENDED))
+            self.assertEqual(len(messages), 1)
 
     def test_embed_only_contains_player_facing_status(self):
         scene = CombatScene(
