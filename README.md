@@ -117,6 +117,18 @@ versions are intentionally **not deleted** by the bot because they may
 contain useful history. After confirming that the new flow works, an admin
 can manually archive or remove those legacy channels.
 
+Combat presentation is owned by `CombatPublisher`
+(`rpg_bot/discord_support/combat_publisher.py`). It reads resolved
+events from `CombatEventReader`, uses the same combat state as the dashboard,
+and only delegates gameplay decisions to `CombatService`. A saved active map
+pointer and per-turn summary message IDs allow retries to recover previously
+posted Discord messages after a restart. Stable footer IDs support recovery
+if Discord accepted a message before the SQLite pointer was stored.
+The renderer's output is cached until combat state affecting the map changes.
+
+The prior `combat_discord_archive_progress` table is no longer used. Existing
+databases are not destructively migrated or purged.
+
 ### Player-specific dungeon views
 
 Areas are also the persisted dungeon boundary and receive a default floor; more
