@@ -1,6 +1,7 @@
 """Discord adapter for the shared landmark-based combat scene."""
 
 import asyncio
+from hashlib import sha256
 import logging
 
 import discord
@@ -26,7 +27,11 @@ def _field_text(lines: list[str], empty: str) -> str:
     return text if len(text) <= 1024 else f"{text[:1021]}..."
 
 
-def combat_scene_embed(scene: CombatScene, room_name: str) -> discord.Embed:
+def combat_scene_embed(
+    scene: CombatScene,
+    room_name: str,
+    image_filename: str = "combat-map.png",
+) -> discord.Embed:
     """Compact player-facing status; the attachment shows the location graph."""
     embed = discord.Embed(
         title=f"Combat · {room_name}",
@@ -48,7 +53,7 @@ def combat_scene_embed(scene: CombatScene, room_name: str) -> discord.Embed:
         value=_field_text(order, "No combatants"),
         inline=False,
     )
-    embed.set_image(url="attachment://combat-map.png")
+    embed.set_image(url=f"attachment://{image_filename}")
     embed.set_footer(text=f"Scene #{scene.id}")
     return embed
 
@@ -115,12 +120,21 @@ class CombatCommands(commands.Cog):
             return None
         room = self.world.get_room(scene.room_id)
         room_name = room.name if room is not None else scene.room_id
-        embed = combat_scene_embed(scene, room_name)
         try:
             image = await asyncio.to_thread(render_combat_map, scene, room_name)
         except Exception:
-            LOGGER.exception("Could not render combat map in guild %s", guild.id)
-            return channel
+            LOGGER.exception(
+                "Combat map rendering failed for guild %s, scene %s",
+                guild.id, scene.id,
+            )
+            return None
+        # Use a content-specific attachment name. Reusing the same filename
+        # when editing an attachment-backed embed can leave a stale image in
+        # the Discord client's cache.
+        image_filename = (
+            f"combat-map-{sha256(image.getvalue()).hexdigest()[:12]}.png"
+        )
+        embed = combat_scene_embed(scene, room_name, image_filename)
 
         message = self._scene_messages.get(guild.id)
         saved = self.message_store.get(guild.id)
@@ -140,38 +154,41 @@ class CombatCommands(commands.Cog):
                 # Replace the attachment in place: Discord keeps one card
                 # while movement and dashboard changes regenerate the image.
                 image.seek(0)
-                await message.edit(
+                edited = await message.edit(
                     embed=embed,
                     view=CombatOpenView(self, scene.id),
-                    attachments=[discord.File(image, filename="combat-map.png")],
+                    attachments=[discord.File(image, filename=image_filename)],
                 )
-                self._scene_messages[guild.id] = message
-                self.message_store.save(guild.id, scene.id, message.channel.id, message.id)
+                self._scene_messages[guild.id] = edited
+                self.message_store.save(
+                    guild.id, scene.id, edited.channel.id, edited.id,
+                )
                 self._last_scenes[guild.id] = scene
                 return channel
             except discord.NotFound:
                 self._scene_messages.pop(guild.id, None)
             except discord.HTTPException:
                 LOGGER.exception(
-                    "Could not update combat scene message in guild %s",
-                    guild.id,
+                    "Combat map upload/edit failed in guild %s, scene %s",
+                    guild.id, scene.id,
                 )
-                return channel
+                return None
         try:
             image.seek(0)
             self._scene_messages[guild.id] = await channel.send(
                 embed=embed,
                 view=CombatOpenView(self, scene.id),
-                file=discord.File(image, filename="combat-map.png"),
+                file=discord.File(image, filename=image_filename),
             )
             sent = self._scene_messages[guild.id]
             self.message_store.save(guild.id, scene.id, channel.id, sent.id)
             self._last_scenes[guild.id] = scene
         except discord.HTTPException:
             LOGGER.exception(
-                "Could not publish combat scene in guild %s",
-                guild.id,
+                "Combat map upload/send failed in guild %s, scene %s",
+                guild.id, scene.id,
             )
+            return None
         return channel
 
     async def _publish_ended(
@@ -218,14 +235,22 @@ class CombatCommands(commands.Cog):
     @tasks.loop(seconds=2.0)
     async def sync_dashboard_combat(self) -> None:
         for guild in self.bot.guilds:
-            scene = self.service.current(guild.id)
-            previous = self._last_scenes.get(guild.id)
-            if scene is None:
-                if previous is not None:
-                    await self._publish_ended(guild, previous)
-                continue
-            if previous != scene or guild.id not in self._scene_messages:
-                await self._publish_scene(guild, scene)
+            try:
+                scene = self.service.current(guild.id)
+                previous = self._last_scenes.get(guild.id)
+                if scene is None:
+                    if previous is not None:
+                        await self._publish_ended(guild, previous)
+                    continue
+                if previous != scene or guild.id not in self._scene_messages:
+                    await self._publish_scene(guild, scene)
+            except Exception:
+                # A failed Discord upload must not kill the sync task for all
+                # guilds. Keep retrying and surface the actual traceback.
+                LOGGER.exception(
+                    "Combat synchronization failed in guild %s",
+                    guild.id,
+                )
 
     @sync_dashboard_combat.before_loop
     async def before_sync_dashboard_combat(self) -> None:
@@ -287,9 +312,14 @@ class CombatCommands(commands.Cog):
             await interaction.response.send_message(str(error), ephemeral=True)
             return
 
-        await self._publish_scene(guild, scene, channel=channel)
+        published = await self._publish_scene(guild, scene, channel=channel)
         await interaction.response.send_message(
-            f"Combat started in {channel.mention}.",
+            (
+                f"Combat started in {channel.mention}."
+                if published is not None
+                else "Combat started, but the map could not be published. "
+                     "Check the bot console for the error."
+            ),
             ephemeral=True,
         )
 
@@ -317,9 +347,14 @@ class CombatCommands(commands.Cog):
                 ephemeral=True,
             )
             return
-        await self._publish_scene(guild, scene, channel=channel)
+        published = await self._publish_scene(guild, scene, channel=channel)
         await interaction.response.send_message(
-            f"Combat state posted in {channel.mention}.",
+            (
+                f"Combat map refreshed in {channel.mention}."
+                if published is not None
+                else "The combat map could not be refreshed. "
+                     "Check the bot console for the error."
+            ),
             ephemeral=True,
         )
 
