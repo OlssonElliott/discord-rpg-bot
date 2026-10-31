@@ -13,6 +13,13 @@ from ..combat import CombatScene
 from ..combat.service import CombatError, CombatService
 from ..database import Database
 from ..discord_support.combat_messages import CombatMessageStore
+from ..discord_support.combat_events import (
+    CombatEventArchiveStore,
+    archive_embeds,
+    closed_turns,
+    current_turn_events,
+    ensure_combat_log_channel,
+)
 from ..map_renderer.combat import render_combat_map
 from .combat_views import CombatActionView
 from ..world.service import WorldService
@@ -53,6 +60,16 @@ def combat_scene_embed(
         value=_field_text(order, "No combatants"),
         inline=False,
     )
+    if active is not None:
+        events = current_turn_events(scene)
+        embed.add_field(
+            name=f"Current turn · {active.name}"[:256],
+            value=_field_text(
+                [f"• {event}" for event in events[-15:]],
+                "Waiting for an action…",
+            ),
+            inline=False,
+        )
     embed.set_image(url=f"attachment://{image_filename}")
     embed.set_footer(text=f"Scene #{scene.id}")
     return embed
@@ -102,11 +119,52 @@ class CombatCommands(commands.Cog):
         self.world = WorldService(self.database)
         self._scene_messages: dict[int, discord.Message] = {}
         self.message_store = CombatMessageStore(self.database.path)
+        self.archive_store = CombatEventArchiveStore(self.database.path)
+        self._archive_locks: dict[int, asyncio.Lock] = {}
         self._last_scenes: dict[int, CombatScene] = {}
         self.sync_dashboard_combat.start()
 
     def cog_unload(self) -> None:
         self.sync_dashboard_combat.cancel()
+
+    async def _archive_completed_turns(self, guild: discord.Guild, scene_id: int) -> None:
+        """Publish completed turns from SQLite and checkpoint after success.
+
+        The archive uses the full log, not the scene's capped 100-entry
+        presentation history. Nothing is removed from the database.
+        """
+        lock = self._archive_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            self.archive_store.ensure_scene(guild.id, scene_id)
+            cursor = self.archive_store.progress(guild.id, scene_id)
+            entries = await asyncio.to_thread(
+                self.archive_store.entries_from, scene_id, cursor,
+            )
+            turns = closed_turns(entries, scene_id)
+            if not turns:
+                return
+            channel = await ensure_combat_log_channel(guild)
+            if channel is None:
+                LOGGER.warning(
+                    "Combat archive not delivered: #combat-log unavailable in guild %s",
+                    guild.id,
+                )
+                return
+            for turn in turns:
+                try:
+                    # Usually a single embed; very long turns are split safely.
+                    for embed in archive_embeds(turn):
+                        await channel.send(embed=embed)
+                except discord.HTTPException:
+                    LOGGER.exception(
+                        "Unable to archive round %s, turn %s in guild %s",
+                        turn.round_number, turn.actor_name, guild.id,
+                    )
+                    return
+                await asyncio.to_thread(
+                    self.archive_store.mark_sent,
+                    guild.id, scene_id, turn.resume_at_id,
+                )
 
     async def _publish_scene(
         self,
@@ -118,6 +176,7 @@ class CombatCommands(commands.Cog):
         channel = channel or await ensure_combat_channel(guild)
         if channel is None:
             return None
+        await self._archive_completed_turns(guild, scene.id)
         room = self.world.get_room(scene.room_id)
         room_name = room.name if room is not None else scene.room_id
         try:
@@ -196,6 +255,7 @@ class CombatCommands(commands.Cog):
         guild: discord.Guild,
         previous: CombatScene,
     ) -> None:
+        await self._archive_completed_turns(guild, previous.id)
         room = self.world.get_room(previous.room_id)
         room_name = room.name if room is not None else previous.room_id
         embed = discord.Embed(
@@ -238,6 +298,11 @@ class CombatCommands(commands.Cog):
             try:
                 scene = self.service.current(guild.id)
                 previous = self._last_scenes.get(guild.id)
+                # Recover undelivered completed turns even when the bot was
+                # stopped while the encounter ended in the Dashboard.
+                for archived_scene_id in self.archive_store.pending_scenes(guild.id):
+                    if scene is None or archived_scene_id != scene.id:
+                        await self._archive_completed_turns(guild, archived_scene_id)
                 if scene is None:
                     if previous is not None:
                         await self._publish_ended(guild, previous)
