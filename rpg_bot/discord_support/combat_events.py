@@ -54,8 +54,8 @@ class ArchivedTurn:
     actor_name: str
     actor_kind: CombatantKind | None
     lines: tuple[str, ...]
-    # The first event of the next turn (or combat_ended). Saving this marker
-    # after sending lets a restarted bot resume without replaying prior turns.
+    # The next turn marker (or combat_ended). The publisher uses stable
+    # start_marker_id/page identifiers to reconcile Discord delivery.
     resume_at_id: int
 
 
