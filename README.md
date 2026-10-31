@@ -97,26 +97,25 @@ anything taken with `/take` appears in the same interactive `/inventory`. Node
 positions are editor-only metadata; arrows are persisted directional gameplay exits.
 The API binds to localhost and is intended for the DM's local machine.
 
-### Discord combat channels
+### Discord combat flow
 
-The bot shares one authoritative SQLite combat state with the DM Dashboard.
+The bot uses a single **#combat** channel for both the active tactical map and
+combat history. During a turn the existing map message is edited to show
+resolved actions, initiative and positions. On the next turn, that message
+becomes a compact, permanent **turn summary**, and a fresh map card is posted
+at the bottom of #combat. New map cards are sent with Discord's **silent**
+flag so players are not repeatedly pinged by the bot. No routine combat
+events are posted to #game.
 
-- **#combat:** one continuously updated combat card with the location map,
-  initiative, Actions button and the current combatant's resolved actions.
-  The current-turn event list clears automatically when the next turn begins.
-  Player choices are ephemeral, but results appear in the public combat card.
-- **#combat-log:** permanent, readable summaries of each *completed* turn.
-  The bot creates this channel automatically if it has Manage Channels
-  permission. Entries are attributed to the in-world character, NPC or enemy
-  performing the action, never to the DM operating that character.
-- **#game:** continues to be used for non-combat in-world events. Combat turn
-  archives do not require players to switch channels during a fight.
+Combat is attributed to the in-world character or enemy even when DM operates
+the action. The underlying event log remains in SQLite, separately from
+Discord presentation. This allows combat history to remain available if a
+message edit or upload fails.
 
-Both displays are derived from `CombatRepository` events. The full event history
-stays in SQLite even when the live `#combat` panel advances to a new turn.
-Archive delivery checkpoints are persisted to retry undelivered turns after
-restarts. In the rare case of a crash between posting an archive message and
-saving its checkpoint, an archive entry may be posted twice.
+The bot **no longer creates or uses #combat-log**. Channels created by older
+versions are intentionally **not deleted** by the bot because they may
+contain useful history. After confirming that the new flow works, an admin
+can manually archive or remove those legacy channels.
 
 ### Player-specific dungeon views
 
