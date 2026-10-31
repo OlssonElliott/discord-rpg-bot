@@ -169,6 +169,13 @@ class CombatCommands(commands.Cog):
             channel = channel or await ensure_combat_channel(guild)
             if channel is None:
                 return None
+            # Two Discord actions (or Dashboard and Discord) can race.
+            # Render the latest authoritative scene after acquiring the lock,
+            # so an older snapshot cannot overwrite a newer turn.
+            if getattr(self, "service", None) is not None:
+                latest = await asyncio.to_thread(self.service.current, guild.id)
+                if latest is not None and latest.id == scene.id:
+                    scene = latest
             events, markers = await asyncio.to_thread(self._turn_markers, scene.id)
             current_marker_id = markers[-1].id if markers else 0
 
@@ -199,24 +206,24 @@ class CombatCommands(commands.Cog):
                     scene.id,
                 )
                 for index, turn in enumerate(completed):
-                    embed = self._turn_summary_embed(turn)
-                    try:
-                        if index == 0 and message is not None:
-                            await message.edit(
-                                embed=embed, view=None, attachments=[],
+                    for page, embed in enumerate(archive_embeds(turn)):
+                        try:
+                            if index == 0 and page == 0 and message is not None:
+                                await message.edit(
+                                    embed=embed, view=None, attachments=[],
+                                )
+                            else:
+                                await channel.send(
+                                    embed=embed,
+                                    silent=True,
+                                    allowed_mentions=discord.AllowedMentions.none(),
+                                )
+                        except discord.HTTPException:
+                            LOGGER.exception(
+                                "Could not publish completed turn in guild %s",
+                                guild.id,
                             )
-                        else:
-                            await channel.send(
-                                embed=embed,
-                                silent=True,
-                                allowed_mentions=discord.AllowedMentions.none(),
-                            )
-                    except discord.HTTPException:
-                        LOGGER.exception(
-                            "Could not publish completed turn in guild %s",
-                            guild.id,
-                        )
-                        return None
+                            return None
 
                 # The next map must be a new message at the bottom. Its
                 # current turn marker is checkpointed only after send.
