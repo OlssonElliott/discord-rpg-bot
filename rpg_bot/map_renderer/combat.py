@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from io import BytesIO
-from math import ceil, isfinite, sqrt
+from math import ceil, isfinite
 
 from PIL import Image, ImageDraw
 
@@ -31,61 +31,85 @@ PLAYER = "#69bfae"
 ENEMY = "#e58f81"
 
 
+# The dashboard saves each node's *top-left* at x*1000, y*700.
+# These values are deliberately not limited to 0..1: the editor permits
+# extending the graph outside the original room box.
+DASHBOARD_LAYOUT_WIDTH = 1000
+DASHBOARD_LAYOUT_HEIGHT = 700
+FALLBACK_POSITIONS = (
+    (0.12, 0.18), (0.80, 0.18), (0.12, 0.82), (0.80, 0.82),
+    (0.12, 0.34), (0.80, 0.34), (0.12, 0.66), (0.80, 0.66),
+    (0.32, 0.34), (0.60, 0.34), (0.32, 0.66), (0.60, 0.66),
+)
+MAP_SIDE_MARGIN = 110
+MAP_CONTENT_TOP = 160
+MAP_CONTENT_BOTTOM = 125
+MAX_MAP_HEIGHT = 1600
+
+
 def location_layout(
     scene: CombatScene,
 ) -> tuple[dict[str, tuple[int, int]], int]:
-    """Fit saved dashboard positions into readable, nonoverlapping map cells.
+    """Project the DM's saved, free-form graph without changing node order.
 
-    The grid is only a *drawing layout*. Combat movement continues to follow
-    the true landmark/route graph, including intermediate route progress.
+    Dashboard x/y are persisted in a 1000x700 logical coordinate space
+    (including negative values). A single, uniform scale and translation
+    fits the whole graph into the Discord image. No snapping or grid cells:
+    relative distances, directions and edge crossings remain the same.
     """
     landmarks = scene.landmarks
-    count = len(landmarks)
-    if not count:
+    if not landmarks:
         return {}, MIN_MAP_HEIGHT
 
-    columns = min(5, max(3, ceil(sqrt(count * 1.5))))
-    rows = max(3, ceil(count / columns))
-    height = max(MIN_MAP_HEIGHT, 240 + rows * 145)
-    known_x = [
-        landmark.x
-        for landmark in landmarks
-        if landmark.x is not None and isfinite(landmark.x)
-    ]
-    known_y = [
-        landmark.y
-        for landmark in landmarks
-        if landmark.y is not None and isfinite(landmark.y)
-    ]
-    left, right = (min(known_x), max(known_x)) if known_x else (0.0, 1.0)
-    top, bottom = (min(known_y), max(known_y)) if known_y else (0.0, 1.0)
-    free = {(col, row) for col in range(columns) for row in range(rows)}
-    locations = {}
-
+    # Match the dashboard's fallback coordinates for unsaved landmarks.
+    # The Room Center is the special first node in the editor.
+    original: dict[str, tuple[float, float]] = {}
     for index, landmark in enumerate(landmarks):
-        x = landmark.x if landmark.x is not None and isfinite(landmark.x) else None
-        y = landmark.y if landmark.y is not None and isfinite(landmark.y) else None
-        target_col = (
-            (x - left) / (right - left) * (columns - 1)
-            if x is not None and right != left else index % columns
+        fallback = (0.5, 0.5) if index == 0 else FALLBACK_POSITIONS[
+            (index - 1) % len(FALLBACK_POSITIONS)
+        ]
+        x = landmark.x if landmark.x is not None and isfinite(landmark.x) else fallback[0]
+        y = landmark.y if landmark.y is not None and isfinite(landmark.y) else fallback[1]
+        original[landmark.id] = (
+            x * DASHBOARD_LAYOUT_WIDTH,
+            y * DASHBOARD_LAYOUT_HEIGHT,
         )
-        target_row = (
-            (y - top) / (bottom - top) * (rows - 1)
-            if y is not None and bottom != top else index // columns
+
+    xs = [point[0] for point in original.values()]
+    ys = [point[1] for point in original.values()]
+    span_x = max(xs) - min(xs)
+    span_y = max(ys) - min(ys)
+
+    # Keep node cards readable while allowing tall/narrow room layouts.
+    # The original dashboard nodes are approximately 178x76 logical px.
+    available_x = MAP_WIDTH - 2 * MAP_SIDE_MARGIN - NODE_WIDTH
+    available_y = (
+        MAX_MAP_HEIGHT - MAP_CONTENT_TOP - MAP_CONTENT_BOTTOM - NODE_HEIGHT
+    )
+    scale = min(
+        1.0,
+        available_x / span_x if span_x > 0 else 1.0,
+        available_y / span_y if span_y > 0 else 1.0,
+    )
+    height = max(
+        MIN_MAP_HEIGHT,
+        ceil(MAP_CONTENT_TOP + NODE_HEIGHT + span_y * scale + MAP_CONTENT_BOTTOM),
+    )
+
+    mid_x = (min(xs) + max(xs)) / 2
+    left_y = min(ys)
+    # Center the graph within the available vertical area if it is short.
+    used_height = span_y * scale + NODE_HEIGHT
+    content_height = height - MAP_CONTENT_TOP - MAP_CONTENT_BOTTOM
+    graph_top = MAP_CONTENT_TOP + (content_height - used_height) / 2
+    positions = {
+        name: (
+            round(MAP_WIDTH / 2 + (x - mid_x) * scale),
+            round(graph_top + NODE_HEIGHT / 2 + (y - left_y) * scale),
         )
-        col, row = min(
-            free,
-            key=lambda cell: (
-                (cell[0] - target_col) ** 2 + (cell[1] - target_row) ** 2,
-                cell[1],
-                cell[0],
-            ),
-        )
-        free.remove((col, row))
-        px = round(142 + col * (MAP_WIDTH - 284) / max(1, columns - 1))
-        py = round(190 + row * (height - 320) / max(1, rows - 1))
-        locations[landmark.id] = (px, py)
-    return locations, height
+        for name, (x, y) in original.items()
+    }
+    return positions, height
 
 
 def _fit_text(draw, text: str, font, max_width: int) -> str:
@@ -211,10 +235,17 @@ def render_combat_map(scene: CombatScene, room_name: str) -> BytesIO:
             fill=PANEL, outline=GOLD if active_here else PANEL_EDGE,
             width=4 if active_here else 2,
         )
+        # Use a smaller heading for long names instead of truncating them
+        # into ambiguous labels such as "Northeast ...".
+        node_title_font = title_font
+        for size in (21, 19, 17, 15):
+            if draw.textlength(landmark.name, font=node_title_font) <= NODE_WIDTH - 26:
+                break
+            node_title_font = _font(size, heading=True)
         draw.text(
             (x1 + 13, y1 + 8),
-            _fit_text(draw, landmark.name, title_font, NODE_WIDTH - 26),
-            font=title_font, fill=TEXT,
+            _fit_text(draw, landmark.name, node_title_font, NODE_WIDTH - 26),
+            font=node_title_font, fill=TEXT,
         )
         if at_location:
             for index, combatant in enumerate(at_location[:2]):
