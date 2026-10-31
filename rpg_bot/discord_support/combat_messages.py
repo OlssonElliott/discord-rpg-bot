@@ -43,6 +43,18 @@ class CombatMessageStore:
                     "ALTER TABLE combat_discord_messages ADD COLUMN "
                     "turn_marker_id INTEGER NOT NULL DEFAULT 0"
                 )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS combat_discord_turn_messages (
+                    scene_id INTEGER NOT NULL,
+                    start_marker_id INTEGER NOT NULL,
+                    page_number INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    PRIMARY KEY (scene_id, start_marker_id, page_number)
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5)
@@ -79,6 +91,31 @@ class CombatMessageStore:
                     turn_marker_id = excluded.turn_marker_id
                 """,
                 (guild_id, scene_id, channel_id, message_id, turn_marker_id),
+            )
+
+    def get_turn_page(
+        self, scene_id: int, start_marker_id: int, page_number: int,
+    ) -> tuple[int, int] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT channel_id, message_id FROM combat_discord_turn_messages "
+                "WHERE scene_id=? AND start_marker_id=? AND page_number=?",
+                (scene_id, start_marker_id, page_number),
+            ).fetchone()
+        return (int(row["channel_id"]), int(row["message_id"])) if row else None
+
+    def save_turn_page(
+        self, scene_id: int, start_marker_id: int, page_number: int,
+        channel_id: int, message_id: int,
+    ) -> None:
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT OR REPLACE INTO combat_discord_turn_messages
+                    (scene_id,start_marker_id,page_number,channel_id,message_id)
+                VALUES (?,?,?,?,?)
+                """,
+                (scene_id,start_marker_id,page_number,channel_id,message_id),
             )
 
     def clear(self, guild_id: int) -> None:
