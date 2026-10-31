@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from hashlib import sha256
 
 import discord
 
@@ -15,6 +16,7 @@ from ..combat.models import (
 )
 from ..combat.navigation import movement_legs
 from ..combat.service import CombatError
+from ..map_renderer.combat import render_combat_map
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +63,39 @@ def move_destinations(
             destination.relation.value,
         ),
     )
+
+
+
+async def _update_move_preview(interaction, scene, actor, view):
+    """Replace only the private move panel's map, never the public combat card."""
+    costs = {destination.landmark_id: destination.cost for destination in view.destinations}
+    try:
+        rendered = await asyncio.to_thread(
+            render_combat_map,
+            scene, scene.room_id,
+            move_costs=costs,
+            movement_remaining=actor.movement_remaining,
+        )
+        filename = f"move-map-{sha256(rendered.getvalue()).hexdigest()[:12]}.png"
+        await interaction.edit_original_response(
+            content=view.prompt(scene, actor),
+            embed=discord.Embed(
+                title=f"Move · {actor.name}",
+                description="Choose a location from the menu below.",
+                color=discord.Colour.from_rgb(65, 119, 103),
+            ).set_image(url=f"attachment://{filename}"),
+            attachments=[discord.File(rendered, filename=filename)],
+            view=view,
+        )
+    except Exception:
+        LOGGER.exception("Unable to display movement map")
+        # Keep Move playable even if Pillow/Discord attachment upload fails.
+        await interaction.edit_original_response(
+            content=view.prompt(scene, actor),
+            embed=None,
+            attachments=[],
+            view=view,
+        )
 
 
 class CombatActionView(discord.ui.View):
@@ -145,9 +180,7 @@ class CombatActionView(discord.ui.View):
             return
 
         view = CombatMoveView(self.cog, self.scene_id, self.character_id, options)
-        await interaction.edit_original_response(
-            content=view.prompt(scene, actor), view=view,
-        )
+        await _update_move_preview(interaction, scene, actor, view)
 
     @discord.ui.button(label="Defend", style=discord.ButtonStyle.secondary)
     async def defend(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -271,6 +304,8 @@ class CombatMoveSelect(discord.ui.Select):
                 f"{moved.name} moved {where}. "
                 f"Movement remaining: {moved.movement_remaining}."
             ),
+            embed=None,
+            attachments=[],
             view=None,
         )
         await view.cog._publish_scene(interaction.guild, updated)
@@ -354,6 +389,4 @@ class CombatMovePageButton(discord.ui.Button):
                 ephemeral=True,
             )
             return
-        await interaction.edit_original_response(
-            content=view.prompt(scene, actor), view=view,
-        )
+        await _update_move_preview(interaction, scene, actor, view)
