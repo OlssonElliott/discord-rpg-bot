@@ -1,5 +1,6 @@
 """Discord adapter for the shared landmark-based combat scene."""
 
+import asyncio
 import logging
 
 import discord
@@ -11,6 +12,7 @@ from ..combat import CombatScene
 from ..combat.service import CombatError, CombatService
 from ..database import Database
 from ..discord_support.combat_messages import CombatMessageStore
+from ..map_renderer.combat import render_combat_map
 from .combat_views import CombatActionView
 from ..world.service import WorldService
 
@@ -25,67 +27,29 @@ def _field_text(lines: list[str], empty: str) -> str:
 
 
 def combat_scene_embed(scene: CombatScene, room_name: str) -> discord.Embed:
+    """Compact player-facing status; the attachment shows the location graph."""
     embed = discord.Embed(
         title=f"Combat · {room_name}",
-        description=(
-            "Landmark-based combat scene. Positions are relative to room landmarks, "
-            "not grid squares."
-        ),
+        description="Choose **Actions** on your turn to move or fight.",
         colour=discord.Colour.from_rgb(111, 37, 32),
     )
-    landmark_names = {landmark.id: landmark.name for landmark in scene.landmarks}
-    landmark_lines = []
-    for landmark in scene.landmarks:
-        suffix = ""
-        if landmark.x is not None and landmark.y is not None:
-            suffix = f" · {landmark.x:.0%}, {landmark.y:.0%}"
-        landmark_lines.append(f"**{landmark.name}**{suffix}")
-    embed.add_field(
-        name="Landmarks",
-        value=_field_text(landmark_lines, "None"),
-        inline=False,
-    )
-
-    combatant_lines = [
-        (
-            f"**{combatant.name}** · {combatant.relation.value.replace('_', ' ')} "
-            f"{landmark_names.get(combatant.landmark_id, combatant.landmark_id)}"
-        )
-        for combatant in scene.combatants
-    ]
-    embed.add_field(
-        name="Combatants",
-        value=_field_text(combatant_lines, "None"),
-        inline=False,
-    )
-
-    route_lines = []
-    for route in scene.routes:
-        details = route.distance.value
-        if route.obstacle:
-            details += f" · {route.obstacle}"
-        if route.blocked:
-            details += " · blocked"
-        route_lines.append(
-            f"{landmark_names.get(route.source_landmark_id, route.source_landmark_id)} "
-            f"↔ {landmark_names.get(route.destination_landmark_id, route.destination_landmark_id)} "
-            f"· {details}"
-        )
-    embed.add_field(
-        name="Routes",
-        value=_field_text(route_lines, "Not arranged yet."),
-        inline=False,
-    )
     active = scene.current_combatant()
+    if active is not None:
+        embed.description = f"**Round {scene.round_number}** · {active.name}'s turn. Use **Actions** to play."
     order = [
-        f"{'▶ ' if active is not None and actor.kind == active.kind and actor.source_id == active.source_id else ''}"
-        f"{actor.name} ({actor.initiative_score})"
+        (
+            f"{'▶ ' if active is not None and actor.kind == active.kind and actor.source_id == active.source_id else ''}"
+            f"{actor.name} · Initiative {actor.initiative_score}"
+        )
         for actor in scene.initiative_order()
     ]
-    embed.add_field(name=f"Round {scene.round_number} · Initiative", value=_field_text(order, "No combatants"), inline=False)
-    if active is not None:
-        embed.description = f"Current turn: **{active.name}** · Use the Actions button below."
-    embed.set_footer(text=f"Scene #{scene.id} · room {scene.room_id}")
+    embed.add_field(
+        name="Turn order",
+        value=_field_text(order, "No combatants"),
+        inline=False,
+    )
+    embed.set_image(url="attachment://combat-map.png")
+    embed.set_footer(text=f"Scene #{scene.id}")
     return embed
 
 
@@ -152,8 +116,18 @@ class CombatCommands(commands.Cog):
         room = self.world.get_room(scene.room_id)
         room_name = room.name if room is not None else scene.room_id
         embed = combat_scene_embed(scene, room_name)
+        try:
+            image = await asyncio.to_thread(render_combat_map, scene, room_name)
+        except Exception:
+            LOGGER.exception("Could not render combat map in guild %s", guild.id)
+            return channel
+
         message = self._scene_messages.get(guild.id)
         saved = self.message_store.get(guild.id)
+        if saved is not None and saved.scene_id != scene.id:
+            # Never edit a previous encounter's card with the new scene.
+            message = None
+            self._scene_messages.pop(guild.id, None)
         if message is None and saved is not None and saved.scene_id == scene.id:
             try:
                 saved_channel = guild.get_channel(saved.channel_id)
@@ -163,8 +137,16 @@ class CombatCommands(commands.Cog):
                 message = None
         if message is not None:
             try:
-                await message.edit(embed=embed, view=CombatOpenView(self, scene.id))
+                # Replace the attachment in place: Discord keeps one card
+                # while movement and dashboard changes regenerate the image.
+                image.seek(0)
+                await message.edit(
+                    embed=embed,
+                    view=CombatOpenView(self, scene.id),
+                    attachments=[discord.File(image, filename="combat-map.png")],
+                )
                 self._scene_messages[guild.id] = message
+                self.message_store.save(guild.id, scene.id, message.channel.id, message.id)
                 self._last_scenes[guild.id] = scene
                 return channel
             except discord.NotFound:
@@ -176,7 +158,12 @@ class CombatCommands(commands.Cog):
                 )
                 return channel
         try:
-            self._scene_messages[guild.id] = await channel.send(embed=embed, view=CombatOpenView(self, scene.id))
+            image.seek(0)
+            self._scene_messages[guild.id] = await channel.send(
+                embed=embed,
+                view=CombatOpenView(self, scene.id),
+                file=discord.File(image, filename="combat-map.png"),
+            )
             sent = self._scene_messages[guild.id]
             self.message_store.save(guild.id, scene.id, channel.id, sent.id)
             self._last_scenes[guild.id] = scene
@@ -210,7 +197,7 @@ class CombatCommands(commands.Cog):
         self.message_store.clear(guild.id)
         if message is not None:
             try:
-                await message.edit(embed=embed, view=None)
+                await message.edit(embed=embed, view=None, attachments=[])
             except discord.HTTPException:
                 LOGGER.exception(
                     "Could not close combat scene message in guild %s",
